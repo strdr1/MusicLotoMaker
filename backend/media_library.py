@@ -132,3 +132,25 @@ class MediaLibrary:
             print(f"Ошибка загрузки медиатеки: {e}")
             self.tracks = []
             self.current_id = 1
+def add_track_with_metadata(self, track_data):
+    """Добавить трек с готовыми метаданными"""
+    try:
+        track_id = len(self.tracks) + 1
+        track = {
+            'id': track_id,
+            'file_path': track_data['file_path'],
+            'original_filename': track_data['original_filename'],
+            'artist': track_data.get('artist', ''),
+            'title': track_data.get('title', ''),
+            'metadata': track_data.get('metadata', {}),
+            'segment_start': 0,
+            'segment_duration': 30,
+            'created_at': datetime.now().isoformat()
+        }
+        
+        self.tracks.append(track)
+        self.save_to_file()
+        return track
+    except Exception as e:
+        print(f"Error adding track with metadata: {e}")
+        return None

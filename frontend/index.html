@@ -150,53 +150,45 @@
                             <div class="waveform-loading">
                                 Генерация waveform...
                             </div>
-                            <div class="segment-marker" id="segmentMarker" style="display: none;">
-                                <div class="segment-handle segment-handle-left" id="handleLeft"></div>
-                                <div class="segment-handle segment-handle-right" id="handleRight"></div>
-                            </div>
+                            <!-- Waveform image будет добавлена динамически -->
                         </div>
 
                         <!-- Таймлайн контролы -->
-                        <div class="timeline-controls">
-                            <button class="btn btn-secondary timeline-btn" onclick="suggestBestSegment()"
-                                    title="Анализ энергии, вариативности и пиков для поиска лучшего отрезка">
-                                🎵 Умный анализ
-                            </button>
-                            <button class="btn btn-secondary timeline-btn" onclick="setSegmentToStart()"
-                                    title="Начать с самого начала трека">
-                                🏁 В начало
-                            </button>
-                            <button class="btn btn-secondary timeline-btn" onclick="setSegmentToMiddle()"
-                                    title="Поставить отрезок в середину трека">
-                                ⏸️ В середину
-                            </button>
-                            <button class="btn btn-secondary timeline-btn" onclick="setSegmentToEnd()"
-                                    title="Поставить отрезок в конец трека">
-                                🏁 В конец
-                            </button>
+                        <div class="timeline-display">
+                            <div class="time-info">
+                                <span id="segmentStartTime">00:00</span>
+                                <span id="segmentEndTime">00:30</span>
+                            </div>
+                            <input type="range" class="time-slider" id="timeSlider" min="0" max="100" value="0">
                         </div>
 
-                        <div class="timeline-controls">
-                            <button class="btn btn-secondary timeline-btn" onclick="moveSegment(-5)">
+                        <div class="editor-controls">
+                            <button class="editor-btn" onclick="moveSegment(-5)" title="Переместить на 5 секунд назад">
                                 ⏪ -5с
                             </button>
-                            <button class="btn btn-secondary timeline-btn" onclick="moveSegment(-1)">
-                                ◀️ -1с
+                            <button class="editor-btn" onclick="moveSegment(5)" title="Переместить на 5 секунд вперед">
+                                ⏩ +5с
                             </button>
-                            <span class="time-display" id="timeDisplay">00:00 - 00:30</span>
-                            <button class="btn btn-secondary timeline-btn" onclick="moveSegment(1)">
-                                +1с ▶️
+                            <button class="editor-btn" onclick="setSegmentToStart()" title="Начать с самого начала трека">
+                                ⏮️ Начало
                             </button>
-                            <button class="btn btn-secondary timeline-btn" onclick="moveSegment(5)">
-                                +5с ⏩
+                            <button class="editor-btn" onclick="setSegmentToMiddle()" title="Поставить отрезок в середину трека">
+                                ⏸️ Середина
+                            </button>
+                            <button class="editor-btn" onclick="setSegmentToEnd()" title="Поставить отрезок в конец трека">
+                                ⏭️ Конец
+                            </button>
+                            <button class="editor-btn editor-btn-primary" onclick="suggestBestSegment()"
+                                    title="Анализ энергии, вариативности и пиков для поиска лучшего отрезка">
+                                🎯 Умный выбор
                             </button>
                         </div>
 
                         <!-- Результаты анализа -->
                         <div class="analysis-info" id="analysisInfo" style="display: none;">
-                            <div class="info-card">
-                                <h4>📊 Результат анализа</h4>
-                                <p id="analysisResult">Анализ не проводился</p>
+                            <h4>📊 Результаты анализа</h4>
+                            <div id="analysisResult">
+                                <!-- Результаты анализа будут здесь -->
                             </div>
                         </div>
                     </div>
@@ -205,42 +197,45 @@
                     <div class="segment-info">
                         <div class="info-card">
                             <h4>Начало отрезка</h4>
-                            <p id="segmentStartTime">00:00</p>
+                            <p id="segmentStartTimeDisplay">00:00</p>
                         </div>
                         <div class="info-card">
                             <h4>Конец отрезка</h4>
-                            <p id="segmentEndTime">00:30</p>
+                            <p id="segmentEndTimeDisplay">00:30</p>
                         </div>
                         <div class="info-card">
                             <h4>Длительность</h4>
-                            <p id="segmentDuration">30 сек</p>
+                            <p id="segmentDurationDisplay">30 сек</p>
                         </div>
                         <div class="info-card">
                             <h4>Общая длительность</h4>
-                            <p id="totalDuration">00:00</p>
+                            <p id="totalDurationDisplay">00:00</p>
                         </div>
                     </div>
 
                     <!-- Превью и воспроизведение -->
                     <div class="preview-controls">
                         <div class="preview-info">
-                            <h4>Превью отрезка</h4>
+                            <h4>🎵 Превью отрезка</h4>
                             <p id="previewInfo">Начните с 00:00, длительность 30 секунд</p>
                         </div>
-                        <div class="audio-controls">
-                            <button class="btn btn-primary" onclick="playSegment()" id="playBtn">
-                                ▶️ Воспроизвести
+
+                        <div class="playback-controls">
+                            <button class="playback-btn play-btn" onclick="togglePlayback()" id="playBtn">
+                                <span id="playIcon">▶️</span>
+                                <span id="playText">Воспроизвести</span>
                             </button>
-                            <button class="btn btn-secondary" onclick="stopPlayback()" id="stopBtn" style="display: none;">
+                            <button class="playback-btn stop-btn" onclick="stopPlayback()" id="stopBtn" style="display: none;">
                                 ⏹️ Остановить
                             </button>
+                            <span class="playback-time" id="playbackTime">--:--</span>
+
                             <div class="volume-control">
                                 <span class="volume-icon" onclick="toggleMute()" id="volumeIcon">🔊</span>
                                 <input type="range" min="0" max="100" value="50" class="volume-slider" id="volumeSlider"
                                        oninput="changeVolume(this.value)">
                                 <span class="volume-value" id="volumeValue">50%</span>
                             </div>
-                            <span class="time-display" id="playbackTime">--:--</span>
                         </div>
                     </div>
                 </div>
@@ -251,7 +246,7 @@
                         💾 Сохранить отрезок
                     </button>
                     <button class="btn btn-secondary" onclick="closeAudioEditor()">
-                        ❌ Отмена
+                        ❌ Закрыть
                     </button>
                 </div>
             </div>
@@ -259,5 +254,88 @@
     </div>
 
     <script src="static/js/app.js"></script>
+
+    <script>
+        // Горячие клавиши для аудио редактора
+        document.addEventListener('keydown', function (e) {
+            const audioEditor = document.getElementById('audioEditorModal');
+            if (audioEditor.style.display !== 'block') return;
+
+            switch (e.key) {
+                case ' ':
+                    e.preventDefault();
+                    togglePlayback();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    moveSegment(5);
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    moveSegment(-5);
+                    break;
+                case 'Escape':
+                    e.preventDefault();
+                    stopPlayback();
+                    break;
+            }
+        });
+
+        // Автоматическое обновление статуса системы каждые 30 секунд
+        setInterval(() => {
+            if (document.getElementById('status').classList.contains('active')) {
+                loadSystemStatus();
+            }
+        }, 30000);
+
+        // Обработчик изменения файлов для загрузки
+        document.getElementById('fileInput').addEventListener('change', function (e) {
+            const files = e.target.files;
+            if (files.length > 0) {
+                handleFileUpload(e);
+            }
+        });
+
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function () {
+            console.log('🎵 Music Loto Maker инициализирован');
+
+            // Показываем уведомление о загрузке
+            showNotification('Приложение загружено!', 'success');
+
+            // Загружаем начальные данные
+            loadTracks();
+            updateTracksCount();
+            loadSystemStatus();
+        });
+
+        // Функция для показа подсказок при наведении
+        function initTooltips() {
+            const buttons = document.querySelectorAll('.btn[title]');
+            buttons.forEach(btn => {
+                btn.addEventListener('mouseenter', function (e) {
+                    // Уже реализовано в CSS
+                });
+            });
+        }
+
+        // Функция для проверки соединения с сервером
+        async function checkServerConnection() {
+            try {
+                const response = await fetch(`${API_BASE}/status`);
+                return response.ok;
+            } catch (error) {
+                return false;
+            }
+        }
+
+        // Периодическая проверка соединения
+        setInterval(async () => {
+            const isConnected = await checkServerConnection();
+            if (!isConnected) {
+                showNotification('Потеряно соединение с сервером', 'error');
+            }
+        }, 60000); // Проверка каждую минуту
+    </script>
 </body>
 </html>

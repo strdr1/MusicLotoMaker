@@ -90,7 +90,7 @@ class AudioEditor:
             print(f"Ошибка извлечения отрезка: {e}")
             return None
     
-    def generate_waveform(self, file_path, width=800, height=200):
+    def generate_waveform(self, file_path, width=1200, height=120):
         """Генерация waveform изображения"""
         try:
             # Загружаем аудио
@@ -117,17 +117,22 @@ class AudioEditor:
                 step = len(samples) // target_points
                 samples = samples[::step]
             
-            # Создаем график
-            plt.figure(figsize=(width/100, height/100), dpi=100)
-            plt.plot(samples, color='#2563eb', linewidth=1)
-            plt.fill_between(range(len(samples)), samples, color='#2563eb', alpha=0.3)
+            # Создаем график с белым фоном
+            fig = plt.figure(figsize=(width/100, height/100), dpi=100, 
+                           facecolor='white', edgecolor='white')
+            ax = fig.add_subplot(111)
+            ax.set_facecolor('white')
+            
+            plt.plot(samples, color='#2563eb', linewidth=2.0)
+            plt.fill_between(range(len(samples)), samples, color='#2563eb', alpha=0.4)
             plt.axis('off')
             plt.margins(0)
             plt.tight_layout(pad=0)
             
             # Сохраняем в base64
             buffer = io.BytesIO()
-            plt.savefig(buffer, format='png', bbox_inches='tight', pad_inches=0)
+            plt.savefig(buffer, format='png', bbox_inches='tight', pad_inches=0, 
+                       facecolor='white', edgecolor='white')
             buffer.seek(0)
             image_base64 = base64.b64encode(buffer.getvalue()).decode()
             plt.close()

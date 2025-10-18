@@ -25,6 +25,7 @@
   <ItemGroup>
     <Compile Include="backend\audio_editor.py" />
     <Compile Include="backend\media_library.py" />
+    <Compile Include="backend\processors\metadata_processor.py" />
     <Compile Include="backend\presentation.py" />
     <Compile Include="backend\server.py" />
     <Compile Include="backend\tickets.py" />
@@ -39,6 +40,7 @@
     <Folder Include="assets\" />
     <Folder Include="frontend\css\" />
     <Folder Include="frontend\js\" />
+    <Folder Include="backend\processors\" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="assets\default_cover.png" />
