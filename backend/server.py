@@ -10,7 +10,10 @@ from pathlib import Path
 import logging
 from datetime import datetime
 import json
+from backend.media_library import MediaLibrary
 
+# Создаём один экземпляр медиатеки для всего приложения
+media_lib = MediaLibrary()
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -890,6 +893,11 @@ async def health_check():
         "musical_loto_ready": tracks_count >= 40,
         "features": ["musical_loto", "modern_presentations", "smart_metadata"]
     }
+
+@app.route('/save_project', methods=['POST'])
+def save_project():
+    count = media_lib.save_project()
+    return jsonify({"status": "success", "saved_tracks": count})
 
 if __name__ == "__main__":
     import uvicorn

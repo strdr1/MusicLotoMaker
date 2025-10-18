@@ -24,6 +24,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="backend\audio_editor.py" />
+    <Compile Include="backend\image_search.py" />
     <Compile Include="backend\media_library.py" />
     <Compile Include="backend\processors\metadata_processor.py" />
     <Compile Include="backend\presentation.py" />
@@ -36,6 +37,7 @@
   </ItemGroup>
   <ItemGroup>
     <Folder Include="backend\" />
+    <Folder Include="images\" />
     <Folder Include="frontend\" />
     <Folder Include="assets\" />
     <Folder Include="frontend\css\" />
@@ -44,6 +46,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="assets\default_cover.png" />
+    <Content Include="backend\track_data.json" />
     <Content Include="frontend\css\style.css" />
     <Content Include="frontend\index.html" />
     <Content Include="frontend\js\app.js" />
