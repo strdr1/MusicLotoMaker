@@ -45,6 +45,7 @@
     <Folder Include="backend\processors\" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include=".env" />
     <Content Include="assets\default_cover.png" />
     <Content Include="backend\track_data.json" />
     <Content Include="frontend\css\style.css" />

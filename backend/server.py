@@ -2,7 +2,7 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import os
 import sys
 import shutil
@@ -10,10 +10,7 @@ from pathlib import Path
 import logging
 from datetime import datetime
 import json
-from backend.media_library import MediaLibrary
 
-# Создаём один экземпляр медиатеки для всего приложения
-media_lib = MediaLibrary()
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,6 +108,15 @@ except ImportError as e:
         
         def get_tracks_count(self):
             return len(self.tracks)
+        
+        def update_track_segment(self, track_id, start_time, duration):
+            """Обновить отрезок трека"""
+            track = self.get_track(track_id)
+            if track:
+                track['segment_start'] = start_time
+                track['segment_duration'] = duration
+                return True
+            return False
     
     logger.info("✅ Используется заглушка MediaLibrary")
 
@@ -162,6 +168,10 @@ except ImportError as e:
             return 30
         def extract_segment(self, file_path, start_time, duration, output_path):
             return output_path
+        def process_track_complete(self, track_data, clip_path):
+            return track_data
+        def get_all_tracks_data(self):
+            return []
     
     audio_editor = AudioEditor()
 
@@ -181,7 +191,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 # Создаем необходимые папки
-for folder in ["temp", "output", "uploads", "config"]:
+for folder in ["temp", "output", "uploads", "config", "images", "clips", "covers", "tracks_data"]:
     folder_path = os.path.join(BASE_DIR, folder)
     os.makedirs(folder_path, exist_ok=True)
     logger.info(f"📁 Создана папка: {folder_path}")
@@ -214,7 +224,9 @@ async def serve_frontend():
                 "Modern presentations", 
                 "Smart metadata parsing",
                 "Audio editing",
-                "Ticket generation"
+                "Ticket generation",
+                "JSON export",
+                "Artist image search"
             ]
         }
 
@@ -433,6 +445,83 @@ async def batch_refresh_metadata():
         "errors": errors
     }
 
+# API для полной обработки треков (JSON + фото)
+@app.post("/api/tracks/{track_id}/process-complete")
+async def process_track_complete(track_id: int):
+    """Полная обработка трека: JSON + фото"""
+    try:
+        track = media_library.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Трек не найден")
+        
+        # Создаем отрывок
+        clip_path = audio_editor.extract_segment(
+            track['file_path'],
+            track.get('segment_start', 0),
+            track.get('segment_duration', 30),
+            os.path.join(BASE_DIR, "clips", f"clip_{track_id}.mp3")
+        )
+        
+        # Полная обработка трека
+        complete_track = audio_editor.process_track_complete(track, clip_path)
+        
+        # Обновляем в медиатеке
+        media_library.update_track(track_id, complete_track)
+        
+        return {
+            "success": True,
+            "message": "Трек полностью обработан",
+            "track": complete_track
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка полной обработки трека: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tracks-data")
+async def get_all_tracks_data():
+    """Получить все обработанные данные треков"""
+    try:
+        tracks_data = audio_editor.get_all_tracks_data()
+        return {
+            "success": True,
+            "tracks": tracks_data,
+            "count": len(tracks_data)
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения данных треков: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/save-project")
+async def save_project():
+    """Сохранить проект (все треки в JSON)"""
+    try:
+        tracks = media_library.get_tracks()
+        saved_count = 0
+        
+        for track in tracks:
+            # Создаем отрывок для каждого трека
+            clip_path = audio_editor.extract_segment(
+                track['file_path'],
+                track.get('segment_start', 0),
+                track.get('segment_duration', 30),
+                os.path.join(BASE_DIR, "clips", f"clip_{track['id']}.mp3")
+            )
+            
+            # Полная обработка трека
+            complete_track = audio_editor.process_track_complete(track, clip_path)
+            saved_count += 1
+        
+        return {
+            "success": True,
+            "message": f"Проект сохранен. Обработано треков: {saved_count}",
+            "saved_tracks": saved_count
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения проекта: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # API для генерации Musical Loto
 @app.post("/api/generate/musical-loto")
 async def generate_musical_loto():
@@ -610,6 +699,8 @@ async def download_file(filename: str):
         possible_paths = [
             os.path.join(BASE_DIR, "output", filename),
             os.path.join(BASE_DIR, "temp", filename),
+            os.path.join(BASE_DIR, "clips", filename),
+            os.path.join(BASE_DIR, "uploads", filename),
             os.path.join(BASE_DIR, filename)
         ]
         
@@ -648,7 +739,9 @@ async def get_status():
                 "modern_presentations", 
                 "smart_metadata",
                 "audio_editing",
-                "ticket_generation"
+                "ticket_generation",
+                "json_export",
+                "artist_images"
             ]
         }
         
@@ -891,23 +984,26 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "tracks_loaded": tracks_count,
         "musical_loto_ready": tracks_count >= 40,
-        "features": ["musical_loto", "modern_presentations", "smart_metadata"]
+        "features": [
+            "musical_loto", 
+            "modern_presentations", 
+            "smart_metadata",
+            "audio_editing",
+            "json_export",
+            "artist_images"
+        ]
     }
-
-@app.route('/save_project', methods=['POST'])
-def save_project():
-    count = media_lib.save_project()
-    return jsonify({"status": "success", "saved_tracks": count})
 
 if __name__ == "__main__":
     import uvicorn
     logger.info("🎵 Music Loto Maker Server v3.0 Starting...")
     logger.info(f"🔧 Metadata processor: {type(metadata_processor).__name__}")
-    logger.info("🎲 New feature: Musical Loto Game")
+    logger.info("🎲 New features: Musical Loto Game, JSON Export, Artist Images")
     logger.info("🌐 Server running on http://127.0.0.1:8000")
     logger.info("🚀 Available endpoints:")
     logger.info("   POST /api/generate/musical-loto - Создать Musical Loto")
-    logger.info("   POST /api/generate/musical-loto-custom - Кастомный Musical Loto")
-    logger.info("   GET  /api/tracks/count - Проверить готовность")
+    logger.info("   POST /api/tracks/{id}/process-complete - Полная обработка трека")
+    logger.info("   POST /api/save-project - Сохранить проект в JSON")
+    logger.info("   GET  /api/tracks-data - Получить все данные треков")
     
     uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)

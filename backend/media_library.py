@@ -3,7 +3,7 @@ import os
 import json
 import datetime
 from backend.audio_editor import audio_editor
-from backend.image_search import search_artist_image, download_image
+from image_search import image_searcher
 
 class MediaLibrary:
     def __init__(self):
