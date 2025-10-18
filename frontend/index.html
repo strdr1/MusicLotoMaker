@@ -1,0 +1,263 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Music Loto Maker</title>
+    <link rel="stylesheet" href="static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎵 Music Loto Maker</h1>
+            <p class="subtitle">Создавайте музыкальные презентации и билеты лото</p>
+
+            <nav class="tabs">
+                <button class="tab-btn active" data-tab="media">📁 Медиатека</button>
+                <button class="tab-btn" data-tab="presentation">🎬 Презентация</button>
+                <button class="tab-btn" data-tab="tickets">🎫 Билеты</button>
+                <button class="tab-btn" data-tab="status">📊 Статус</button>
+            </nav>
+        </header>
+
+        <!-- Вкладка Медиатека -->
+        <div id="media" class="tab-content active">
+            <div class="toolbar">
+                <input type="file" id="fileInput" multiple accept="audio/*" style="display: none;">
+                <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                    📁 Загрузить треки
+                </button>
+                <button class="btn btn-secondary" onclick="loadTracks()">
+                    🔄 Обновить
+                </button>
+                <button class="btn btn-danger" onclick="clearTracks()">
+                    🗑️ Очистить все
+                </button>
+            </div>
+
+            <div class="tracks-container">
+                <div class="tracks-header">
+                    <div class="col-id">#</div>
+                    <div class="col-artist">Исполнитель</div>
+                    <div class="col-title">Название трека</div>
+                    <div class="col-actions">Действия</div>
+                </div>
+                <div id="tracksList" class="tracks-list">
+                    <!-- Треки будут здесь -->
+                </div>
+            </div>
+
+            <div id="mediaStatus" class="status"></div>
+        </div>
+
+        <!-- Вкладка Презентация -->
+        <div id="presentation" class="tab-content">
+            <div class="generator-card">
+                <h2>🎬 Генератор презентации</h2>
+                <p>Создайте PowerPoint презентацию со всеми треками из медиатеки</p>
+
+                <div class="info-box">
+                    <strong>Треков в медиатеке: <span id="tracksCount">0</span></strong>
+                </div>
+
+                <button class="btn btn-large btn-primary" onclick="generatePresentation()">
+                    🎬 Сгенерировать презентацию
+                </button>
+
+                <div id="presentationStatus" class="status"></div>
+            </div>
+        </div>
+
+        <!-- Вкладка Билеты -->
+        <div id="tickets" class="tab-content">
+            <div class="generator-card">
+                <h2>🎫 Генератор билетов лото</h2>
+                <p>Создайте набор билетов для игры в музыкальное лото</p>
+
+                <div class="form-group">
+                    <label for="ticketsCount">Количество билетов:</label>
+                    <input type="number" id="ticketsCount" value="24" min="1" max="100" class="form-input">
+                </div>
+
+                <button class="btn btn-large btn-primary" onclick="generateTickets()">
+                    🎫 Сгенерировать билеты
+                </button>
+
+                <div id="ticketsStatus" class="status"></div>
+            </div>
+        </div>
+
+        <!-- Вкладка Статус -->
+        <div id="status" class="tab-content">
+            <div class="generator-card">
+                <h2>📊 Статус системы</h2>
+                <div id="systemStatus">
+                    <p>🔄 Загружаем информацию...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно редактирования метаданных -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>✏️ Редактирование трека</h3>
+                <span class="close" onclick="closeEditModal()">&times;</span>
+            </div>
+            <form id="editForm" onsubmit="saveTrack(event)">
+                <input type="hidden" id="editTrackId">
+
+                <div class="form-group">
+                    <label>Исполнитель:</label>
+                    <input type="text" id="editArtist" class="form-input" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Название трека:</label>
+                    <input type="text" id="editTitle" class="form-input" required>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">💾 Сохранить</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeEditModal()">❌ Отмена</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Аудио редактор -->
+    <div id="audioEditorModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🎚️ Аудио редактор</h3>
+                <span class="close" onclick="closeAudioEditor()">&times;</span>
+            </div>
+
+            <div class="audio-editor">
+                <div class="audio-editor-content">
+                    <!-- Информация о треке -->
+                    <div class="track-info" id="editorTrackInfo">
+                        <h4>Загрузка информации о треке...</h4>
+                    </div>
+
+                    <!-- Waveform и выбор отрезка -->
+                    <div class="waveform-section">
+                        <h4>Выбор 30-секундного отрезка</h4>
+                        <p class="text-muted">🔍 Умный анализ найдет самый насыщенный отрезок по энергии, вариативности и пиковым моментам</p>
+
+                        <div class="waveform-container" id="waveformContainer">
+                            <div class="waveform-loading">
+                                Генерация waveform...
+                            </div>
+                            <div class="segment-marker" id="segmentMarker" style="display: none;">
+                                <div class="segment-handle segment-handle-left" id="handleLeft"></div>
+                                <div class="segment-handle segment-handle-right" id="handleRight"></div>
+                            </div>
+                        </div>
+
+                        <!-- Таймлайн контролы -->
+                        <div class="timeline-controls">
+                            <button class="btn btn-secondary timeline-btn" onclick="suggestBestSegment()"
+                                    title="Анализ энергии, вариативности и пиков для поиска лучшего отрезка">
+                                🎵 Умный анализ
+                            </button>
+                            <button class="btn btn-secondary timeline-btn" onclick="setSegmentToStart()"
+                                    title="Начать с самого начала трека">
+                                🏁 В начало
+                            </button>
+                            <button class="btn btn-secondary timeline-btn" onclick="setSegmentToMiddle()"
+                                    title="Поставить отрезок в середину трека">
+                                ⏸️ В середину
+                            </button>
+                            <button class="btn btn-secondary timeline-btn" onclick="setSegmentToEnd()"
+                                    title="Поставить отрезок в конец трека">
+                                🏁 В конец
+                            </button>
+                        </div>
+
+                        <div class="timeline-controls">
+                            <button class="btn btn-secondary timeline-btn" onclick="moveSegment(-5)">
+                                ⏪ -5с
+                            </button>
+                            <button class="btn btn-secondary timeline-btn" onclick="moveSegment(-1)">
+                                ◀️ -1с
+                            </button>
+                            <span class="time-display" id="timeDisplay">00:00 - 00:30</span>
+                            <button class="btn btn-secondary timeline-btn" onclick="moveSegment(1)">
+                                +1с ▶️
+                            </button>
+                            <button class="btn btn-secondary timeline-btn" onclick="moveSegment(5)">
+                                +5с ⏩
+                            </button>
+                        </div>
+
+                        <!-- Результаты анализа -->
+                        <div class="analysis-info" id="analysisInfo" style="display: none;">
+                            <div class="info-card">
+                                <h4>📊 Результат анализа</h4>
+                                <p id="analysisResult">Анализ не проводился</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Информация о отрезке -->
+                    <div class="segment-info">
+                        <div class="info-card">
+                            <h4>Начало отрезка</h4>
+                            <p id="segmentStartTime">00:00</p>
+                        </div>
+                        <div class="info-card">
+                            <h4>Конец отрезка</h4>
+                            <p id="segmentEndTime">00:30</p>
+                        </div>
+                        <div class="info-card">
+                            <h4>Длительность</h4>
+                            <p id="segmentDuration">30 сек</p>
+                        </div>
+                        <div class="info-card">
+                            <h4>Общая длительность</h4>
+                            <p id="totalDuration">00:00</p>
+                        </div>
+                    </div>
+
+                    <!-- Превью и воспроизведение -->
+                    <div class="preview-controls">
+                        <div class="preview-info">
+                            <h4>Превью отрезка</h4>
+                            <p id="previewInfo">Начните с 00:00, длительность 30 секунд</p>
+                        </div>
+                        <div class="audio-controls">
+                            <button class="btn btn-primary" onclick="playSegment()" id="playBtn">
+                                ▶️ Воспроизвести
+                            </button>
+                            <button class="btn btn-secondary" onclick="stopPlayback()" id="stopBtn" style="display: none;">
+                                ⏹️ Остановить
+                            </button>
+                            <div class="volume-control">
+                                <span class="volume-icon" onclick="toggleMute()" id="volumeIcon">🔊</span>
+                                <input type="range" min="0" max="100" value="50" class="volume-slider" id="volumeSlider"
+                                       oninput="changeVolume(this.value)">
+                                <span class="volume-value" id="volumeValue">50%</span>
+                            </div>
+                            <span class="time-display" id="playbackTime">--:--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Действия -->
+                <div class="editor-actions">
+                    <button class="btn btn-primary" onclick="saveSegment()">
+                        💾 Сохранить отрезок
+                    </button>
+                    <button class="btn btn-secondary" onclick="closeAudioEditor()">
+                        ❌ Отмена
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="static/js/app.js"></script>
+</body>
+</html>
