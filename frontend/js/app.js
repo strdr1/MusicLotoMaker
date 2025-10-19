@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', function () {
     updateTracksCount();
     loadSystemStatus();
     setupEventListeners();
+    addTimingsButton();
 });
 
 function setupEventListeners() {
@@ -119,6 +120,51 @@ function setupEventListeners() {
     });
 }
 
+// =========================
+// TIMING MANAGEMENT FUNCTIONS
+// =========================
+
+// Функция для сохранения всех таймингов в основной JSON
+async function saveAllTimings() {
+    try {
+        showNotification('💾 Сохраняем все тайминги в основной файл...', 'info');
+
+        const response = await fetch(`${API_BASE}/tracks/save-all-timings`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            throw new Error('Ошибка сохранения таймингов');
+        }
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(`✅ ${result.message}`, 'success');
+        } else {
+            throw new Error(result.message || 'Неизвестная ошибка');
+        }
+
+    } catch (error) {
+        console.error('Ошибка сохранения таймингов:', error);
+        showNotification(`❌ Ошибка: ${error.message}`, 'error');
+    }
+}
+
+// Добавьте кнопку в тулбар
+function addTimingsButton() {
+    const toolbar = document.querySelector('.toolbar');
+    if (toolbar && !document.getElementById('saveTimingsBtn')) {
+        const timingsBtn = document.createElement('button');
+        timingsBtn.id = 'saveTimingsBtn';
+        timingsBtn.className = 'btn btn-warning';
+        timingsBtn.innerHTML = '💾 Записать тайминги';
+        timingsBtn.onclick = saveAllTimings;
+        timingsBtn.title = 'Сохранить все тайминги отрезков в основной JSON файл';
+        toolbar.appendChild(timingsBtn);
+    }
+}
+
 // Управление вкладками
 function initTabs() {
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -190,6 +236,10 @@ function renderTracks(tracks) {
                 <span>${escapeHtml(track.artist)}</span>
             </div>
             <div class="col-title">${escapeHtml(track.title)}</div>
+            <div class="col-segment">
+                <span class="segment-time">${formatTime(track.segment_start || 0)}</span>
+                <span class="segment-duration">${track.segment_duration || 30}с</span>
+            </div>
             <div class="col-actions">
                 <button class="btn btn-secondary btn-small" onclick="openAudioEditor(${track.id})" title="Аудио редактор">
                     🎚️ Редактор
@@ -891,6 +941,7 @@ function updateTrackInfo(track) {
     infoElement.innerHTML = `
         <h4>${escapeHtml(track.artist)} - ${escapeHtml(track.title)}</h4>
         <p>Файл: ${track.original_filename}</p>
+        <p class="text-muted">Текущий отрезок: ${formatTime(track.segment_start || 0)} - ${formatTime((track.segment_start || 0) + (track.segment_duration || 30))}</p>
     `;
 
     document.getElementById('totalDurationDisplay').textContent = formatTime(totalTrackDuration);
@@ -1220,46 +1271,15 @@ async function saveSegment() {
 
         if (response.ok) {
             const result = await response.json();
-            showNotification('Отрезок сохранен! Файл создан: ' + (result.clip_path || 'успешно'), 'success');
+            showNotification('Отрезок сохранен!', 'success');
             closeAudioEditor();
             await loadTracks();
-
-            // Дополнительно создаем файл отрезка для гарантии
-            await generateSegmentFile(currentEditorTrack, segmentStart, segmentDuration);
         } else {
             throw new Error('Save failed');
         }
     } catch (error) {
         console.error('Error saving segment:', error);
         showNotification('Ошибка сохранения отрезка', 'error');
-    }
-}
-
-// Создание файла отрезка
-async function generateSegmentFile(trackId, startTime, duration) {
-    try {
-        const response = await fetch(`${API_BASE}/tracks/${trackId}/generate-segment-file`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                start_time: startTime,
-                duration: duration
-            })
-        });
-
-        if (response.ok) {
-            const result = await response.json();
-            console.log('✅ Файл отрезка создан:', result.clip_path);
-            return result.clip_path;
-        } else {
-            console.warn('⚠️ Не удалось создать файл отрезка');
-            return null;
-        }
-    } catch (error) {
-        console.error('Ошибка создания файла отрезка:', error);
-        return null;
     }
 }
 

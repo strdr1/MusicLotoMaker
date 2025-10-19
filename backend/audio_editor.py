@@ -1,5 +1,4 @@
-﻿# backend/audio_editor.py
-import numpy as np
+﻿import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -18,6 +17,8 @@ from pathlib import Path
 import mutagen
 from PIL import Image
 import tempfile
+import librosa
+from scipy import signal
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class AudioEditor:
         
     def _create_directories(self):
         """Создает все необходимые папки"""
-        folders = ["temp", "output", "images", "clips", "covers", "tracks_data"]
+        folders = ["temp", "output", "images", "covers", "tracks_data"]
         for folder in folders:
             folder_path = os.path.join(self.BASE_DIR, folder)
             os.makedirs(folder_path, exist_ok=True)
@@ -64,9 +65,9 @@ class AudioEditor:
             return 0
 
     def extract_segment(self, file_path, start_time, duration=30, output_path=None):
-        """Извлечение 30-секундного отрезка"""
+        """Извлечение отрезка для временного использования (предпросмотр/презентация)"""
         try:
-            logger.info(f"🎵 Создание отрывка: {file_path} с {start_time}с")
+            logger.info(f"🎵 Создание временного отрывка: {file_path} с {start_time}с")
             
             audio = AudioSegment.from_file(file_path)
             
@@ -77,22 +78,144 @@ class AudioEditor:
                 segment = audio
             else:
                 # Обрезаем отрезок
-                segment = audio[start_time*1000:(start_time + duration)*1000]
+                start_ms = int(start_time * 1000)
+                end_ms = int((start_time + duration) * 1000)
+                segment = audio[start_ms:end_ms]
             
             if not output_path:
-                # Создаем уникальное имя для отрывка
+                # Создаем уникальное имя для временного отрывка
                 track_id = hashlib.md5(f"{file_path}_{start_time}".encode()).hexdigest()[:8]
-                output_path = self._get_full_path(f"clips/clip_{track_id}.mp3")
+                output_path = self._get_full_path(f"temp/segment_{track_id}.mp3")
+            
+            # Создаем папку temp если не существует
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
             
             # Экспортируем отрезок
             segment.export(output_path, format="mp3", bitrate="192k")
-            logger.info(f"✅ Отрывок сохранен: {output_path}")
+            logger.info(f"✅ Временный отрывок создан: {output_path}")
             
             return output_path
             
         except Exception as e:
-            logger.error(f"❌ Ошибка создания отрывка: {e}")
+            logger.error(f"❌ Ошибка создания временного отрывка: {e}")
             return None
+
+    def _analyze_audio_energy(self, file_path):
+        """Анализ энергии аудио для поиска лучшего отрезка"""
+        try:
+            # Загружаем аудио с помощью librosa
+            y, sr = librosa.load(file_path, sr=None)
+            
+            # Вычисляем энергию (RMS)
+            frame_length = 2048
+            hop_length = 512
+            rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
+            
+            # Нормализуем энергию
+            rms_normalized = (rms - np.min(rms)) / (np.max(rms) - np.min(rms))
+            
+            # Разбиваем на сегменты по 30 секунд
+            segment_duration = 30
+            frames_per_segment = int(segment_duration * sr / hop_length)
+            
+            # Вычисляем среднюю энергию для каждого сегмента
+            segment_energies = []
+            for i in range(0, len(rms_normalized), frames_per_segment):
+                segment = rms_normalized[i:i + frames_per_segment]
+                if len(segment) > 0:
+                    segment_energies.append(np.mean(segment))
+            
+            # Находим сегмент с максимальной энергией
+            if segment_energies:
+                best_segment_idx = np.argmax(segment_energies)
+                best_start_time = best_segment_idx * segment_duration
+                
+                # Проверяем, что отрезок не выходит за пределы трека
+                total_duration = len(y) / sr
+                if best_start_time + segment_duration > total_duration:
+                    best_start_time = max(0, total_duration - segment_duration)
+                
+                logger.info(f"🎯 Найден лучший отрезок: {best_start_time}с (энергия: {segment_energies[best_segment_idx]:.3f})")
+                return best_start_time
+            
+            return 30.0  # fallback
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка анализа энергии: {e}, используем fallback")
+            return 30.0
+
+    def _analyze_audio_complexity(self, file_path):
+        """Анализ сложности/вариативности аудио"""
+        try:
+            y, sr = librosa.load(file_path, sr=None)
+            
+            # Вычисляем спектральный центроид (сложность тембра)
+            spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+            
+            # Вычисляем zero-crossing rate (ритмическая сложность)
+            zcr = librosa.feature.zero_crossing_rate(y)[0]
+            
+            # Комбинируем метрики
+            complexity = (spectral_centroids / np.max(spectral_centroids) + 
+                         zcr / np.max(zcr)) / 2
+            
+            segment_duration = 30
+            frames_per_segment = int(segment_duration * sr / 512)  # примерный hop_length
+            
+            segment_complexities = []
+            for i in range(0, len(complexity), frames_per_segment):
+                segment = complexity[i:i + frames_per_segment]
+                if len(segment) > 0:
+                    segment_complexities.append(np.mean(segment))
+            
+            if segment_complexities:
+                best_segment_idx = np.argmax(segment_complexities)
+                best_start_time = best_segment_idx * segment_duration
+                
+                total_duration = len(y) / sr
+                if best_start_time + segment_duration > total_duration:
+                    best_start_time = max(0, total_duration - segment_duration)
+                
+                logger.info(f"🎵 Найден сложный отрезок: {best_start_time}с")
+                return best_start_time
+            
+            return 45.0  # fallback к середине
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка анализа сложности: {e}")
+            return 45.0
+
+    def suggest_best_segment(self, file_path, duration=30):
+        """Умный выбор лучшего отрезка с комбинированным анализом"""
+        try:
+            audio = AudioSegment.from_file(file_path)
+            total_duration = len(audio) / 1000.0
+            
+            if total_duration <= duration:
+                logger.info("🎵 Трек короче 30 секунд, используем начало")
+                return 0
+            
+            # Комбинированный анализ: энергия + сложность
+            energy_start = self._analyze_audio_energy(file_path)
+            complexity_start = self._analyze_audio_complexity(file_path)
+            
+            # Взвешенное среднее (больше веса энергии)
+            best_start = (energy_start * 0.7 + complexity_start * 0.3)
+            
+            # Ограничиваем пределы трека
+            best_start = max(0, min(best_start, total_duration - duration))
+            
+            # Округляем до целых секунд
+            best_start = int(best_start)
+            
+            logger.info(f"🎯 Умный анализ: энергия={energy_start}с, сложность={complexity_start}с, итог={best_start}с")
+            
+            return float(best_start)
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка анализа аудио: {e}")
+            # Fallback: возвращаем 30 секунд от начала
+            return 30.0
 
     def process_track_complete(self, track_data, clip_path=None):
         """Полная обработка трека: JSON + фото + отрывок"""
@@ -102,7 +225,7 @@ class AudioEditor:
             # Генерируем ID трека
             track_id = self._generate_track_id(track_data['artist'], track_data['title'])
             
-            # 1. Создаем отрывок если не передан
+            # 1. Создаем отрывок если не передан (только для демо)
             if not clip_path:
                 clip_path = self.extract_segment(
                     track_data['file_path'],
@@ -132,7 +255,7 @@ class AudioEditor:
             self._save_track_json(complete_track_data, track_id)
             
             logger.info(f"✅ Трек полностью обработан: {track_id}")
-            logger.info(f"   📁 Отрывок: {clip_path}")
+            logger.info(f"   📁 Временный отрывок: {clip_path}")
             logger.info(f"   🖼️ Фото: {image_path}")
             logger.info(f"   🎨 Обложка: {cover_path}")
             
@@ -150,8 +273,6 @@ class AudioEditor:
         except ImportError:
             logger.warning("⚠️ ImageSearch не доступен, создаем placeholder")
             return self._create_placeholder_image(artist, track_id)
-
-                
         except Exception as e:
             logger.error(f"❌ Ошибка создания изображения: {e}")
             return None
@@ -293,27 +414,30 @@ class AudioEditor:
             logger.error(f"❌ Ошибка загрузки данных треков: {e}")
             return []
 
-    # Остальные методы остаются без изменений
+    # Воспроизведение для предпросмотра
     def play_segment_thread(self, file_path, start_time, duration=30):
         """Воспроизведение отрезка в отдельном потоке"""
         try:
-            audio = AudioSegment.from_file(file_path)
-            segment = audio[start_time*1000:(start_time + duration)*1000]
+            # Создаем временный отрезок для воспроизведения
+            temp_segment = self.extract_segment(file_path, start_time, duration)
             
-            # Экспортируем во временный файл
-            temp_path = self._get_full_path(f"temp/segment_{os.path.basename(file_path)}.mp3")
-            segment.export(temp_path, format="mp3")
-            
-            # Воспроизведение через системный плеер
-            if os.name == 'nt':  # Windows
-                os.system(f'start wmplayer "{temp_path}"')
-            elif os.name == 'posix':  # macOS/Linux
-                if os.uname().sysname == 'Darwin':  # macOS
-                    os.system(f'afplay "{temp_path}"')
-                else:  # Linux
-                    os.system(f'xdg-open "{temp_path}"')
-            
-            return True
+            if temp_segment and os.path.exists(temp_segment):
+                # Воспроизведение через системный плеер
+                if os.name == 'nt':  # Windows
+                    os.system(f'start wmplayer "{temp_segment}"')
+                elif os.name == 'posix':  # macOS/Linux
+                    if os.uname().sysname == 'Darwin':  # macOS
+                        os.system(f'afplay "{temp_segment}"')
+                    else:  # Linux
+                        os.system(f'xdg-open "{temp_segment}"')
+                
+                # Удаляем временный файл после использования
+                time.sleep(duration + 2)  # Ждем завершения воспроизведения
+                if os.path.exists(temp_segment):
+                    os.remove(temp_segment)
+                
+                return True
+            return False
         except Exception as e:
             logger.error(f"Ошибка воспроизведения: {e}")
             return False
@@ -375,22 +499,6 @@ class AudioEditor:
         except Exception as e:
             logger.error(f"Ошибка генерации waveform: {e}")
             return None
-
-    def suggest_best_segment(self, file_path, duration=30):
-        """Умный выбор лучшего отрезка"""
-        try:
-            audio = AudioSegment.from_file(file_path)
-            total_duration = len(audio) / 1000.0
-            
-            if total_duration <= duration:
-                return 0
-            
-            # Упрощенная логика - возвращаем 30 секунд с начала
-            return 30.0
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка анализа аудио: {e}")
-            return 30.0
 
 # Глобальный экземпляр редактора
 audio_editor = AudioEditor()

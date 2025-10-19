@@ -1,5 +1,4 @@
-﻿# backend/server.py
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+﻿from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -80,7 +79,7 @@ except ImportError as e:
                     'metadata': {},
                     'segment_start': 0,
                     'segment_duration': 30,
-                    'image_path': None,  # Фото НЕ загружается автоматически
+                    'image_path': None,
                     'created_at': datetime.now().isoformat()
                 }
                 self.tracks.append(track)
@@ -220,7 +219,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 # Создаем необходимые папки
-for folder in ["temp", "output", "uploads", "config", "images", "clips", "covers", "tracks_data"]:
+for folder in ["temp", "output", "uploads", "config", "images"]:
     folder_path = os.path.join(BASE_DIR, folder)
     os.makedirs(folder_path, exist_ok=True)
     logger.info(f"📁 Создана папка: {folder_path}")
@@ -345,6 +344,14 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                 }
                 media_library.update_track(track['id'], update_data)
                 
+                # Автоматически устанавливаем умный отрезок
+                try:
+                    best_start = audio_editor.suggest_best_segment(file_path)
+                    media_library.update_track_segment(track['id'], best_start, 30)
+                    logger.info(f"🎯 Установлен умный отрезок: {best_start}с")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось установить умный отрезок: {e}")
+                
                 # Обновляем объект трека для ответа
                 track.update(update_data)
                 saved_tracks.append(track)
@@ -419,7 +426,7 @@ async def search_artist_photo(track_id: int, request_data: dict):
             raise HTTPException(status_code=404, detail="Трек не найден")
         
         artist_name = request_data.get('artist', track.get('artist', ''))
-        get_multiple = request_data.get('get_multiple', True)  # По умолчанию ищем несколько
+        get_multiple = request_data.get('get_multiple', True)
         
         if not artist_name:
             raise HTTPException(status_code=400, detail="Имя артиста не указано")
@@ -430,7 +437,6 @@ async def search_artist_photo(track_id: int, request_data: dict):
         if get_multiple:
             photo_urls = image_searcher.fetch_multiple_artist_photos(artist_name, count=10)
         else:
-            # Для обратной совместимости
             single_photo_path = image_searcher.fetch_artist_png(artist_name, track_id)
             photo_urls = [single_photo_path] if single_photo_path else []
         
@@ -613,109 +619,110 @@ async def get_artist_photo(track_id: int):
 
 @app.put("/api/tracks/{track_id}/segment")
 async def update_track_segment(track_id: int, segment_data: dict):
-    """Обновить отрезок трека И создать файл"""
+    """Обновить отрезок трека БЕЗ создания файла"""
     try:
         start_time = segment_data.get('start_time', 0)
         duration = segment_data.get('duration', 30)
         
         logger.info(f"🔄 Обновление отрезка трека {track_id}: {start_time}с, {duration}с")
         
-        # Сначала обновляем данные в медиатеке
+        # Обновляем данные в медиатеке
         success = media_library.update_track_segment(track_id, start_time, duration)
         if not success:
             raise HTTPException(status_code=404, detail="Track not found")
         
-        # Затем создаем файл отрезка
-        track = media_library.get_track(track_id)
-        segment_filename = f"segment_{track_id}_{int(start_time)}s_{duration}s.mp3"
-        segment_path = os.path.join(BASE_DIR, "clips", segment_filename)
-        
-        # Создаем папку clips если не существует
-        os.makedirs(os.path.dirname(segment_path), exist_ok=True)
-        
-        # Создаем отрезок через audio_editor
-        final_path = audio_editor.extract_segment(
-            track['file_path'],
-            start_time,
-            duration,
-            segment_path
-        )
-        
-        if final_path and os.path.exists(final_path):
-            # Обновляем путь к отрезку в треке
-            media_library.update_track(track_id, {'clip_path': final_path})
-            logger.info(f"✅ Отрезок создан и сохранен: {final_path}")
+        # Также обновляем в основном JSON файле
+        data_file = os.path.join(BASE_DIR, "track_data.json")
+        if os.path.exists(data_file):
+            with open(data_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
             
-            return {
-                "message": "Segment updated and file created",
-                "clip_path": final_path,
-                "segment_start": start_time,
-                "segment_duration": duration
-            }
-        else:
-            logger.error("❌ Не удалось создать файл отрезка")
-            return {
-                "message": "Segment updated but file creation failed",
-                "segment_start": start_time,
-                "segment_duration": duration
-            }
+            # Обновляем тайминги в основном файле
+            for track in data.get("tracks", []):
+                if track.get('id') == track_id:
+                    track['segment_start'] = start_time
+                    track['segment_duration'] = duration
+                    break
+            
+            # Сохраняем обратно
+            with open(data_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"✅ Отрезок обновлен: {start_time}с, {duration}с")
+        
+        return {
+            "message": "Segment updated",
+            "segment_start": start_time,
+            "segment_duration": duration
+        }
             
     except Exception as e:
         logger.error(f"❌ Ошибка обновления отрезка: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка обновления отрезка: {str(e)}")
 
-@app.post("/api/tracks/{track_id}/generate-segment-file")
-async def generate_segment_file(track_id: int, segment_data: dict):
-    """Создать файл 30-секундного отрезка"""
+# =========================
+# TIMING MANAGEMENT API ENDPOINTS  
+# =========================
+
+@app.post("/api/tracks/save-all-timings")
+async def save_all_timings():
+    """Сохранить ВСЕ тайминги отрезков в основной JSON файл"""
     try:
-        track = media_library.get_track(track_id)
-        if not track:
-            raise HTTPException(status_code=404, detail="Track not found")
+        tracks = media_library.get_tracks()
         
-        start_time = segment_data.get('start_time', 0)
-        duration = segment_data.get('duration', 30)
+        # Обновляем основной файл track_data.json
+        data_file = os.path.join(BASE_DIR, "track_data.json")
         
-        logger.info(f"🎵 Создание отрезка: трек {track_id}, начало {start_time}с, длительность {duration}с")
-        
-        # Создаем отрезок
-        segment_filename = f"segment_{track_id}_{int(start_time)}s_{duration}s.mp3"
-        segment_path = os.path.join(BASE_DIR, "clips", segment_filename)
-        
-        # Создаем папку clips если не существует
-        os.makedirs(os.path.dirname(segment_path), exist_ok=True)
-        
-        # Используем audio_editor для создания отрезка
-        segment_path = audio_editor.extract_segment(
-            track['file_path'],
-            start_time,
-            duration,
-            segment_path
-        )
-        
-        if segment_path and os.path.exists(segment_path):
-            # Обновляем track_data с путем к отрезку
-            update_data = {
-                'clip_path': segment_path,
-                'segment_start': start_time,
-                'segment_duration': duration
-            }
-            media_library.update_track(track_id, update_data)
-            
-            logger.info(f"✅ Отрезок создан: {segment_path}")
-            
-            return {
-                "success": True,
-                "message": "Отрезок создан",
-                "clip_path": segment_path,
-                "segment_start": start_time,
-                "segment_duration": duration
-            }
+        # Загружаем существующие данные или создаем новые
+        if os.path.exists(data_file):
+            with open(data_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
         else:
-            raise HTTPException(status_code=500, detail="Failed to create segment file")
+            data = {"tracks": []}
+        
+        # Обновляем тайминги в данных
+        for track in tracks:
+            # Находим трек в данных по ID или создаем новый
+            existing_track = None
+            for i, t in enumerate(data["tracks"]):
+                if t.get('id') == track['id']:
+                    existing_track = i
+                    break
             
+            if existing_track is not None:
+                # Обновляем существующий трек
+                data["tracks"][existing_track]['segment_start'] = track.get('segment_start', 0)
+                data["tracks"][existing_track]['segment_duration'] = track.get('segment_duration', 30)
+            else:
+                # Добавляем новый трек
+                data["tracks"].append({
+                    'id': track['id'],
+                    'artist': track.get('artist', ''),
+                    'title': track.get('title', ''),
+                    'segment_start': track.get('segment_start', 0),
+                    'segment_duration': track.get('segment_duration', 30),
+                    'image_path': track.get('image_path'),
+                    'file_path': track.get('file_path'),
+                    'original_filename': track.get('original_filename', '')
+                })
+        
+        # Сохраняем обратно в основной файл
+        with open(data_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"✅ Тайминги сохранены в основной файл: {data_file}")
+        
+        return {
+            "success": True,
+            "message": f"Тайминги {len(tracks)} треков сохранены в основной файл",
+            "file_path": data_file,
+            "tracks_count": len(tracks),
+            "tracks_with_images": len([t for t in tracks if t.get('image_path')])
+        }
+        
     except Exception as e:
-        logger.error(f"❌ Ошибка создания отрезка: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка создания отрезка: {str(e)}")
+        logger.error(f"❌ Ошибка сохранения таймингов: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения таймингов: {str(e)}")
 
 # =========================
 # PHOTO PROCESSING FUNCTIONS
@@ -906,9 +913,8 @@ async def download_file(filename: str):
         possible_paths = [
             os.path.join(BASE_DIR, "output", filename),
             os.path.join(BASE_DIR, "temp", filename),
-            os.path.join(BASE_DIR, "clips", filename),
             os.path.join(BASE_DIR, "uploads", filename),
-            os.path.join(BASE_DIR, "images", filename),  # Добавили папку images
+            os.path.join(BASE_DIR, "images", filename),
             os.path.join(BASE_DIR, filename)
         ]
         
@@ -953,7 +959,7 @@ async def get_status():
                 "audio_editing",
                 "ticket_generation",
                 "json_export",
-                "artist_images_manual"  # Теперь фото добавляются вручную
+                "artist_images_manual"
             ]
         }
         
@@ -1056,7 +1062,7 @@ async def suggest_best_segment(track_id: int):
 
 @app.get("/api/tracks/{track_id}/segment-file")
 async def get_track_segment_file(track_id: int, start_time: float = 0, duration: float = 30):
-    """Получить файл отрезка трека"""
+    """Получить временный файл отрезка трека для предпросмотра"""
     try:
         track = media_library.get_track(track_id)
         if not track:
@@ -1066,9 +1072,12 @@ async def get_track_segment_file(track_id: int, start_time: float = 0, duration:
         segment_start = start_time if start_time > 0 else track.get('segment_start', 0)
         segment_duration = duration if duration > 0 else track.get('segment_duration', 30)
         
-        # Создаем отрезок
-        segment_filename = f"segment_{track_id}_{int(segment_start)}s.mp3"
+        # Создаем временный отрезок для предпросмотра
+        segment_filename = f"preview_{track_id}_{int(segment_start)}s.mp3"
         segment_path = os.path.join(BASE_DIR, "temp", segment_filename)
+        
+        # Создаем папку temp если не существует
+        os.makedirs(os.path.dirname(segment_path), exist_ok=True)
         
         segment_path = audio_editor.extract_segment(
             track['file_path'],
@@ -1080,13 +1089,13 @@ async def get_track_segment_file(track_id: int, start_time: float = 0, duration:
         if segment_path and os.path.exists(segment_path):
             return FileResponse(
                 segment_path,
-                filename=f"segment_{track['artist']}_{track['title']}.mp3",
+                filename=f"preview_{track['artist']}_{track['title']}.mp3",
                 media_type='audio/mpeg'
             )
         else:
-            raise HTTPException(status_code=500, detail="Failed to create segment")
+            raise HTTPException(status_code=500, detail="Failed to create preview segment")
     except Exception as e:
-        logger.error(f"❌ Ошибка создания отрезка: {e}")
+        logger.error(f"❌ Ошибка создания предпросмотра отрезка: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Health check endpoint
@@ -1110,7 +1119,7 @@ async def health_check():
             "audio_editing",
             "ticket_generation",
             "json_export",
-            "artist_images_manual"  # Фото добавляются вручную
+            "artist_images_manual"
         ]
     }
 
@@ -1119,12 +1128,12 @@ if __name__ == "__main__":
     logger.info("🎵 Music Loto Maker Server v3.0 Starting...")
     logger.info(f"🔧 Metadata processor: {type(metadata_processor).__name__}")
     logger.info("📷 Artist photos: MANUAL (user adds photos manually)")
-    logger.info("🎯 New features: Multiple photo selection, Photo preview, Caching")
-    logger.info("🎵 Segment management: File creation for 30-second clips")
+    logger.info("🎯 Key features: Smart segments, No clip files, Single JSON storage")
+    logger.info("⏱️ Timing management: Auto smart segments + manual editing + JSON export")
     logger.info("🌐 Server running on http://127.0.0.1:8000")
     logger.info("🚀 Available endpoints:")
-    logger.info("   PUT    /api/tracks/{id}/segment - Обновить отрезок и создать файл")
-    logger.info("   POST   /api/tracks/{id}/generate-segment-file - Создать файл отрезка")
+    logger.info("   PUT    /api/tracks/{id}/segment - Обновить отрезок (без создания файла)")
+    logger.info("   POST   /api/tracks/save-all-timings - Сохранить ВСЕ тайминги в track_data.json")
     logger.info("   POST   /api/tracks/{id}/search-artist-photo - Найти несколько фото")
     logger.info("   POST   /api/tracks/{id}/save-artist-photo - Сохранить выбранное фото") 
     logger.info("   POST   /api/tracks/{id}/upload-artist-photo - Загрузить своё фото")

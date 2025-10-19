@@ -10,7 +10,7 @@ class MediaLibrary:
         self.load_from_file()
     
     def add_track(self, file_path, original_filename):
-        """Добавление трека БЕЗ автоматического поиска фото"""
+        """Добавление трека с автоматическим установлением умного отрезка"""
         name_without_ext = os.path.splitext(original_filename)[0]
         
         # Получаем следующий ID на основе существующих треков
@@ -20,9 +20,11 @@ class MediaLibrary:
             next_id = 1
             
         duration = audio_editor.get_audio_duration(file_path)
+        
+        # Автоматически определяем лучший отрезок
         suggested_start = audio_editor.suggest_best_segment(file_path)
 
-        # 🧠 Используем metadata_processor для канонизации артиста и названия
+        # Используем metadata_processor для канонизации артиста и названия
         try:
             from backend.processors.metadata_processor import create_metadata_processor
             metadata_processor = create_metadata_processor()
@@ -35,7 +37,7 @@ class MediaLibrary:
             artist, title = self._parse_filename(name_without_ext)
         
         track = {
-            'id': next_id,  # Используем вычисленный ID
+            'id': next_id,
             'file_path': file_path,
             'original_filename': original_filename,
             'artist': artist,
@@ -43,7 +45,7 @@ class MediaLibrary:
             'cover_path': None,
             'image_path': None,  # Фото НЕ загружается автоматически
             'clip_path': None,
-            'segment_start': suggested_start,
+            'segment_start': suggested_start,  # Автоматически установленный умный отрезок
             'segment_duration': 30,
             'duration': duration,
             'status': 'uploaded',
@@ -57,12 +59,9 @@ class MediaLibrary:
             print(f"Ошибка генерации waveform: {e}")
             track['waveform_data'] = None
 
-        # ❌ УБРАНО: Автоматический поиск фото артиста
-        # Пользователь добавит фото вручную через интерфейс
-        
         self.tracks.append(track)
         self.save_to_file()
-        print(f"✅ Трек добавлен с ID: {next_id}")
+        print(f"✅ Трек добавлен с ID: {next_id}, умный отрезок: {suggested_start}с")
         return track
 
     def _parse_filename(self, name):
@@ -74,16 +73,18 @@ class MediaLibrary:
         return name, "Без названия"
 
     def update_track_segment(self, track_id, start_time, duration=30):
+        """Обновить отрезок трека (автоматический или ручной)"""
         for track in self.tracks:
             if track['id'] == track_id:
                 track['segment_start'] = start_time
                 track['segment_duration'] = duration
                 self.save_to_file()
+                print(f"🔄 Обновлен отрезок трека {track_id}: {start_time}с")
                 return True
         return False
 
     def get_tracks(self):
-        return sorted(self.tracks, key=lambda x: x['id'])  # Сортируем по ID для порядка
+        return sorted(self.tracks, key=lambda x: x['id'])
 
     def get_track(self, track_id):
         for track in self.tracks:
@@ -149,7 +150,6 @@ class MediaLibrary:
     def save_to_file(self):
         try:
             with open(self.data_file, 'w', encoding='utf-8') as f:
-                # Сохраняем только tracks, current_id больше не нужен
                 json.dump({
                     'tracks': self.tracks
                 }, f, ensure_ascii=False, indent=2)

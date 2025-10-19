@@ -30,6 +30,9 @@
                 <button class="btn btn-secondary" onclick="loadTracks()">
                     🔄 Обновить
                 </button>
+                <button class="btn btn-warning" id="saveTimingsBtn" onclick="saveAllTimings()">
+                    💾 Записать тайминги
+                </button>
                 <button class="btn btn-danger" onclick="clearTracks()">
                     🗑️ Очистить все
                 </button>
@@ -40,6 +43,7 @@
                     <div class="col-id">#</div>
                     <div class="col-artist">Исполнитель</div>
                     <div class="col-title">Название трека</div>
+                    <div class="col-segment">Отрезок</div>
                     <div class="col-actions">Действия</div>
                 </div>
                 <div id="tracksList" class="tracks-list">
