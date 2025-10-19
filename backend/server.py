@@ -10,6 +10,7 @@ from pathlib import Path
 import logging
 from datetime import datetime
 import json
+import glob
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +27,7 @@ logger.info(f"🔍 Поиск metadata_processor в: {processors_path}")
 try:
     from metadata_processor import create_metadata_processor
     metadata_processor = create_metadata_processor()
-    logger.info("✅ Hugging Face metadata processor initialized successfully")
+    logger.info("✅ Metadata processor initialized successfully")
 except ImportError as e:
     logger.warning(f"❌ Metadata processor import error: {e}. Using fallback processor.")
     # Fallback процессор
@@ -891,6 +892,147 @@ async def get_track_segment_file(track_id: int, start_time: float = 0, duration:
     except Exception as e:
         logger.error(f"❌ Ошибка создания отрезка: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Debug endpoints для очистки кэша
+@app.post("/api/debug/clear-cache")
+async def clear_metadata_cache():
+    """Очистить кэш метаданных"""
+    try:
+        cache_files = [
+            "ai_music_cache.json",
+            "artist_cache.json", 
+            os.path.join(BASE_DIR, "ai_music_cache.json"),
+            os.path.join(BASE_DIR, "artist_cache.json")
+        ]
+        
+        cleared_files = []
+        for cache_file in cache_files:
+            if os.path.exists(cache_file):
+                os.remove(cache_file)
+                cleared_files.append(cache_file)
+                logger.info(f"🧹 Удален кэш файл: {cache_file}")
+        
+        # Также ищем любые другие cache файлы
+        cache_patterns = ["*cache*.json", "*_cache.json"]
+        for pattern in cache_patterns:
+            for cache_file in glob.glob(pattern):
+                if os.path.exists(cache_file):
+                    os.remove(cache_file)
+                    cleared_files.append(cache_file)
+                    logger.info(f"🧹 Удален кэш файл: {cache_file}")
+        
+        # Пересоздаем процессор чтобы сбросить внутренний кэш
+        global metadata_processor
+        metadata_processor = create_metadata_processor()
+        
+        return {
+            "success": True,
+            "message": f"Кэш метаданных очищен. Удалено файлов: {len(cleared_files)}",
+            "cleared_files": cleared_files
+        }
+    except Exception as e:
+        logger.error(f"❌ Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка очистки кэша: {str(e)}")
+
+@app.post("/api/debug/refresh-track/{track_id}")
+async def refresh_track_metadata_force(track_id: int):
+    """Принудительное обновление метаданных трека (игнорируя кэш)"""
+    track = media_library.get_track(track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail="Трек не найден")
+    
+    try:
+        logger.info(f"🔄 Принудительное обновление метаданных для трека {track_id}")
+        
+        # Удаляем из всех возможных кэш файлов
+        cache_files = ["ai_music_cache.json", "artist_cache.json"]
+        for cache_file in cache_files:
+            if os.path.exists(cache_file):
+                try:
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        cache = json.load(f)
+                    
+                    # Удаляем трек из кэша
+                    cache_key = track['original_filename'].lower()
+                    if cache_key in cache:
+                        del cache[cache_key]
+                        with open(cache_file, 'w', encoding='utf-8') as f:
+                            json.dump(cache, f, ensure_ascii=False, indent=2)
+                        logger.info(f"🗑️ Удален из кэша {cache_file}: {cache_key}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка очистки кэша {cache_file}: {e}")
+        
+        # Получаем свежие метаданные
+        logger.info(f"🔍 Получение новых метаданных для: {track['original_filename']}")
+        new_metadata = metadata_processor.process(track['original_filename'])
+        logger.info(f"✅ Новые метаданные: {new_metadata}")
+        
+        # Обновляем трек
+        updated_fields = {
+            'artist': new_metadata.get('artist', track.get('artist', '')),
+            'title': new_metadata.get('title', track.get('title', '')),
+            'metadata': new_metadata
+        }
+        
+        success = media_library.update_track(track_id, updated_fields)
+        if success:
+            updated_track = media_library.get_track(track_id)
+            logger.info(f"✅ Трек {track_id} обновлен: {updated_track['artist']} - {updated_track['title']}")
+            return {
+                "success": True,
+                "message": "Метаданные обновлены (кэш очищен)",
+                "track": updated_track
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Ошибка обновления в медиатеке")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка принудительного обновления: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка обработки: {str(e)}")
+
+@app.get("/api/debug/cache-status")
+async def get_cache_status():
+    """Получить статус кэша"""
+    try:
+        cache_files = {
+            "ai_music_cache.json": "AI Music Cache",
+            "artist_cache.json": "Artist Cache"
+        }
+        
+        cache_status = {}
+        total_entries = 0
+        
+        for cache_file, description in cache_files.items():
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    cache_data = json.load(f)
+                cache_status[cache_file] = {
+                    "description": description,
+                    "entries": len(cache_data),
+                    "size_kb": os.path.getsize(cache_file) / 1024
+                }
+                total_entries += len(cache_data)
+            else:
+                cache_status[cache_file] = {
+                    "description": description,
+                    "entries": 0,
+                    "size_kb": 0,
+                    "status": "not_found"
+                }
+        
+        return {
+            "success": True,
+            "cache_status": cache_status,
+            "total_entries": total_entries,
+            "message": f"Найдено {total_entries} записей в кэше"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения статуса кэша: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 # Debug endpoint для тестирования
 @app.post("/api/debug/upload-test")

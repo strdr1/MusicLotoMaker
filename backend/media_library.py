@@ -1,9 +1,13 @@
-﻿# backend/media_library.py
-import os
+﻿import os
 import json
 import datetime
 from backend.audio_editor import audio_editor
-from image_search import image_searcher
+from backend.image_search import image_searcher  # ✅ Используем fetch_artist_png
+from backend.processors.metadata_processor import create_metadata_processor
+
+# создаем глобальный процессор
+metadata_processor = create_metadata_processor()
+
 
 class MediaLibrary:
     def __init__(self):
@@ -13,14 +17,20 @@ class MediaLibrary:
         self.load_from_file()
     
     def add_track(self, file_path, original_filename):
-        """Добавить трек в медиатеку"""
+        """Добавление трека с автоматическим анализом имени файла"""
         name_without_ext = os.path.splitext(original_filename)[0]
-        
         duration = audio_editor.get_audio_duration(file_path)
         suggested_start = audio_editor.suggest_best_segment(file_path)
-        
-        # Улучшенный парсинг: поддержка " – ", " - ", "_"
-        artist, title = self._parse_filename(name_without_ext)
+
+        # 🧠 Используем metadata_processor для канонизации артиста и названия
+        try:
+            parsed = metadata_processor.process(original_filename)
+            artist = parsed.get("artist", "").strip()
+            title = parsed.get("title", "").strip()
+            print(f"[Metadata] Parsed artist='{artist}', title='{title}'")
+        except Exception as e:
+            print(f"[Metadata] Ошибка обработки метаданных: {e}")
+            artist, title = self._parse_filename(name_without_ext)
         
         track = {
             'id': self.current_id,
@@ -30,7 +40,7 @@ class MediaLibrary:
             'title': title,
             'cover_path': None,
             'image_path': None,
-            'clip_path': None,  # ← путь к сохранённому отрезку
+            'clip_path': None,
             'segment_start': suggested_start,
             'segment_duration': 30,
             'duration': duration,
@@ -44,6 +54,9 @@ class MediaLibrary:
         except Exception as e:
             print(f"Ошибка генерации waveform: {e}")
             track['waveform_data'] = None
+
+        # ✅ Автоматический поиск иконки артиста
+        self._fetch_and_save_artist_image(track)
         
         self.tracks.append(track)
         self.current_id += 1
@@ -51,7 +64,6 @@ class MediaLibrary:
         return track
 
     def _parse_filename(self, name):
-        """Парсит имя файла на artist и title"""
         separators = [" – ", " - ", " _ ", " –", " -"]
         for sep in separators:
             if sep in name:
@@ -60,7 +72,6 @@ class MediaLibrary:
         return name, "Без названия"
 
     def update_track_segment(self, track_id, start_time, duration=30):
-        """Обновить отрезок трека"""
         for track in self.tracks:
             if track['id'] == track_id:
                 track['segment_start'] = start_time
@@ -72,34 +83,48 @@ class MediaLibrary:
         return False
 
     def _fetch_and_save_artist_image(self, track):
-        """Поиск и сохранение фото исполнителя"""
+        """Автоматический поиск и обработка фото исполнителя"""
         try:
             artist = track['artist']
+            if not artist:
+                return
             print(f"[MediaLibrary] Поиск фото для: {artist}")
-            image_url = search_artist_image(artist)
-            if image_url:
-                safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in artist)
-                image_path = os.path.join("images", f"{safe_name}.jpg")
-                if download_image(image_url, image_path):
-                    track['image_path'] = image_path
-                    print(f"[MediaLibrary] Фото сохранено: {image_path}")
-                else:
-                    print(f"[MediaLibrary] Не удалось скачать фото для {artist}")
+            image_path = image_searcher.fetch_artist_png(artist, track['id'])
+            if image_path:
+                track['image_path'] = image_path
+                print(f"[MediaLibrary] Фото сохранено: {image_path}")
             else:
                 print(f"[MediaLibrary] Фото не найдено для {artist}")
         except Exception as e:
             print(f"[MediaLibrary] Ошибка при поиске фото: {e}")
 
+    def refresh_all_metadata(self):
+        """🧠 Обновление артиста и названия для всех треков"""
+        updated = 0
+        for track in self.tracks:
+            filename = track.get('original_filename')
+            if not filename:
+                continue
+            try:
+                parsed = metadata_processor.process(filename)
+                artist = parsed.get("artist", "").strip()
+                title = parsed.get("title", "").strip()
+                if artist:
+                    track["artist"] = artist
+                if title:
+                    track["title"] = title
+                updated += 1
+                print(f"[Metadata] Обновлено: {filename} → {artist} - {title}")
+            except Exception as e:
+                print(f"[Metadata] Ошибка обновления {filename}: {e}")
+        self.save_to_file()
+        return updated
+
     def save_project(self):
-        """
-        Сохраняет проект: для всех треков — отрезки + фото.
-        Вызывается при нажатии «Сохранить проект».
-        """
         os.makedirs("output", exist_ok=True)
         os.makedirs("images", exist_ok=True)
         
         for track in self.tracks:
-            # 1. Сохраняем аудио-отрезок
             clip_path = audio_editor.save_clip_permanently(
                 track['file_path'],
                 track['segment_start'],
@@ -108,7 +133,6 @@ class MediaLibrary:
             if clip_path:
                 track['clip_path'] = clip_path
             
-            # 2. Ищем фото (если ещё нет)
             if not track.get('image_path') and track.get('artist'):
                 self._fetch_and_save_artist_image(track)
         

@@ -4,7 +4,10 @@ python-pptx==0.6.21
 reportlab==4.0.4
 pydub==0.25.1
 pillow==10.0.1
-aiofiles==23.2.1pip install ffmpeg-python
+aiofiles==23.2.1
+ffmpeg-python
 flask
 requests
 python-dotenv
+transliterate
+langdetect

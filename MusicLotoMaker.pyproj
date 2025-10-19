@@ -34,6 +34,7 @@
     <Compile Include="main.py" />
     <Compile Include="app.py" />
     <Compile Include="test_audio.py" />
+    <Compile Include="test_metadata.py" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="backend\" />
