@@ -126,6 +126,32 @@
         </div>
     </div>
 
+    <!-- Модальное окно добавления фото артиста -->
+    <div id="photoModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📷 Добавить фото артиста</h3>
+                <span class="close" onclick="closePhotoModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p><strong>Артист:</strong> <span id="photoArtistName">-</span></p>
+                <div class="photo-options">
+                    <button class="btn btn-primary btn-large" onclick="searchArtistPhoto()" style="width: 100%; margin-bottom: 10px;">
+                        🔍 Найти в интернете
+                    </button>
+                    <button class="btn btn-secondary btn-large" onclick="uploadArtistPhoto()" style="width: 100%;">
+                        📁 Загрузить своё фото
+                    </button>
+                </div>
+                <div id="photoPreview" style="margin-top: 20px; text-align: center; display: none;">
+                    <img id="photoPreviewImage" src="" alt="Предпросмотр" style="max-width: 200px; max-height: 200px; border-radius: 8px;">
+                    <p style="margin-top: 10px; color: var(--text-muted);">Предпросмотр</p>
+                </div>
+                <div id="photoStatus" class="status" style="margin-top: 15px; display: none;"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Аудио редактор -->
     <div id="audioEditorModal" class="modal">
         <div class="modal-content">
@@ -254,88 +280,5 @@
     </div>
 
     <script src="static/js/app.js"></script>
-
-    <script>
-        // Горячие клавиши для аудио редактора
-        document.addEventListener('keydown', function (e) {
-            const audioEditor = document.getElementById('audioEditorModal');
-            if (audioEditor.style.display !== 'block') return;
-
-            switch (e.key) {
-                case ' ':
-                    e.preventDefault();
-                    togglePlayback();
-                    break;
-                case 'ArrowRight':
-                    e.preventDefault();
-                    moveSegment(5);
-                    break;
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    moveSegment(-5);
-                    break;
-                case 'Escape':
-                    e.preventDefault();
-                    stopPlayback();
-                    break;
-            }
-        });
-
-        // Автоматическое обновление статуса системы каждые 30 секунд
-        setInterval(() => {
-            if (document.getElementById('status').classList.contains('active')) {
-                loadSystemStatus();
-            }
-        }, 30000);
-
-        // Обработчик изменения файлов для загрузки
-        document.getElementById('fileInput').addEventListener('change', function (e) {
-            const files = e.target.files;
-            if (files.length > 0) {
-                handleFileUpload(e);
-            }
-        });
-
-        // Инициализация при загрузке страницы
-        document.addEventListener('DOMContentLoaded', function () {
-            console.log('🎵 Music Loto Maker инициализирован');
-
-            // Показываем уведомление о загрузке
-            showNotification('Приложение загружено!', 'success');
-
-            // Загружаем начальные данные
-            loadTracks();
-            updateTracksCount();
-            loadSystemStatus();
-        });
-
-        // Функция для показа подсказок при наведении
-        function initTooltips() {
-            const buttons = document.querySelectorAll('.btn[title]');
-            buttons.forEach(btn => {
-                btn.addEventListener('mouseenter', function (e) {
-                    // Уже реализовано в CSS
-                });
-            });
-        }
-
-        // Функция для проверки соединения с сервером
-        async function checkServerConnection() {
-            try {
-                const response = await fetch(`${API_BASE}/status`);
-                return response.ok;
-            } catch (error) {
-                return false;
-            }
-        }
-
-        // Периодическая проверка соединения
-        setInterval(async () => {
-            const isConnected = await checkServerConnection();
-            if (!isConnected) {
-                showNotification('Потеряно соединение с сервером', 'error');
-            }
-        }, 60000); // Проверка каждую минуту
-    </script>
 </body>
 </html>

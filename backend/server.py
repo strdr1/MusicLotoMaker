@@ -11,6 +11,9 @@ import logging
 from datetime import datetime
 import json
 import glob
+import requests
+from PIL import Image
+import io
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -77,6 +80,7 @@ except ImportError as e:
                     'metadata': {},
                     'segment_start': 0,
                     'segment_duration': 30,
+                    'image_path': None,  # Фото НЕ загружается автоматически
                     'created_at': datetime.now().isoformat()
                 }
                 self.tracks.append(track)
@@ -176,6 +180,30 @@ except ImportError as e:
     
     audio_editor = AudioEditor()
 
+# Импорт image_searcher для поиска фото
+try:
+    from image_search import image_searcher
+    logger.info("✅ Image searcher imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ Image searcher import error: {e}")
+    class SimpleImageSearcher:
+        def fetch_artist_png(self, artist_name, track_id):
+            logger.info(f"🎭 Поиск фото для: {artist_name}")
+            # Заглушка - возвращаем None, чтобы фронтенд мог обработать
+            return None
+        
+        def fetch_multiple_artist_photos(self, artist_name, count=10):
+            logger.info(f"🎭 Поиск {count} фото для: {artist_name}")
+            # Заглушка - возвращаем тестовые URL
+            test_urls = [
+                "https://via.placeholder.com/400x400/667eea/white?text=Artist+1",
+                "https://via.placeholder.com/400x400/764ba2/white?text=Artist+2", 
+                "https://via.placeholder.com/400x400/f093fb/white?text=Artist+3"
+            ]
+            return test_urls[:count]
+    
+    image_searcher = SimpleImageSearcher()
+
 # Инициализация приложения
 app = FastAPI(title="Music Loto Maker", version="3.0.0")
 
@@ -255,7 +283,7 @@ async def get_tracks_count():
 
 @app.post("/api/tracks/upload")
 async def upload_tracks(files: list[UploadFile] = File(...)):
-    """Загрузить аудиофайлы"""
+    """Загрузить аудиофайлы БЕЗ автоматического поиска фото"""
     saved_tracks = []
     errors = []
     
@@ -322,6 +350,7 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                 saved_tracks.append(track)
                 
                 logger.info(f"🎵 Трек добавлен в медиатеку: {track['id']} - {track['artist']} - {track['title']}")
+                logger.info(f"📷 Фото НЕ загружается автоматически - пользователь добавит вручную")
             else:
                 error_msg = f"Не удалось добавить трек в медиатеку: {file.filename}"
                 errors.append(error_msg)
@@ -377,309 +406,486 @@ async def clear_tracks():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка очистки: {str(e)}")
 
-# API для обновления метаданных
-@app.post("/api/tracks/{track_id}/refresh-metadata")
-async def refresh_track_metadata(track_id: int):
-    """Обновление метаданных трека через Hugging Face"""
-    track = media_library.get_track(track_id)
-    if not track:
-        raise HTTPException(status_code=404, detail="Трек не найден")
-    
-    try:
-        # Получаем свежие метаданные через процессор
-        logger.info(f"🔍 Обновление метаданных для трека {track_id}: {track['original_filename']}")
-        new_metadata = metadata_processor.process(track['original_filename'])
-        logger.info(f"✅ Новые метаданные: {new_metadata}")
-        
-        # Обновляем трек
-        updated_fields = {
-            'artist': new_metadata.get('artist', track.get('artist', '')),
-            'title': new_metadata.get('title', track.get('title', '')),
-            'metadata': new_metadata
-        }
-        
-        success = media_library.update_track(track_id, updated_fields)
-        if success:
-            updated_track = media_library.get_track(track_id)
-            return {
-                "success": True,
-                "message": "Метаданные обновлены",
-                "track": updated_track
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Ошибка обновления в медиатеке")
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка обновления метаданных: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка обработки: {str(e)}")
+# =========================
+# ARTIST PHOTO API ENDPOINTS
+# =========================
 
-@app.post("/api/tracks/batch-refresh-metadata")
-async def batch_refresh_metadata():
-    """Массовое обновление метаданных всех треков"""
-    tracks = media_library.get_tracks()
-    updated = 0
-    errors = []
-    
-    for track in tracks:
-        try:
-            new_metadata = metadata_processor.process(track['original_filename'])
-            
-            updated_fields = {
-                'artist': new_metadata.get('artist', track.get('artist', '')),
-                'title': new_metadata.get('title', track.get('title', '')),
-                'metadata': new_metadata
-            }
-            
-            media_library.update_track(track['id'], updated_fields)
-            updated += 1
-            logger.info(f"✅ Обновлен трек {track['id']}: {updated_fields['artist']} - {updated_fields['title']}")
-            
-        except Exception as e:
-            error_msg = f"Трек {track['id']} ({track['original_filename']}): {str(e)}"
-            errors.append(error_msg)
-            logger.error(f"❌ {error_msg}")
-    
-    return {
-        "success": True,
-        "message": f"Обновлено {updated} из {len(tracks)} треков",
-        "updated": updated,
-        "errors": errors
-    }
-
-# API для полной обработки треков (JSON + фото)
-@app.post("/api/tracks/{track_id}/process-complete")
-async def process_track_complete(track_id: int):
-    """Полная обработка трека: JSON + фото"""
+@app.post("/api/tracks/{track_id}/search-artist-photo")
+async def search_artist_photo(track_id: int, request_data: dict):
+    """Поиск нескольких фото артиста в интернете"""
     try:
         track = media_library.get_track(track_id)
         if not track:
             raise HTTPException(status_code=404, detail="Трек не найден")
         
-        # Создаем отрывок
-        clip_path = audio_editor.extract_segment(
+        artist_name = request_data.get('artist', track.get('artist', ''))
+        get_multiple = request_data.get('get_multiple', True)  # По умолчанию ищем несколько
+        
+        if not artist_name:
+            raise HTTPException(status_code=400, detail="Имя артиста не указано")
+        
+        logger.info(f"🔍 Поиск фото для артиста: {artist_name} (multiple: {get_multiple})")
+        
+        # Используем image_searcher для поиска нескольких фото
+        if get_multiple:
+            photo_urls = image_searcher.fetch_multiple_artist_photos(artist_name, count=10)
+        else:
+            # Для обратной совместимости
+            single_photo_path = image_searcher.fetch_artist_png(artist_name, track_id)
+            photo_urls = [single_photo_path] if single_photo_path else []
+        
+        if photo_urls and len(photo_urls) > 0:
+            logger.info(f"✅ Найдено {len(photo_urls)} фото для: {artist_name}")
+            
+            return {
+                "success": True,
+                "message": f"Найдено {len(photo_urls)} фото",
+                "photos": photo_urls,
+                "artist": artist_name,
+                "count": len(photo_urls)
+            }
+        else:
+            logger.warning(f"❌ Фото для артиста не найдено: {artist_name}")
+            return {
+                "success": False,
+                "message": "Не удалось найти фото артиста"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка поиска фото: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка поиска фото: {str(e)}")
+
+@app.post("/api/tracks/{track_id}/save-artist-photo")
+async def save_artist_photo(track_id: int, request_data: dict):
+    """Сохранение выбранного фото артиста из URL"""
+    try:
+        track = media_library.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Трек не найден")
+        
+        photo_url = request_data.get('photo_url')
+        artist_name = request_data.get('artist', track.get('artist', ''))
+        
+        if not photo_url:
+            raise HTTPException(status_code=400, detail="URL фото не указан")
+        
+        logger.info(f"💾 Сохранение фото для артиста: {artist_name}")
+        logger.info(f"📥 URL фото: {photo_url}")
+        
+        # Скачиваем и сохраняем фото
+        image_path = await download_and_save_photo(photo_url, track_id, artist_name)
+        
+        if image_path and os.path.exists(image_path):
+            # Обновляем трек с путем к фото
+            update_data = {
+                'image_path': image_path,
+                'artist': artist_name
+            }
+            media_library.update_track(track_id, update_data)
+            
+            logger.info(f"✅ Фото сохранено: {image_path}")
+            
+            return {
+                "success": True,
+                "message": "Фото артиста сохранено",
+                "image_path": image_path,
+                "artist": artist_name
+            }
+        else:
+            logger.error("❌ Не удалось сохранить фото")
+            raise HTTPException(status_code=500, detail="Не удалось сохранить фото")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения фото: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка сохранения фото: {str(e)}")
+
+@app.post("/api/tracks/{track_id}/upload-artist-photo")
+async def upload_artist_photo(track_id: int, photo: UploadFile = File(...)):
+    """Загрузить фото артиста с компьютера"""
+    try:
+        track = media_library.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Трек не найден")
+        
+        # Проверяем тип файла
+        if not photo.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="Файл должен быть изображением")
+        
+        logger.info(f"📤 Загрузка фото для трека {track_id}")
+        
+        # Создаем папку для фото если не существует
+        images_dir = os.path.join(BASE_DIR, "images")
+        os.makedirs(images_dir, exist_ok=True)
+        
+        # Создаем уникальное имя файла
+        file_extension = Path(photo.filename).suffix.lower()
+        image_filename = f"{track_id}_artist.png"
+        image_path = os.path.join(images_dir, image_filename)
+        
+        # Сохраняем файл
+        with open(image_path, "wb") as buffer:
+            content = await photo.read()
+            buffer.write(content)
+        
+        # Обрабатываем изображение - конвертируем в PNG и удаляем фон
+        processed_image_path = await process_uploaded_image(image_path, track_id)
+        
+        if processed_image_path and os.path.exists(processed_image_path):
+            # Обновляем трек с путем к фото
+            update_data = {'image_path': processed_image_path}
+            media_library.update_track(track_id, update_data)
+            
+            logger.info(f"✅ Фото загружено и обработано: {processed_image_path}")
+            
+            return {
+                "success": True,
+                "message": "Фото артиста загружено",
+                "image_path": processed_image_path
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Не удалось обработать фото")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки фото: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка загрузки фото: {str(e)}")
+
+@app.delete("/api/tracks/{track_id}/artist-photo")
+async def delete_artist_photo(track_id: int):
+    """Удалить фото артиста"""
+    try:
+        track = media_library.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Трек не найден")
+        
+        image_path = track.get('image_path')
+        if image_path and os.path.exists(image_path):
+            # Удаляем файл фото
+            os.remove(image_path)
+            logger.info(f"🗑️ Удалено фото: {image_path}")
+        
+        # Обновляем трек - убираем путь к фото
+        update_data = {'image_path': None}
+        media_library.update_track(track_id, update_data)
+        
+        return {
+            "success": True,
+            "message": "Фото артиста удалено"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления фото: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка удаления фото: {str(e)}")
+
+@app.get("/api/tracks/{track_id}/artist-photo")
+async def get_artist_photo(track_id: int):
+    """Получить фото артиста"""
+    try:
+        track = media_library.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Трек не найден")
+        
+        image_path = track.get('image_path')
+        if image_path and os.path.exists(image_path):
+            return FileResponse(
+                image_path,
+                filename=f"artist_{track['artist']}.png",
+                media_type='image/png'
+            )
+        else:
+            # Возвращаем placeholder если фото нет
+            placeholder_path = await create_placeholder_image(track['artist'], track_id)
+            if placeholder_path and os.path.exists(placeholder_path):
+                return FileResponse(
+                    placeholder_path,
+                    filename=f"artist_{track['artist']}_placeholder.png",
+                    media_type='image/png'
+                )
+            else:
+                raise HTTPException(status_code=404, detail="Фото артиста не найдено")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения фото: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка получения фото: {str(e)}")
+
+# =========================
+# SEGMENT MANAGEMENT API ENDPOINTS
+# =========================
+
+@app.put("/api/tracks/{track_id}/segment")
+async def update_track_segment(track_id: int, segment_data: dict):
+    """Обновить отрезок трека И создать файл"""
+    try:
+        start_time = segment_data.get('start_time', 0)
+        duration = segment_data.get('duration', 30)
+        
+        logger.info(f"🔄 Обновление отрезка трека {track_id}: {start_time}с, {duration}с")
+        
+        # Сначала обновляем данные в медиатеке
+        success = media_library.update_track_segment(track_id, start_time, duration)
+        if not success:
+            raise HTTPException(status_code=404, detail="Track not found")
+        
+        # Затем создаем файл отрезка
+        track = media_library.get_track(track_id)
+        segment_filename = f"segment_{track_id}_{int(start_time)}s_{duration}s.mp3"
+        segment_path = os.path.join(BASE_DIR, "clips", segment_filename)
+        
+        # Создаем папку clips если не существует
+        os.makedirs(os.path.dirname(segment_path), exist_ok=True)
+        
+        # Создаем отрезок через audio_editor
+        final_path = audio_editor.extract_segment(
             track['file_path'],
-            track.get('segment_start', 0),
-            track.get('segment_duration', 30),
-            os.path.join(BASE_DIR, "clips", f"clip_{track_id}.mp3")
+            start_time,
+            duration,
+            segment_path
         )
         
-        # Полная обработка трека
-        complete_track = audio_editor.process_track_complete(track, clip_path)
-        
-        # Обновляем в медиатеке
-        media_library.update_track(track_id, complete_track)
-        
-        return {
-            "success": True,
-            "message": "Трек полностью обработан",
-            "track": complete_track
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка полной обработки трека: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/tracks-data")
-async def get_all_tracks_data():
-    """Получить все обработанные данные треков"""
-    try:
-        tracks_data = audio_editor.get_all_tracks_data()
-        return {
-            "success": True,
-            "tracks": tracks_data,
-            "count": len(tracks_data)
-        }
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения данных треков: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/save-project")
-async def save_project():
-    """Сохранить проект (все треки в JSON)"""
-    try:
-        tracks = media_library.get_tracks()
-        saved_count = 0
-        
-        for track in tracks:
-            # Создаем отрывок для каждого трека
-            clip_path = audio_editor.extract_segment(
-                track['file_path'],
-                track.get('segment_start', 0),
-                track.get('segment_duration', 30),
-                os.path.join(BASE_DIR, "clips", f"clip_{track['id']}.mp3")
-            )
+        if final_path and os.path.exists(final_path):
+            # Обновляем путь к отрезку в треке
+            media_library.update_track(track_id, {'clip_path': final_path})
+            logger.info(f"✅ Отрезок создан и сохранен: {final_path}")
             
-            # Полная обработка трека
-            complete_track = audio_editor.process_track_complete(track, clip_path)
-            saved_count += 1
-        
-        return {
-            "success": True,
-            "message": f"Проект сохранен. Обработано треков: {saved_count}",
-            "saved_tracks": saved_count
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения проекта: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# API для генерации Musical Loto
-@app.post("/api/generate/musical-loto")
-async def generate_musical_loto():
-    """Генерация современного Musical Loto"""
-    try:
-        tracks = media_library.get_tracks()
-        tracks_count = len(tracks)
-        
-        if tracks_count < 40:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Для Musical Loto нужно минимум 40 треков. Сейчас: {tracks_count}"
-            )
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = os.path.join(BASE_DIR, "output", f"musical_loto_{timestamp}.pptx")
-        
-        result = modern_presentation_gen.generate_musical_loto_presentation(tracks, output_path)
-        
-        if result and os.path.exists(output_path):
             return {
-                "success": True,
-                "message": "🎲 Musical Loto создан!",
-                "file_path": output_path,
-                "file_name": os.path.basename(output_path),
-                "tracks_used": tracks_count,
-                "rounds": "3 раунда",
-                "tracks_per_round": min(40, tracks_count),
-                "style": "современный игровой дизайн",
-                "features": [
-                    "Титульный слайд с игровым дизайном",
-                    "Правила игры",
-                    "3 раунда по 40 треков", 
-                    "Слайды с исполнителями",
-                    "Интерактивные кнопки для прослушивания",
-                    "Финальный слайд"
-                ]
+                "message": "Segment updated and file created",
+                "clip_path": final_path,
+                "segment_start": start_time,
+                "segment_duration": duration
             }
         else:
-            raise HTTPException(status_code=500, detail="Не удалось создать презентацию")
-        
+            logger.error("❌ Не удалось создать файл отрезка")
+            return {
+                "message": "Segment updated but file creation failed",
+                "segment_start": start_time,
+                "segment_duration": duration
+            }
+            
     except Exception as e:
-        logger.error(f"❌ Ошибка генерации Musical Loto: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Ошибка обновления отрезка: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка обновления отрезка: {str(e)}")
 
-@app.post("/api/generate/musical-loto-custom")
-async def generate_musical_loto_custom(
-    rounds: int = Form(3),
-    tracks_per_round: int = Form(40),
-    include_rules: bool = Form(True),
-    style: str = Form("modern")
-):
-    """Генерация Musical Loto с кастомными настройками"""
+@app.post("/api/tracks/{track_id}/generate-segment-file")
+async def generate_segment_file(track_id: int, segment_data: dict):
+    """Создать файл 30-секундного отрезка"""
     try:
-        tracks = media_library.get_tracks()
-        total_tracks_needed = rounds * tracks_per_round
+        track = media_library.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Track not found")
         
-        if len(tracks) < tracks_per_round:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Нужно минимум {tracks_per_round} треков. Сейчас: {len(tracks)}"
-            )
+        start_time = segment_data.get('start_time', 0)
+        duration = segment_data.get('duration', 30)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = os.path.join(BASE_DIR, "output", f"musical_loto_custom_{timestamp}.pptx")
+        logger.info(f"🎵 Создание отрезка: трек {track_id}, начало {start_time}с, длительность {duration}с")
         
-        # Сохраняем настройки
-        config = {
-            "rounds": rounds,
-            "tracks_per_round": tracks_per_round,
-            "include_rules": include_rules,
-            "style": style,
-            "generated_at": datetime.now().isoformat()
-        }
+        # Создаем отрезок
+        segment_filename = f"segment_{track_id}_{int(start_time)}s_{duration}s.mp3"
+        segment_path = os.path.join(BASE_DIR, "clips", segment_filename)
         
-        config_path = os.path.join(BASE_DIR, "config", f"loto_config_{timestamp}.json")
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
+        # Создаем папку clips если не существует
+        os.makedirs(os.path.dirname(segment_path), exist_ok=True)
         
-        # Здесь будет вызов кастомного генератора
-        result = modern_presentation_gen.generate_musical_loto_presentation(tracks, output_path)
+        # Используем audio_editor для создания отрезка
+        segment_path = audio_editor.extract_segment(
+            track['file_path'],
+            start_time,
+            duration,
+            segment_path
+        )
         
-        if result and os.path.exists(output_path):
+        if segment_path and os.path.exists(segment_path):
+            # Обновляем track_data с путем к отрезку
+            update_data = {
+                'clip_path': segment_path,
+                'segment_start': start_time,
+                'segment_duration': duration
+            }
+            media_library.update_track(track_id, update_data)
+            
+            logger.info(f"✅ Отрезок создан: {segment_path}")
+            
             return {
                 "success": True,
-                "message": "🎲 Custom Musical Loto создан!",
-                "file_path": output_path,
-                "config": config,
-                "tracks_used": len(tracks),
-                "total_tracks_available": len(tracks)
+                "message": "Отрезок создан",
+                "clip_path": segment_path,
+                "segment_start": start_time,
+                "segment_duration": duration
             }
         else:
-            raise HTTPException(status_code=500, detail="Не удалось создать презентацию")
-        
+            raise HTTPException(status_code=500, detail="Failed to create segment file")
+            
     except Exception as e:
-        logger.error(f"❌ Ошибка генерации кастомного Musical Loto: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Ошибка создания отрезка: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка создания отрезка: {str(e)}")
 
-# API для современной генерации презентаций
-@app.post("/api/generate/modern-presentation")
-async def generate_modern_presentation(format: str = "pptx"):
-    """Сгенерировать современную презентацию"""
+# =========================
+# PHOTO PROCESSING FUNCTIONS
+# =========================
+
+async def download_and_save_photo(photo_url: str, track_id: int, artist_name: str):
+    """Скачать и сохранить фото из URL"""
     try:
-        tracks = media_library.get_tracks()
-        if not tracks:
-            raise HTTPException(status_code=400, detail="Добавьте треки в медиатеку")
+        images_dir = os.path.join(BASE_DIR, "images")
+        os.makedirs(images_dir, exist_ok=True)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_path = os.path.join(images_dir, f"{track_id}_artist.png")
         
-        if format == "pptx":
-            output_path = os.path.join(BASE_DIR, "output", f"modern_presentation_{timestamp}.pptx")
-            modern_presentation_gen.generate_modern_pptx(tracks, output_path)
-            file_type = "PowerPoint презентация"
-        elif format == "pdf":
-            output_path = os.path.join(BASE_DIR, "output", f"modern_presentation_{timestamp}.pdf")
-            modern_presentation_gen.generate_modern_pdf(tracks, output_path)
-            file_type = "PDF документ"
+        logger.info(f"📥 Скачиваем фото: {photo_url}")
+        
+        # Скачиваем фото
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+        }
+        
+        response = requests.get(photo_url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            raise Exception(f"HTTP error: {response.status_code}")
+        
+        # Сохраняем временный файл
+        temp_path = image_path.replace('.png', '_temp.jpg')
+        with open(temp_path, 'wb') as f:
+            f.write(response.content)
+        
+        # Обрабатываем изображение
+        success = await process_downloaded_image(temp_path, image_path)
+        
+        # Удаляем временный файл
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        
+        if success:
+            logger.info(f"✅ Фото успешно обработано: {image_path}")
+            return image_path
         else:
-            raise HTTPException(status_code=400, detail="Неподдерживаемый формат")
-        
-        filename = os.path.basename(output_path)
-        
-        return {
-            "success": True,
-            "message": f"Современная {file_type} создана",
-            "file_path": output_path,
-            "file_name": filename,
-            "tracks_count": len(tracks),
-            "format": format
-        }
+            logger.error("❌ Ошибка обработки фото")
+            return None
         
     except Exception as e:
-        logger.error(f"❌ Ошибка генерации современной презентации: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
+        logger.error(f"❌ Ошибка загрузки фото: {e}")
+        # Создаем placeholder при ошибке
+        return await create_placeholder_image(artist_name, track_id)
 
-@app.post("/api/generate/modern-tickets")
-async def generate_modern_tickets(count: int = 24):
-    """Сгенерировать современные билеты"""
+async def process_downloaded_image(temp_path: str, output_path: str):
+    """Обработать скачанное изображение"""
     try:
-        tracks = media_library.get_tracks()
-        if not tracks:
-            raise HTTPException(status_code=400, detail="Добавьте треки в медиатеку")
+        # Открываем изображение
+        with Image.open(temp_path) as img:
+            # Конвертируем в RGB если нужно
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            
+            # Изменяем размер если слишком большое
+            max_size = (800, 800)
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            
+            # Сохраняем как PNG
+            img.save(output_path, "PNG", optimize=True)
         
-        output_path = ticket_gen.generate_modern_tickets(tracks, count)
-        filename = os.path.basename(output_path)
+        # Пробуем удалить фон если установлен rembg
+        try:
+            from rembg import remove
+            with open(output_path, 'rb') as i:
+                input_data = i.read()
+            output_data = remove(input_data)
+            with open(output_path, 'wb') as o:
+                o.write(output_data)
+            logger.info("🎨 Фон удален")
+        except ImportError:
+            logger.warning("⚠️ rembg не установлен, фон не удален")
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка удаления фона: {e}")
         
-        return {
-            "success": True,
-            "message": f"Создано {count} современных билетов",
-            "file_path": output_path,
-            "file_name": filename,
-            "tickets_count": count
-        }
+        return True
         
     except Exception as e:
-        logger.error(f"❌ Ошибка генерации билетов: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
+        logger.error(f"❌ Ошибка обработки изображения: {e}")
+        return False
+
+async def process_uploaded_image(image_path: str, track_id: int):
+    """Обработать загруженное пользователем изображение"""
+    try:
+        # Создаем новый путь для обработанного изображения
+        processed_path = image_path
+        
+        # Обрабатываем изображение
+        with Image.open(image_path) as img:
+            # Конвертируем в RGB если нужно
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            
+            # Изменяем размер если слишком большое
+            max_size = (800, 800)
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+            
+            # Сохраняем как PNG
+            img.save(processed_path, "PNG", optimize=True)
+        
+        # Пробуем удалить фон
+        try:
+            from rembg import remove
+            with open(processed_path, 'rb') as i:
+                input_data = i.read()
+            output_data = remove(input_data)
+            with open(processed_path, 'wb') as o:
+                o.write(output_data)
+            logger.info("🎨 Фон удален")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось удалить фон: {e}")
+        
+        return processed_path
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки загруженного изображения: {e}")
+        return None
+
+async def create_placeholder_image(artist_name: str, track_id: int):
+    """Создать placeholder изображение"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        
+        images_dir = os.path.join(BASE_DIR, "images")
+        os.makedirs(images_dir, exist_ok=True)
+        
+        placeholder_path = os.path.join(images_dir, f"{track_id}_artist_placeholder.png")
+        
+        # Создаем изображение
+        width, height = 400, 400
+        image = Image.new('RGB', (width, height), color=(74, 107, 156))
+        draw = ImageDraw.Draw(image)
+        
+        # Пробуем найти шрифт
+        try:
+            font = ImageFont.truetype("arial.ttf", 24)
+        except:
+            try:
+                font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 24)
+            except:
+                font = ImageFont.load_default()
+        
+        # Обрезаем длинное имя
+        text = artist_name
+        if len(text) > 20:
+            text = text[:17] + "..."
+        
+        # Рисуем текст
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        x = (width - text_width) / 2
+        y = (height - text_height) / 2
+        
+        draw.text((x, y), text, fill=(255, 255, 255), font=font)
+        
+        # Сохраняем
+        image.save(placeholder_path, "PNG")
+        
+        logger.info(f"🖼️ Создан placeholder: {placeholder_path}")
+        return placeholder_path
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка создания placeholder: {e}")
+        return None
 
 # Legacy API для обратной совместимости
 @app.post("/api/generate/presentation")
@@ -702,6 +908,7 @@ async def download_file(filename: str):
             os.path.join(BASE_DIR, "temp", filename),
             os.path.join(BASE_DIR, "clips", filename),
             os.path.join(BASE_DIR, "uploads", filename),
+            os.path.join(BASE_DIR, "images", filename),  # Добавили папку images
             os.path.join(BASE_DIR, filename)
         ]
         
@@ -729,10 +936,14 @@ async def get_status():
         tracks = media_library.get_tracks()
         tracks_count = len(tracks)
         
+        # Считаем треки с фото
+        tracks_with_photos = len([t for t in tracks if t.get('image_path') and os.path.exists(t.get('image_path'))])
+        
         status_info = {
             "status": "running",
             "version": "3.0.0",
             "tracks_count": tracks_count,
+            "tracks_with_photos": tracks_with_photos,
             "musical_loto_ready": tracks_count >= 40,
             "metadata_processor": type(metadata_processor).__name__,
             "features": [
@@ -742,7 +953,7 @@ async def get_status():
                 "audio_editing",
                 "ticket_generation",
                 "json_export",
-                "artist_images"
+                "artist_images_manual"  # Теперь фото добавляются вручную
             ]
         }
         
@@ -815,21 +1026,6 @@ async def stop_playback():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка остановки: {str(e)}")
 
-@app.put("/api/tracks/{track_id}/segment")
-async def update_track_segment(track_id: int, segment_data: dict):
-    """Обновить отрезок трека"""
-    try:
-        start_time = segment_data.get('start_time', 0)
-        duration = segment_data.get('duration', 30)
-        
-        success = media_library.update_track_segment(track_id, start_time, duration)
-        if success:
-            return {"message": "Segment updated"}
-        else:
-            raise HTTPException(status_code=404, detail="Track not found")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка обновления отрезка: {str(e)}")
-
 @app.get("/api/tracks/{track_id}/suggest-segment")
 async def suggest_best_segment(track_id: int):
     """Умная рекомендация лучшего отрезка с деталями анализа"""
@@ -893,246 +1089,28 @@ async def get_track_segment_file(track_id: int, start_time: float = 0, duration:
         logger.error(f"❌ Ошибка создания отрезка: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Debug endpoints для очистки кэша
-@app.post("/api/debug/clear-cache")
-async def clear_metadata_cache():
-    """Очистить кэш метаданных"""
-    try:
-        cache_files = [
-            "ai_music_cache.json",
-            "artist_cache.json", 
-            os.path.join(BASE_DIR, "ai_music_cache.json"),
-            os.path.join(BASE_DIR, "artist_cache.json")
-        ]
-        
-        cleared_files = []
-        for cache_file in cache_files:
-            if os.path.exists(cache_file):
-                os.remove(cache_file)
-                cleared_files.append(cache_file)
-                logger.info(f"🧹 Удален кэш файл: {cache_file}")
-        
-        # Также ищем любые другие cache файлы
-        cache_patterns = ["*cache*.json", "*_cache.json"]
-        for pattern in cache_patterns:
-            for cache_file in glob.glob(pattern):
-                if os.path.exists(cache_file):
-                    os.remove(cache_file)
-                    cleared_files.append(cache_file)
-                    logger.info(f"🧹 Удален кэш файл: {cache_file}")
-        
-        # Пересоздаем процессор чтобы сбросить внутренний кэш
-        global metadata_processor
-        metadata_processor = create_metadata_processor()
-        
-        return {
-            "success": True,
-            "message": f"Кэш метаданных очищен. Удалено файлов: {len(cleared_files)}",
-            "cleared_files": cleared_files
-        }
-    except Exception as e:
-        logger.error(f"❌ Error clearing cache: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка очистки кэша: {str(e)}")
-
-@app.post("/api/debug/refresh-track/{track_id}")
-async def refresh_track_metadata_force(track_id: int):
-    """Принудительное обновление метаданных трека (игнорируя кэш)"""
-    track = media_library.get_track(track_id)
-    if not track:
-        raise HTTPException(status_code=404, detail="Трек не найден")
-    
-    try:
-        logger.info(f"🔄 Принудительное обновление метаданных для трека {track_id}")
-        
-        # Удаляем из всех возможных кэш файлов
-        cache_files = ["ai_music_cache.json", "artist_cache.json"]
-        for cache_file in cache_files:
-            if os.path.exists(cache_file):
-                try:
-                    with open(cache_file, 'r', encoding='utf-8') as f:
-                        cache = json.load(f)
-                    
-                    # Удаляем трек из кэша
-                    cache_key = track['original_filename'].lower()
-                    if cache_key in cache:
-                        del cache[cache_key]
-                        with open(cache_file, 'w', encoding='utf-8') as f:
-                            json.dump(cache, f, ensure_ascii=False, indent=2)
-                        logger.info(f"🗑️ Удален из кэша {cache_file}: {cache_key}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Ошибка очистки кэша {cache_file}: {e}")
-        
-        # Получаем свежие метаданные
-        logger.info(f"🔍 Получение новых метаданных для: {track['original_filename']}")
-        new_metadata = metadata_processor.process(track['original_filename'])
-        logger.info(f"✅ Новые метаданные: {new_metadata}")
-        
-        # Обновляем трек
-        updated_fields = {
-            'artist': new_metadata.get('artist', track.get('artist', '')),
-            'title': new_metadata.get('title', track.get('title', '')),
-            'metadata': new_metadata
-        }
-        
-        success = media_library.update_track(track_id, updated_fields)
-        if success:
-            updated_track = media_library.get_track(track_id)
-            logger.info(f"✅ Трек {track_id} обновлен: {updated_track['artist']} - {updated_track['title']}")
-            return {
-                "success": True,
-                "message": "Метаданные обновлены (кэш очищен)",
-                "track": updated_track
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Ошибка обновления в медиатеке")
-            
-    except Exception as e:
-        logger.error(f"❌ Ошибка принудительного обновления: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка обработки: {str(e)}")
-
-@app.get("/api/debug/cache-status")
-async def get_cache_status():
-    """Получить статус кэша"""
-    try:
-        cache_files = {
-            "ai_music_cache.json": "AI Music Cache",
-            "artist_cache.json": "Artist Cache"
-        }
-        
-        cache_status = {}
-        total_entries = 0
-        
-        for cache_file, description in cache_files.items():
-            if os.path.exists(cache_file):
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                cache_status[cache_file] = {
-                    "description": description,
-                    "entries": len(cache_data),
-                    "size_kb": os.path.getsize(cache_file) / 1024
-                }
-                total_entries += len(cache_data)
-            else:
-                cache_status[cache_file] = {
-                    "description": description,
-                    "entries": 0,
-                    "size_kb": 0,
-                    "status": "not_found"
-                }
-        
-        return {
-            "success": True,
-            "cache_status": cache_status,
-            "total_entries": total_entries,
-            "message": f"Найдено {total_entries} записей в кэше"
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения статуса кэша: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-# Debug endpoint для тестирования
-@app.post("/api/debug/upload-test")
-async def debug_upload_test(file: UploadFile = File(...)):
-    """Тестовый endpoint для отладки загрузки"""
-    try:
-        logger.info(f"🔍 Debug upload: {file.filename}")
-        
-        # Сохраняем файл
-        uploads_dir = os.path.join(BASE_DIR, "uploads")
-        os.makedirs(uploads_dir, exist_ok=True)
-        
-        test_path = os.path.join(uploads_dir, f"debug_{file.filename}")
-        with open(test_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-        
-        # Тестируем метадата процессор
-        metadata = metadata_processor.process(file.filename)
-        
-        return {
-            "filename": file.filename,
-            "saved_path": test_path,
-            "file_exists": os.path.exists(test_path),
-            "file_size": os.path.getsize(test_path) if os.path.exists(test_path) else 0,
-            "metadata": metadata,
-            "processor_type": type(metadata_processor).__name__
-        }
-    except Exception as e:
-        logger.error(f"❌ Debug upload error: {e}")
-        return {"error": str(e)}
-
-@app.post("/api/debug/generate-test-musical-loto")
-async def debug_generate_test_musical_loto():
-    """Тестовая генерация Musical Loto"""
-    try:
-        # Создаем тестовые треки
-        test_tracks = [
-            {
-                'id': 1,
-                'artist': 'GAYAZOV BROTHER',
-                'title': 'Пьяный туман',
-                'original_filename': 'GAYAZOV_BROTHER_-_Pyanyjj_tuman_62788609.mp3'
-            },
-            {
-                'id': 2, 
-                'artist': 'Гио Пика',
-                'title': 'Где прошла ты',
-                'original_filename': 'Kravc_Gio_Pika_-_Gde_proshla_ty_75704918.mp3'
-            },
-            {
-                'id': 3,
-                'artist': 'Тима Амеди',
-                'title': 'Я не могу',
-                'original_filename': 'Tima_Amedi_YA_Ne_Mogu.mp3'
-            }
-        ]
-        
-        # Добавляем больше тестовых треков для демонстрации
-        for i in range(4, 41):
-            test_tracks.append({
-                'id': i,
-                'artist': f'Исполнитель {i}',
-                'title': f'Песня {i}',
-                'original_filename': f'test_track_{i}.mp3'
-            })
-        
-        output_path = os.path.join(BASE_DIR, "output", f"test_musical_loto_{datetime.now().strftime('%H%M%S')}.pptx")
-        modern_presentation_gen.generate_musical_loto_presentation(test_tracks, output_path)
-        
-        return {
-            "success": True,
-            "message": "Тестовый Musical Loto создан",
-            "file_path": output_path,
-            "test_tracks_count": len(test_tracks),
-            "features": "3 раунда по 40 треков"
-        }
-    except Exception as e:
-        logger.error(f"❌ Debug Musical Loto error: {e}")
-        return {"error": str(e)}
-
 # Health check endpoint
 @app.get("/api/health")
 async def health_check():
     """Проверка здоровья приложения"""
     tracks_count = media_library.get_tracks_count()
+    tracks_with_photos = len([t for t in media_library.get_tracks() if t.get('image_path') and os.path.exists(t.get('image_path'))])
     
     return {
         "status": "healthy", 
         "service": "Music Loto Maker API v3.0",
         "timestamp": datetime.now().isoformat(),
         "tracks_loaded": tracks_count,
+        "tracks_with_photos": tracks_with_photos,
         "musical_loto_ready": tracks_count >= 40,
         "features": [
             "musical_loto", 
             "modern_presentations", 
             "smart_metadata",
             "audio_editing",
+            "ticket_generation",
             "json_export",
-            "artist_images"
+            "artist_images_manual"  # Фото добавляются вручную
         ]
     }
 
@@ -1140,12 +1118,17 @@ if __name__ == "__main__":
     import uvicorn
     logger.info("🎵 Music Loto Maker Server v3.0 Starting...")
     logger.info(f"🔧 Metadata processor: {type(metadata_processor).__name__}")
-    logger.info("🎲 New features: Musical Loto Game, JSON Export, Artist Images")
+    logger.info("📷 Artist photos: MANUAL (user adds photos manually)")
+    logger.info("🎯 New features: Multiple photo selection, Photo preview, Caching")
+    logger.info("🎵 Segment management: File creation for 30-second clips")
     logger.info("🌐 Server running on http://127.0.0.1:8000")
     logger.info("🚀 Available endpoints:")
-    logger.info("   POST /api/generate/musical-loto - Создать Musical Loto")
-    logger.info("   POST /api/tracks/{id}/process-complete - Полная обработка трека")
-    logger.info("   POST /api/save-project - Сохранить проект в JSON")
-    logger.info("   GET  /api/tracks-data - Получить все данные треков")
+    logger.info("   PUT    /api/tracks/{id}/segment - Обновить отрезок и создать файл")
+    logger.info("   POST   /api/tracks/{id}/generate-segment-file - Создать файл отрезка")
+    logger.info("   POST   /api/tracks/{id}/search-artist-photo - Найти несколько фото")
+    logger.info("   POST   /api/tracks/{id}/save-artist-photo - Сохранить выбранное фото") 
+    logger.info("   POST   /api/tracks/{id}/upload-artist-photo - Загрузить своё фото")
+    logger.info("   GET    /api/tracks/{id}/artist-photo - Получить фото артиста")
+    logger.info("   DELETE /api/tracks/{id}/artist-photo - Удалить фото")
     
     uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)

@@ -246,6 +246,34 @@ header {
         flex: 1;
     }
 
+/* Track cover styles */
+.track-cover {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    object-fit: cover;
+    margin-right: 12px;
+    border: 2px solid var(--border);
+}
+
+.track-cover-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    background: var(--bg-dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 12px;
+    border: 2px solid var(--border);
+    font-size: 16px;
+}
+
+.col-artist {
+    display: flex;
+    align-items: center;
+}
+
 /* Empty state */
 .empty-state {
     text-align: center;
@@ -446,6 +474,27 @@ header {
     .form-actions .btn {
         flex: 1;
     }
+
+/* Photo Modal Styles */
+.photo-options {
+    margin: 20px 0;
+}
+
+    .photo-options .btn {
+        margin-bottom: 10px;
+    }
+
+#photoPreview {
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    background: var(--bg-dark);
+}
+
+#photoPreviewImage {
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+}
 
 /* System Status */
 .system-status {
@@ -1233,40 +1282,4 @@ header {
 
     .tracks-list::-webkit-scrollbar-thumb:hover {
         background: var(--primary);
-    }
-.track-cover {
-    width: 40px;
-    height: 40px;
-    border-radius: 6px;
-    object-fit: cover;
-    margin-right: 12px;
-    border: 2px solid var(--border);
-}
-
-.track-cover-placeholder {
-    width: 40px;
-    height: 40px;
-    border-radius: 6px;
-    background: var(--bg-dark);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 12px;
-    border: 2px solid var(--border);
-    font-size: 16px;
-}
-
-.col-artist {
-    display: flex;
-    align-items: center;
-}
-
-.btn-warning {
-    background: var(--warning);
-    color: white;
-}
-
-    .btn-warning:hover:not(:disabled) {
-        background: #b45309;
-        transform: translateY(-2px);
     }

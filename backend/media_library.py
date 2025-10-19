@@ -2,28 +2,30 @@
 import json
 import datetime
 from backend.audio_editor import audio_editor
-from backend.image_search import image_searcher  # ✅ Используем fetch_artist_png
-from backend.processors.metadata_processor import create_metadata_processor
-
-# создаем глобальный процессор
-metadata_processor = create_metadata_processor()
-
 
 class MediaLibrary:
     def __init__(self):
         self.tracks = []
-        self.current_id = 1
         self.data_file = "track_data.json"
         self.load_from_file()
     
     def add_track(self, file_path, original_filename):
-        """Добавление трека с автоматическим анализом имени файла"""
+        """Добавление трека БЕЗ автоматического поиска фото"""
         name_without_ext = os.path.splitext(original_filename)[0]
+        
+        # Получаем следующий ID на основе существующих треков
+        if self.tracks:
+            next_id = max(track['id'] for track in self.tracks) + 1
+        else:
+            next_id = 1
+            
         duration = audio_editor.get_audio_duration(file_path)
         suggested_start = audio_editor.suggest_best_segment(file_path)
 
         # 🧠 Используем metadata_processor для канонизации артиста и названия
         try:
+            from backend.processors.metadata_processor import create_metadata_processor
+            metadata_processor = create_metadata_processor()
             parsed = metadata_processor.process(original_filename)
             artist = parsed.get("artist", "").strip()
             title = parsed.get("title", "").strip()
@@ -33,13 +35,13 @@ class MediaLibrary:
             artist, title = self._parse_filename(name_without_ext)
         
         track = {
-            'id': self.current_id,
+            'id': next_id,  # Используем вычисленный ID
             'file_path': file_path,
             'original_filename': original_filename,
             'artist': artist,
             'title': title,
             'cover_path': None,
-            'image_path': None,
+            'image_path': None,  # Фото НЕ загружается автоматически
             'clip_path': None,
             'segment_start': suggested_start,
             'segment_duration': 30,
@@ -55,12 +57,12 @@ class MediaLibrary:
             print(f"Ошибка генерации waveform: {e}")
             track['waveform_data'] = None
 
-        # ✅ Автоматический поиск иконки артиста
-        self._fetch_and_save_artist_image(track)
+        # ❌ УБРАНО: Автоматический поиск фото артиста
+        # Пользователь добавит фото вручную через интерфейс
         
         self.tracks.append(track)
-        self.current_id += 1
         self.save_to_file()
+        print(f"✅ Трек добавлен с ID: {next_id}")
         return track
 
     def _parse_filename(self, name):
@@ -76,182 +78,124 @@ class MediaLibrary:
             if track['id'] == track_id:
                 track['segment_start'] = start_time
                 track['segment_duration'] = duration
-                if not track.get('image_path') and track.get('artist'):
-                    self._fetch_and_save_artist_image(track)
                 self.save_to_file()
                 return True
         return False
 
-    def _fetch_and_save_artist_image(self, track):
-        """Автоматический поиск и обработка фото исполнителя"""
-        try:
-            artist = track['artist']
-            if not artist:
-                return
-            print(f"[MediaLibrary] Поиск фото для: {artist}")
-            image_path = image_searcher.fetch_artist_png(artist, track['id'])
-            if image_path:
-                track['image_path'] = image_path
-                print(f"[MediaLibrary] Фото сохранено: {image_path}")
-            else:
-                print(f"[MediaLibrary] Фото не найдено для {artist}")
-        except Exception as e:
-            print(f"[MediaLibrary] Ошибка при поиске фото: {e}")
-
-    def refresh_all_metadata(self):
-        """🧠 Обновление артиста и названия для всех треков"""
-        updated = 0
-        for track in self.tracks:
-            filename = track.get('original_filename')
-            if not filename:
-                continue
-            try:
-                parsed = metadata_processor.process(filename)
-                artist = parsed.get("artist", "").strip()
-                title = parsed.get("title", "").strip()
-                if artist:
-                    track["artist"] = artist
-                if title:
-                    track["title"] = title
-                updated += 1
-                print(f"[Metadata] Обновлено: {filename} → {artist} - {title}")
-            except Exception as e:
-                print(f"[Metadata] Ошибка обновления {filename}: {e}")
-        self.save_to_file()
-        return updated
-
-    def save_project(self):
-        os.makedirs("output", exist_ok=True)
-        os.makedirs("images", exist_ok=True)
-        
-        for track in self.tracks:
-            clip_path = audio_editor.save_clip_permanently(
-                track['file_path'],
-                track['segment_start'],
-                track.get('segment_duration', 30)
-            )
-            if clip_path:
-                track['clip_path'] = clip_path
-            
-            if not track.get('image_path') and track.get('artist'):
-                self._fetch_and_save_artist_image(track)
-        
-        self.save_to_file()
-        return len(self.tracks)
-
-    def play_track_segment(self, track_id):
-        track = self.get_track(track_id)
-        if track:
-            return audio_editor.play_segment(
-                track['file_path'], 
-                track['segment_start'], 
-                track['segment_duration']
-            )
-        return False
-    
-    def stop_playback(self):
-        audio_editor.stop_playback()
-    
     def get_tracks(self):
-        return self.tracks
-    
+        return sorted(self.tracks, key=lambda x: x['id'])  # Сортируем по ID для порядка
+
     def get_track(self, track_id):
         for track in self.tracks:
             if track['id'] == track_id:
                 return track
         return None
-    
+
     def update_track(self, track_id, track_data):
         for track in self.tracks:
             if track['id'] == track_id:
-                if 'artist' in track_data:
-                    track['artist'] = track_data['artist']
-                if 'title' in track_data:
-                    track['title'] = track_data['title']
-                if 'artist' in track_data and not track.get('image_path'):
-                    self._fetch_and_save_artist_image(track)
+                track.update(track_data)
                 self.save_to_file()
                 return True
         return False
-
-    def add_track_with_metadata(self, track_data):
-        try:
-            track_id = self.current_id
-            track = {
-                'id': track_id,
-                'file_path': track_data['file_path'],
-                'original_filename': track_data['original_filename'],
-                'artist': track_data.get('artist', ''),
-                'title': track_data.get('title', ''),
-                'metadata': track_data.get('metadata', {}),
-                'segment_start': 0,
-                'segment_duration': 30,
-                'image_path': None,
-                'clip_path': None,
-                'cover_path': None,
-                'created_at': datetime.datetime.now().isoformat()
-            }
-            if track['artist']:
-                self._fetch_and_save_artist_image(track)
-            self.tracks.append(track)
-            self.current_id += 1
-            self.save_to_file()
-            return track
-        except Exception as e:
-            print(f"Error adding track with metadata: {e}")
-            return None
 
     def delete_track(self, track_id):
         for i, track in enumerate(self.tracks):
             if track['id'] == track_id:
+                # Удаляем файлы трека
                 if os.path.exists(track['file_path']):
                     try:
                         os.remove(track['file_path'])
-                    except:
-                        pass
+                        print(f"🗑️ Удален аудиофайл: {track['file_path']}")
+                    except Exception as e:
+                        print(f"⚠️ Не удалось удалить аудиофайл: {e}")
+                
+                # Удаляем фото артиста если есть
                 if track.get('image_path') and os.path.exists(track['image_path']):
                     try:
                         os.remove(track['image_path'])
-                    except:
-                        pass
+                        print(f"🗑️ Удалено фото: {track['image_path']}")
+                    except Exception as e:
+                        print(f"⚠️ Не удалось удалить фото: {e}")
+                
                 self.tracks.pop(i)
                 self.save_to_file()
+                print(f"✅ Трек {track_id} удален из медиатеки")
                 return True
+        print(f"❌ Трек {track_id} не найден для удаления")
         return False
-    
+
     def clear(self):
+        """Очистить всю медиатеку"""
+        deleted_count = 0
         for track in self.tracks:
             if os.path.exists(track['file_path']):
                 try:
                     os.remove(track['file_path'])
-                except:
-                    pass
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"⚠️ Не удалось удалить аудиофайл {track['file_path']}: {e}")
+            
             if track.get('image_path') and os.path.exists(track['image_path']):
                 try:
                     os.remove(track['image_path'])
-                except:
-                    pass
+                except Exception as e:
+                    print(f"⚠️ Не удалось удалить фото {track['image_path']}: {e}")
+        
         self.tracks = []
         self.save_to_file()
-    
+        print(f"✅ Медиатека очищена. Удалено треков: {deleted_count}")
+
     def save_to_file(self):
         try:
             with open(self.data_file, 'w', encoding='utf-8') as f:
+                # Сохраняем только tracks, current_id больше не нужен
                 json.dump({
-                    'tracks': self.tracks,
-                    'current_id': self.current_id
+                    'tracks': self.tracks
                 }, f, ensure_ascii=False, indent=2)
+            print(f"💾 Медиатека сохранена. Треков: {len(self.tracks)}")
         except Exception as e:
-            print(f"Ошибка сохранения медиатеки: {e}")
-    
+            print(f"❌ Ошибка сохранения медиатеки: {e}")
+
     def load_from_file(self):
         try:
             if os.path.exists(self.data_file):
                 with open(self.data_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.tracks = data.get('tracks', [])
-                    self.current_id = data.get('current_id', 1)
+                print(f"📂 Медиатека загружена. Треков: {len(self.tracks)}")
+                
+                # Логируем ID существующих треков для отладки
+                if self.tracks:
+                    track_ids = [track['id'] for track in self.tracks]
+                    print(f"📊 ID существующих треков: {track_ids}")
         except Exception as e:
-            print(f"Ошибка загрузки медиатеки: {e}")
+            print(f"❌ Ошибка загрузки медиатеки: {e}")
             self.tracks = []
-            self.current_id = 1
+
+    def get_tracks_count(self):
+        return len(self.tracks)
+
+    def get_next_available_id(self):
+        """Получить следующий доступный ID"""
+        if not self.tracks:
+            return 1
+        
+        # Находим максимальный ID среди существующих треков
+        max_id = max(track['id'] for track in self.tracks)
+        return max_id + 1
+
+    def reorganize_ids(self):
+        """Переупорядочить ID треков (опционально)"""
+        if not self.tracks:
+            return
+        
+        # Сортируем треки по дате создания или другому критерию
+        sorted_tracks = sorted(self.tracks, key=lambda x: x.get('created_at', ''))
+        
+        # Присваиваем новые последовательные ID
+        for new_id, track in enumerate(sorted_tracks, 1):
+            track['id'] = new_id
+        
+        self.save_to_file()
+        print(f"🔄 ID треков переупорядочены. Новый диапазон: 1-{len(self.tracks)}")

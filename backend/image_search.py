@@ -6,6 +6,8 @@ from rembg import remove
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 import re
+import json
+from urllib.parse import quote, unquote
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -17,9 +19,32 @@ class SimpleArtistImageSearch:
         os.makedirs(self.images_dir, exist_ok=True)
         
         self.artist_cache = {}
+        self.photo_cache_file = os.path.join(self.base_dir, "artist_photo_cache.json")
+        self._load_photo_cache()
+
+    def _load_photo_cache(self):
+        """Загрузка кэша фото артистов"""
+        try:
+            if os.path.exists(self.photo_cache_file):
+                with open(self.photo_cache_file, 'r', encoding='utf-8') as f:
+                    self.photo_cache = json.load(f)
+                logger.info(f"📦 Загружен кэш фото: {len(self.photo_cache)} артистов")
+            else:
+                self.photo_cache = {}
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки кэша фото: {e}")
+            self.photo_cache = {}
+
+    def _save_photo_cache(self):
+        """Сохранение кэша фото артистов"""
+        try:
+            with open(self.photo_cache_file, 'w', encoding='utf-8') as f:
+                json.dump(self.photo_cache, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения кэша фото: {e}")
 
     def fetch_artist_png(self, artist_name, track_id, use_rembg=True):
-        """Упрощенный поиск фото артистов"""
+        """Упрощенный поиск фото артистов - вызывается через API"""
         
         cache_key = f"{artist_name}_{track_id}"
         if cache_key in self.artist_cache:
@@ -27,7 +52,17 @@ class SimpleArtistImageSearch:
             
         try:
             logger.info(f"🎭 Поиск фото для: {artist_name}")
-            
+
+            # Проверяем кэш по имени артиста
+            artist_cache_key = artist_name.lower().strip()
+            if artist_cache_key in self.photo_cache and self.photo_cache[artist_cache_key]:
+                cached_url = self.photo_cache[artist_cache_key][0]  # Берем первое фото из кэша
+                logger.info(f"📦 Используем кэшированное фото для: {artist_name}")
+                final_path = self._download_single_photo(cached_url, track_id, use_rembg)
+                if final_path:
+                    self.artist_cache[cache_key] = final_path
+                    return final_path
+
             # Сначала Яндекс
             image_urls = self._search_yandex_simple(artist_name)
             logger.info(f"🔍 Яндекс нашёл {len(image_urls)} URL")
@@ -46,6 +81,14 @@ class SimpleArtistImageSearch:
                 
                 if self._download_and_save_image(image_url, final_path, use_rembg):
                     logger.info(f"✅ Успешно сохранено: {final_path}")
+                    
+                    # Сохраняем URL в кэш артиста
+                    if artist_cache_key not in self.photo_cache:
+                        self.photo_cache[artist_cache_key] = []
+                    if image_url not in self.photo_cache[artist_cache_key]:
+                        self.photo_cache[artist_cache_key].insert(0, image_url)  # Добавляем в начало
+                        self._save_photo_cache()
+                    
                     self.artist_cache[cache_key] = final_path
                     return final_path
             
@@ -58,6 +101,44 @@ class SimpleArtistImageSearch:
         except Exception as e:
             logger.error(f"💥 Критическая ошибка: {e}")
             return self._create_placeholder_image(artist_name, track_id)
+
+    def fetch_multiple_artist_photos(self, artist_name, count=10):
+        """Поиск нескольких фото артиста"""
+        try:
+            logger.info(f"🎭 Поиск {count} фото для: {artist_name}")
+            
+            # Проверяем кэш
+            artist_cache_key = artist_name.lower().strip()
+            cached_urls = self.photo_cache.get(artist_cache_key, [])
+            
+            if len(cached_urls) >= count:
+                logger.info(f"📦 Используем {len(cached_urls)} кэшированных фото")
+                return cached_urls[:count]
+
+            # Яндекс поиск
+            yandex_urls = self._search_yandex_multiple(artist_name, count)
+            logger.info(f"🔍 Яндекс нашёл {len(yandex_urls)} URL")
+            
+            # Google поиск
+            google_urls = self._search_google_multiple(artist_name, count)
+            logger.info(f"🔍 Google нашёл {len(google_urls)} URL")
+            
+            # Объединяем и убираем дубликаты
+            all_urls = list(dict.fromkeys(yandex_urls + google_urls + cached_urls))
+            
+            # Ограничиваем количество
+            photo_urls = all_urls[:count]
+            
+            # Обновляем кэш
+            self.photo_cache[artist_cache_key] = photo_urls
+            self._save_photo_cache()
+            
+            logger.info(f"✅ Всего найдено уникальных фото: {len(photo_urls)}")
+            return photo_urls
+            
+        except Exception as e:
+            logger.error(f"💥 Ошибка поиска нескольких фото: {e}")
+            return []
 
     def _search_yandex_simple(self, artist_name):
         """Простой поиск в Яндекс Картинках"""
@@ -96,14 +177,65 @@ class SimpleArtistImageSearch:
                     # Проверяем что это изображение
                     if any(ext in full_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
                         # Исключаем иконки и маленькие изображения
-                        if not any(bad in full_url.lower() for bad in ['icon', 'logo', 'favicon', 'button']):
-                            image_urls.append(full_url)
-                            logger.info(f"📷 Найдено изображение: {full_url[:80]}...")
+                        if not any(bad in full_url.lower() for bad in ['icon', 'logo', 'favicon', 'button', 'spacer', 'pixel']):
+                            if 'yandex' in full_url or 'avatars' in full_url:
+                                image_urls.append(full_url)
+                            elif len(full_url) > 30:  # Фильтруем короткие URL (часто иконки)
+                                image_urls.append(full_url)
                 
                 if len(image_urls) >= 10:  # Ограничиваем количество
                     break
             
             return image_urls
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка Яндекс поиска: {e}")
+            return []
+
+    def _search_yandex_multiple(self, artist_name, count=10):
+        """Поиск нескольких фото в Яндекс Картинках"""
+        try:
+            query = f"{artist_name} фото портрет".replace(" ", "+")
+            url = f"https://yandex.ru/images/search?text={query}"
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            }
+            
+            response = requests.get(url, headers=headers, timeout=15)
+            if response.status_code != 200:
+                return []
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            image_urls = []
+            
+            # Ищем все img теги с data-source
+            for img in soup.find_all('img'):
+                src = img.get('src') or img.get('data-src')
+                if src:
+                    # Преобразуем относительные URL в абсолютные
+                    if src.startswith('//'):
+                        full_url = 'https:' + src
+                    elif src.startswith('/'):
+                        full_url = 'https://yandex.ru' + src
+                    else:
+                        full_url = src
+                    
+                    # Проверяем что это изображение
+                    if any(ext in full_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                        # Исключаем иконки и маленькие изображения
+                        if not any(bad in full_url.lower() for bad in ['icon', 'logo', 'favicon', 'button', 'spacer', 'pixel']):
+                            if len(full_url) > 30:  # Фильтруем короткие URL
+                                image_urls.append(full_url)
+                
+                if len(image_urls) >= count * 2:  # Берем с запасом
+                    break
+            
+            # Фильтруем по размеру URL (избегаем иконок)
+            filtered_urls = [url for url in image_urls if len(url) > 30]
+            return filtered_urls[:count]
             
         except Exception as e:
             logger.error(f"❌ Ошибка Яндекс поиска: {e}")
@@ -119,7 +251,7 @@ class SimpleArtistImageSearch:
                 logger.warning("⚠️ Отсутствуют ключи Google API")
                 return []
             
-            query = f"{artist_name} photo".replace(" ", "+")
+            query = f"{artist_name} photo portrait".replace(" ", "+")
             url = f"https://www.googleapis.com/customsearch/v1"
             params = {
                 'q': query,
@@ -152,6 +284,50 @@ class SimpleArtistImageSearch:
             logger.error(f"❌ Ошибка Google поиска: {e}")
             return []
 
+    def _search_google_multiple(self, artist_name, count=5):
+        """Поиск нескольких фото в Google"""
+        try:
+            api_key = os.getenv('GOOGLE_API_KEY')
+            search_engine_id = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
+            
+            if not api_key or not search_engine_id:
+                return []
+            
+            query = f"{artist_name} photo portrait".replace(" ", "+")
+            url = f"https://www.googleapis.com/customsearch/v1"
+            params = {
+                'q': query,
+                'key': api_key,
+                'cx': search_engine_id,
+                'searchType': 'image',
+                'num': count
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                items = data.get('items', [])
+                
+                image_urls = []
+                for item in items:
+                    link = item.get('link', '')
+                    if link and any(ext in link.lower() for ext in ['.jpg', '.jpeg', '.png']):
+                        image_urls.append(link)
+                
+                return image_urls
+            else:
+                return []
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка Google поиска: {e}")
+            return []
+
+    def _download_single_photo(self, image_url, track_id, use_rembg=True):
+        """Скачать одно фото по URL"""
+        final_path = os.path.join(self.images_dir, f"{track_id}_artist.png")
+        return self._download_and_save_image(image_url, final_path, use_rembg)
+
     def _download_and_save_image(self, image_url, final_path, use_rembg):
         """Скачивает и сохраняет изображение"""
         temp_path = final_path.replace('.png', '_temp.jpg')
@@ -160,7 +336,9 @@ class SimpleArtistImageSearch:
             logger.info(f"⬇️ Скачиваем: {image_url[:100]}...")
             
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
             }
             
             response = requests.get(image_url, headers=headers, timeout=15)
@@ -283,6 +461,7 @@ class SimpleArtistImageSearch:
             "arial.ttf", "Arial.ttf",
             "/System/Library/Fonts/Arial.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "C:/Windows/Fonts/arial.ttf"
         ]
         
         for font_path in font_paths:
@@ -292,6 +471,24 @@ class SimpleArtistImageSearch:
                 continue
         
         return ImageFont.load_default()
+
+    def clear_photo_cache(self, artist_name=None):
+        """Очистка кэша фото"""
+        try:
+            if artist_name:
+                artist_key = artist_name.lower().strip()
+                if artist_key in self.photo_cache:
+                    del self.photo_cache[artist_key]
+                    logger.info(f"🗑️ Очищен кэш для: {artist_name}")
+            else:
+                self.photo_cache = {}
+                logger.info("🗑️ Очищен весь кэш фото")
+            
+            self._save_photo_cache()
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки кэша: {e}")
+            return False
 
 # Глобальный экземпляр
 image_searcher = SimpleArtistImageSearch()
