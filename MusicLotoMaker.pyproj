@@ -29,6 +29,7 @@
     <Compile Include="backend\processors\metadata_processor.py" />
     <Compile Include="backend\presentation.py" />
     <Compile Include="backend\server.py" />
+    <Compile Include="backend\server_tickets_router.py" />
     <Compile Include="backend\tickets.py" />
     <Compile Include="backend\__init__.py" />
     <Compile Include="main.py" />
@@ -44,16 +45,21 @@
     <Folder Include="frontend\css\" />
     <Folder Include="frontend\js\" />
     <Folder Include="backend\processors\" />
+    <Folder Include="templates\" />
   </ItemGroup>
   <ItemGroup>
     <Content Include=".env" />
     <Content Include="assets\default_cover.png" />
     <Content Include="backend\track_data.json" />
+    <Content Include="clear.bat" />
+    <Content Include="Clear_cash.bat" />
     <Content Include="frontend\css\style.css" />
     <Content Include="frontend\index.html" />
     <Content Include="frontend\js\app.js" />
+    <Content Include="frontend\js\tickets.js" />
     <Content Include="requirements.txt" />
     <Content Include="start.bat" />
+    <Content Include="templates\presentation_default.json" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

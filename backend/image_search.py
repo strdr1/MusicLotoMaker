@@ -1,29 +1,94 @@
-﻿import requests
-import os
-import logging
-from PIL import Image, ImageDraw, ImageFont
+﻿# -*- coding: utf-8 -*-
+import os, io, re, json, hashlib, logging, requests
+from pathlib import Path
+from dataclasses import dataclass
+from typing import List, Optional
+from urllib.parse import quote
+from PIL import Image, ImageOps, ImageFile, ImageDraw, ImageFont
 from rembg import remove
 from dotenv import load_dotenv
-from bs4 import BeautifulSoup
-import re
-import json
-from urllib.parse import quote, unquote
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+# ----------------- Константы/настройки -----------------
+MIN_W, MIN_H = 512, 512
+ASPECT_MIN, ASPECT_MAX = 0.75, 1.8  # портреты чаще 3:4..16:9
+TIMEOUT = 15
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/122.0 Safari/537.36")
+HDRS = {"User-Agent": UA, "Accept-Language": "ru,en;q=0.9"}
+
+# Источники, с которых портреты приходят чаще корректные
+TRUSTED = (
+    "wikipedia.org", "wikimedia.org", "commons.wikimedia.org",
+    "ru.wikipedia.org", "en.wikipedia.org", "discogs.com", "last.fm",
+    "imdb.com", "kinoteatr.ru", "kino-teatr.ru"
+)
+
+# Явные индикаторы «обложек/артов», которых избегаем
+COVER_HINTS = ("album", "cover", "single", "artwork", "vinyl", "discography")
+
+# ----------------- Утилиты -----------------
+def slugify(s: str) -> str:
+    s = re.sub(r"[^\w\s.-]+", "", s, flags=re.U)
+    s = re.sub(r"\s+", "_", s.strip(), flags=re.U)
+    return s[:140].lower()
+
+def ok_aspect(w: int, h: int) -> bool:
+    if w <= 0 or h <= 0: return False
+    r = h / float(w)
+    return ASPECT_MIN <= r <= ASPECT_MAX
+
+def is_coverish_url(u: str) -> bool:
+    u = u.lower()
+    return any(tok in u for tok in COVER_HINTS)
+
+def is_trusted(u: str) -> bool:
+    u = u.lower()
+    return any(dom in u for dom in TRUSTED)
+
+def normalize_img(img: Image.Image, min_side: int = 900) -> Image.Image:
+    img = ImageOps.exif_transpose(img.convert("RGB"))
+    w, h = img.size
+    scale = max(1.0, min_side / float(min(w, h)))
+    if scale > 1.01:
+        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+    return img
+
+def save_png_or_jpg(img: Image.Image, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ext = path.suffix.lower()
+    if ext == ".png":
+        img.save(path, "PNG", optimize=True)
+    else:
+        img.save(path.with_suffix(".jpg"), "JPEG", quality=88, optimize=True, progressive=True)
+        path = path.with_suffix(".jpg")
+    return path
+
+def download_bytes(url: str) -> Optional[bytes]:
+    try:
+        r = requests.get(url, headers=HDRS, timeout=TIMEOUT, stream=True)
+        r.raise_for_status()
+        return r.content
+    except Exception as e:
+        logger.debug(f"download fail: {e}")
+        return None
+
+# ----------------- Основной класс -----------------
 class SimpleArtistImageSearch:
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.images_dir = os.path.join(self.base_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
-        
+
         self.artist_cache = {}
         self.photo_cache_file = os.path.join(self.base_dir, "artist_photo_cache.json")
         self._load_photo_cache()
 
+    # ---------- кэш ----------
     def _load_photo_cache(self):
-        """Загрузка кэша фото артистов"""
         try:
             if os.path.exists(self.photo_cache_file):
                 with open(self.photo_cache_file, 'r', encoding='utf-8') as f:
@@ -36,459 +101,322 @@ class SimpleArtistImageSearch:
             self.photo_cache = {}
 
     def _save_photo_cache(self):
-        """Сохранение кэша фото артистов"""
         try:
             with open(self.photo_cache_file, 'w', encoding='utf-8') as f:
                 json.dump(self.photo_cache, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения кэша фото: {e}")
 
-    def fetch_artist_png(self, artist_name, track_id, use_rembg=True):
-        """Упрощенный поиск фото артистов - вызывается через API"""
-        
+    # ---------- публичные методы ----------
+    def fetch_artist_png(self, artist_name: str, track_id: int, use_rembg: bool = True):
+        """
+        Возвращает путь к PNG/JPG с портретом артиста для конкретного трека.
+        Приоритет: cache -> Wikimedia/Wikipedia -> Google CSE (тип face) -> Яндекс -> placeholder.
+        """
         cache_key = f"{artist_name}_{track_id}"
         if cache_key in self.artist_cache:
             return self.artist_cache[cache_key]
-            
+
         try:
             logger.info(f"🎭 Поиск фото для: {artist_name}")
 
-            # Проверяем кэш по имени артиста
-            artist_cache_key = artist_name.lower().strip()
-            if artist_cache_key in self.photo_cache and self.photo_cache[artist_cache_key]:
-                cached_url = self.photo_cache[artist_cache_key][0]  # Берем первое фото из кэша
-                logger.info(f"📦 Используем кэшированное фото для: {artist_name}")
-                final_path = self._download_single_photo(cached_url, track_id, use_rembg)
-                if final_path:
-                    self.artist_cache[cache_key] = final_path
-                    return final_path
+            # 1) cache по артисту
+            artist_key = artist_name.strip().lower()
+            if artist_key in self.photo_cache and self.photo_cache[artist_key]:
+                for url in self.photo_cache[artist_key]:
+                    p = self._download_process_and_store(url, track_id, use_rembg)
+                    if p: 
+                        self.artist_cache[cache_key] = p
+                        return p
 
-            # Сначала Яндекс
-            image_urls = self._search_yandex_simple(artist_name)
-            logger.info(f"🔍 Яндекс нашёл {len(image_urls)} URL")
-            
-            # Если нет результатов, пробуем Google
-            if not image_urls:
-                logger.info("🔄 Яндекс не дал результатов, пробуем Google")
-                image_urls = self._search_google_simple(artist_name)
-                logger.info(f"🔍 Google нашёл {len(image_urls)} URL")
-            
-            final_path = os.path.join(self.images_dir, f"{track_id}_artist.png")
-            
-            # Пробуем скачать и обработать каждое изображение
-            for idx, image_url in enumerate(image_urls):
-                logger.info(f"📥 Попытка #{idx+1}: {image_url}")
-                
-                if self._download_and_save_image(image_url, final_path, use_rembg):
-                    logger.info(f"✅ Успешно сохранено: {final_path}")
-                    
-                    # Сохраняем URL в кэш артиста
-                    if artist_cache_key not in self.photo_cache:
-                        self.photo_cache[artist_cache_key] = []
-                    if image_url not in self.photo_cache[artist_cache_key]:
-                        self.photo_cache[artist_cache_key].insert(0, image_url)  # Добавляем в начало
-                        self._save_photo_cache()
-                    
-                    self.artist_cache[cache_key] = final_path
-                    return final_path
-            
-            # Если ничего не нашлось, создаем placeholder
-            logger.warning("❌ Не удалось найти ни одного изображения")
-            final_path = self._create_placeholder_image(artist_name, track_id)
-            self.artist_cache[cache_key] = final_path
-            return final_path
-            
+            # 2) Wikimedia/Wikipedia — детерминированно
+            url = self._wikimedia_best(artist_name)
+            if url:
+                p = self._download_process_and_store(url, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, url)
+                    self.artist_cache[cache_key] = p
+                    return p
+
+            # 3) Google CSE (если ключи заданы) — тип лица, исключаем обложки
+            urls = self._search_google_faces(artist_name, count=8)
+            for u in urls:
+                p = self._download_process_and_store(u, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, u)
+                    self.artist_cache[cache_key] = p
+                    return p
+
+            # 4) Яндекс как дальний запасной (часто нестабилен)
+            urls = self._search_yandex_simple(artist_name)
+            for u in urls:
+                p = self._download_process_and_store(u, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, u)
+                    self.artist_cache[cache_key] = p
+                    return p
+
+            # 5) fallback
+            p = self._create_placeholder_image(artist_name, track_id)
+            self.artist_cache[cache_key] = p
+            return p
+
         except Exception as e:
             logger.error(f"💥 Критическая ошибка: {e}")
-            return self._create_placeholder_image(artist_name, track_id)
+            p = self._create_placeholder_image(artist_name, track_id)
+            self.artist_cache[cache_key] = p
+            return p
 
-    def fetch_multiple_artist_photos(self, artist_name, count=10):
-        """Поиск нескольких фото артиста"""
-        try:
-            logger.info(f"🎭 Поиск {count} фото для: {artist_name}")
-            
-            # Проверяем кэш
-            artist_cache_key = artist_name.lower().strip()
-            cached_urls = self.photo_cache.get(artist_cache_key, [])
-            
-            if len(cached_urls) >= count:
-                logger.info(f"📦 Используем {len(cached_urls)} кэшированных фото")
-                return cached_urls[:count]
+    def fetch_multiple_artist_photos(self, artist_name: str, count: int = 10) -> List[str]:
+        """Возвращает список URL кандидатов (портретов), приоритет — Wikimedia/Wikipedia, затем Google CSE (face)."""
+        out: List[str] = []
+        artist_key = artist_name.strip().lower()
 
-            # Яндекс поиск
-            yandex_urls = self._search_yandex_multiple(artist_name, count)
-            logger.info(f"🔍 Яндекс нашёл {len(yandex_urls)} URL")
-            
-            # Google поиск
-            google_urls = self._search_google_multiple(artist_name, count)
-            logger.info(f"🔍 Google нашёл {len(google_urls)} URL")
-            
-            # Объединяем и убираем дубликаты
-            all_urls = list(dict.fromkeys(yandex_urls + google_urls + cached_urls))
-            
-            # Ограничиваем количество
-            photo_urls = all_urls[:count]
-            
-            # Обновляем кэш
-            self.photo_cache[artist_cache_key] = photo_urls
+        # cache
+        cached = self.photo_cache.get(artist_key, [])
+        if cached: out += cached
+
+        # wikimedia
+        w = self._wikimedia_best(artist_name)
+        if w: out.append(w)
+
+        # google faces
+        out += self._search_google_faces(artist_name, count=count)
+
+        # yandex (в конце)
+        out += self._search_yandex_simple(artist_name)
+
+        # нормализация/дедуп
+        seen, uniq = set(), []
+        for u in out:
+            base = u.split("?")[0]
+            if base in seen: continue
+            seen.add(base)
+            uniq.append(u)
+
+        # фильтр «анти-обложка»
+        uniq = [u for u in uniq if not is_coverish_url(u)]
+        uniq = uniq[:max(1, count)]
+
+        # кэшируем
+        if uniq:
+            self.photo_cache[artist_key] = uniq
             self._save_photo_cache()
-            
-            logger.info(f"✅ Всего найдено уникальных фото: {len(photo_urls)}")
-            return photo_urls
-            
-        except Exception as e:
-            logger.error(f"💥 Ошибка поиска нескольких фото: {e}")
-            return []
 
-    def _search_yandex_simple(self, artist_name):
-        """Простой поиск в Яндекс Картинках"""
+        logger.info(f"✅ Всего найдено уникальных фото: {len(uniq)}")
+        return uniq
+
+    # ---------- приватные: загрузка/обработка ----------
+    def _download_process_and_store(self, url: str, track_id: int, use_rembg: bool) -> Optional[str]:
         try:
-            query = f"{artist_name} фото".replace(" ", "+")
-            url = f"https://yandex.ru/images/search?text={query}"
-            
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-            }
-            
-            logger.info(f"🌐 Запрос к Яндекс: {url}")
-            response = requests.get(url, headers=headers, timeout=15)
-            
-            if response.status_code != 200:
-                logger.warning(f"⚠️ Яндекс вернул статус {response.status_code}")
-                return []
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            image_urls = []
-            
-            # Ищем все img теги
-            for img in soup.find_all('img'):
-                src = img.get('src') or img.get('data-src')
-                if src:
-                    # Преобразуем относительные URL в абсолютные
-                    if src.startswith('//'):
-                        full_url = 'https:' + src
-                    elif src.startswith('/'):
-                        full_url = 'https://yandex.ru' + src
-                    else:
-                        full_url = src
-                    
-                    # Проверяем что это изображение
-                    if any(ext in full_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
-                        # Исключаем иконки и маленькие изображения
-                        if not any(bad in full_url.lower() for bad in ['icon', 'logo', 'favicon', 'button', 'spacer', 'pixel']):
-                            if 'yandex' in full_url or 'avatars' in full_url:
-                                image_urls.append(full_url)
-                            elif len(full_url) > 30:  # Фильтруем короткие URL (часто иконки)
-                                image_urls.append(full_url)
-                
-                if len(image_urls) >= 10:  # Ограничиваем количество
-                    break
-            
-            return image_urls
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка Яндекс поиска: {e}")
-            return []
+            raw = download_bytes(url)
+            if not raw: return None
+            img = Image.open(io.BytesIO(raw))
+            w, h = img.size
 
-    def _search_yandex_multiple(self, artist_name, count=10):
-        """Поиск нескольких фото в Яндекс Картинках"""
-        try:
-            query = f"{artist_name} фото портрет".replace(" ", "+")
-            url = f"https://yandex.ru/images/search?text={query}"
-            
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-            }
-            
-            response = requests.get(url, headers=headers, timeout=15)
-            if response.status_code != 200:
-                return []
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            image_urls = []
-            
-            # Ищем все img теги с data-source
-            for img in soup.find_all('img'):
-                src = img.get('src') or img.get('data-src')
-                if src:
-                    # Преобразуем относительные URL в абсолютные
-                    if src.startswith('//'):
-                        full_url = 'https:' + src
-                    elif src.startswith('/'):
-                        full_url = 'https://yandex.ru' + src
-                    else:
-                        full_url = src
-                    
-                    # Проверяем что это изображение
-                    if any(ext in full_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']):
-                        # Исключаем иконки и маленькие изображения
-                        if not any(bad in full_url.lower() for bad in ['icon', 'logo', 'favicon', 'button', 'spacer', 'pixel']):
-                            if len(full_url) > 30:  # Фильтруем короткие URL
-                                image_urls.append(full_url)
-                
-                if len(image_urls) >= count * 2:  # Берем с запасом
-                    break
-            
-            # Фильтруем по размеру URL (избегаем иконок)
-            filtered_urls = [url for url in image_urls if len(url) > 30]
-            return filtered_urls[:count]
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка Яндекс поиска: {e}")
-            return []
+            # Базовые валидации
+            if w < MIN_W or h < MIN_H: return None
+            if not ok_aspect(w, h): return None
+            if is_coverish_url(url) and not is_trusted(url):  # разрешим квадрат, если источник доверенный
+                return None
 
-    def _search_google_simple(self, artist_name):
-        """Простой поиск в Google"""
-        try:
-            api_key = os.getenv('GOOGLE_API_KEY')
-            search_engine_id = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
-            
-            if not api_key or not search_engine_id:
-                logger.warning("⚠️ Отсутствуют ключи Google API")
-                return []
-            
-            query = f"{artist_name} photo portrait".replace(" ", "+")
-            url = f"https://www.googleapis.com/customsearch/v1"
-            params = {
-                'q': query,
-                'key': api_key,
-                'cx': search_engine_id,
-                'searchType': 'image',
-                'num': 5
-            }
-            
-            logger.info(f"🌐 Запрос к Google: {query}")
-            response = requests.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get('items', [])
-                
-                image_urls = []
-                for item in items:
-                    link = item.get('link', '')
-                    if link and any(ext in link.lower() for ext in ['.jpg', '.jpeg', '.png']):
-                        image_urls.append(link)
-                        logger.info(f"📷 Google изображение: {link[:80]}...")
-                
-                return image_urls
-            else:
-                logger.warning(f"⚠️ Google API ошибка: {response.status_code}")
-                return []
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка Google поиска: {e}")
-            return []
+            img = normalize_img(img, min_side=1024)
 
-    def _search_google_multiple(self, artist_name, count=5):
-        """Поиск нескольких фото в Google"""
-        try:
-            api_key = os.getenv('GOOGLE_API_KEY')
-            search_engine_id = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
-            
-            if not api_key or not search_engine_id:
-                return []
-            
-            query = f"{artist_name} photo portrait".replace(" ", "+")
-            url = f"https://www.googleapis.com/customsearch/v1"
-            params = {
-                'q': query,
-                'key': api_key,
-                'cx': search_engine_id,
-                'searchType': 'image',
-                'num': count
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                items = data.get('items', [])
-                
-                image_urls = []
-                for item in items:
-                    link = item.get('link', '')
-                    if link and any(ext in link.lower() for ext in ['.jpg', '.jpeg', '.png']):
-                        image_urls.append(link)
-                
-                return image_urls
-            else:
-                return []
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка Google поиска: {e}")
-            return []
-
-    def _download_single_photo(self, image_url, track_id, use_rembg=True):
-        """Скачать одно фото по URL"""
-        final_path = os.path.join(self.images_dir, f"{track_id}_artist.png")
-        return self._download_and_save_image(image_url, final_path, use_rembg)
-
-    def _download_and_save_image(self, image_url, final_path, use_rembg):
-        """Скачивает и сохраняет изображение"""
-        temp_path = final_path.replace('.png', '_temp.jpg')
-        
-        try:
-            logger.info(f"⬇️ Скачиваем: {image_url[:100]}...")
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-            }
-            
-            response = requests.get(image_url, headers=headers, timeout=15)
-            if response.status_code != 200:
-                logger.warning(f"⚠️ Ошибка загрузки: статус {response.status_code}")
-                return False
-            
-            # Сохраняем временный файл
-            with open(temp_path, 'wb') as f:
-                f.write(response.content)
-            
-            logger.info(f"💾 Временный файл сохранён: {temp_path}")
-            
-            # Проверяем что файл не пустой
-            file_size = os.path.getsize(temp_path)
-            if file_size == 0:
-                logger.warning("⚠️ Файл пустой")
-                os.remove(temp_path)
-                return False
-            
-            # Пробуем открыть изображение
-            try:
-                with Image.open(temp_path) as img:
-                    # Проверяем базовые параметры
-                    width, height = img.size
-                    logger.info(f"📐 Размер изображения: {width}x{height}")
-                    
-                    if width < 100 or height < 100:
-                        logger.warning("⚠️ Слишком маленькое изображение")
-                        os.remove(temp_path)
-                        return False
-                        
-            except Exception as e:
-                logger.warning(f"⚠️ Невалидное изображение: {e}")
-                os.remove(temp_path)
-                return False
-            
-            # Обрабатываем изображение
+            # rembg (опционально)
+            out_path = Path(self.images_dir) / f"{track_id}_artist.png"
             if use_rembg:
                 try:
-                    logger.info("🎨 Удаляем фон...")
-                    with open(temp_path, 'rb') as i:
-                        input_data = i.read()
-                    output_data = remove(input_data)
-                    with open(final_path, 'wb') as o:
-                        o.write(output_data)
-                    logger.info(f"✅ Фон удалён, сохранено: {final_path}")
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    png_bytes = remove(raw)
+                    with open(out_path, "wb") as f:
+                        f.write(png_bytes)
+                    return str(out_path)
                 except Exception as e:
-                    logger.warning(f"⚠️ Ошибка удаления фона: {e}")
-                    # Если не удалось удалить фон, просто конвертируем в PNG
-                    with Image.open(temp_path) as img:
-                        img.save(final_path, "PNG")
-                    logger.info(f"✅ Просто конвертировано в PNG: {final_path}")
-            else:
-                # Просто конвертируем в PNG
-                with Image.open(temp_path) as img:
-                    img.save(final_path, "PNG")
-                logger.info(f"✅ Конвертировано в PNG: {final_path}")
-            
-            # Удаляем временный файл
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            
-            # Проверяем что финальный файл создан и не пустой
-            if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-                logger.info(f"✅ Файл успешно создан: {final_path} ({os.path.getsize(final_path)} bytes)")
-                return True
-            else:
-                logger.warning("❌ Финальный файл не создан или пустой")
-                return False
-                
-        except Exception as e:
-            logger.error(f"💥 Ошибка при обработке изображения: {e}")
-            # Очищаем временные файлы
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            if os.path.exists(final_path):
-                os.remove(final_path)
-            return False
+                    logger.warning(f"⚠️ rembg error, fallback без вырезания: {e}")
 
-    def _create_placeholder_image(self, artist_name, track_id):
-        """Создает простой placeholder"""
-        try:
-            width, height = 400, 400
-            image = Image.new('RGB', (width, height), color=(74, 107, 156))
-            draw = ImageDraw.Draw(image)
-            
-            # Простой текст
-            font = self._get_best_font(24)
-            text = artist_name
-            
-            if len(text) > 20:
-                text = text[:17] + "..."
-            
-            try:
-                bbox = draw.textbbox((0, 0), text, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
-                x = (width - text_width) / 2
-                y = (height - text_height) / 2
-            except:
-                x = 50
-                y = 180
-            
-            draw.text((x, y), text, fill=(255, 255, 255), font=font)
-            
-            image_path = os.path.join(self.images_dir, f"{track_id}_artist.png")
-            image.save(image_path, "PNG")
-            
-            logger.info(f"🖼️ Создан placeholder: {image_path}")
-            return image_path
-            
+            # без вырезания
+            out_path = save_png_or_jpg(img, Path(self.images_dir) / f"{track_id}_artist.jpg")
+            return str(out_path)
+
         except Exception as e:
-            logger.error(f"❌ Ошибка создания placeholder: {e}")
+            logger.debug(f"_download_process_and_store fail: {e}")
             return None
 
-    def _get_best_font(self, size):
-        """Находит шрифт"""
-        font_paths = [
-            "arial.ttf", "Arial.ttf",
-            "/System/Library/Fonts/Arial.ttf",
+    def _cache_push(self, artist_key: str, url: str):
+        arr = self.photo_cache.get(artist_key, [])
+        if url not in arr:
+            arr.insert(0, url)
+            self.photo_cache[artist_key] = arr[:20]
+            self._save_photo_cache()
+
+    # ---------- Wikimedia / Wikipedia ----------
+    def _wikimedia_best(self, artist_name: str) -> Optional[str]:
+        """
+        1) Пытаемся найти Wikidata Q-id по имени артиста.
+        2) Если найден P18 (основное изображение) — строим прямой URL в Commons (thumb 1200px).
+        3) Иначе берём pageimage из Wikipedia (ru→en).
+        """
+        try:
+            qid = self._wikidata_qid(artist_name)
+            if qid:
+                img_name = self._wikidata_p18(qid)
+                if img_name:
+                    # Commons file -> URL
+                    safe = quote(img_name.replace(" ", "_"))
+                    return f"https://commons.wikimedia.org/wiki/Special:FilePath/{safe}?width=1200"
+        except Exception:
+            pass
+
+        # pageimage ru-wiki
+        u = self._wikipedia_pageimage(artist_name, lang="ru")
+        if u: return u
+        # fallback en-wiki
+        return self._wikipedia_pageimage(artist_name, lang="en")
+
+    def _wikidata_qid(self, name: str) -> Optional[str]:
+        # wbsearchentities по human name
+        try:
+            params = {
+                "action": "wbsearchentities", "format": "json",
+                "language": "ru", "limit": 5, "type": "item", "search": name
+            }
+            r = requests.get("https://www.wikidata.org/w/api.php", params=params, headers=HDRS, timeout=TIMEOUT)
+            r.raise_for_status()
+            hits = r.json().get("search", [])
+            # выбираем человека/исполнителя
+            for h in hits:
+                desc = (h.get("description") or "").lower()
+                if any(tok in desc for tok in ("пев", "музыкан", "исполн", "singer", "musician", "artist")):
+                    return h.get("id")
+            return hits[0]["id"] if hits else None
+        except Exception:
+            return None
+
+    def _wikidata_p18(self, qid: str) -> Optional[str]:
+        try:
+            params = {"action": "wbgetclaims", "format": "json", "entity": qid, "property": "P18"}
+            r = requests.get("https://www.wikidata.org/w/api.php", params=params, headers=HDRS, timeout=TIMEOUT)
+            r.raise_for_status()
+            claims = r.json().get("claims", {}).get("P18", [])
+            if not claims: return None
+            val = claims[0]["mainsnak"]["datavalue"]["value"]
+            return val  # file name on Commons
+        except Exception:
+            return None
+
+    def _wikipedia_pageimage(self, name: str, lang: str = "ru") -> Optional[str]:
+        try:
+            # Сначала ищем страницу
+            sr = requests.get(
+                f"https://{lang}.wikipedia.org/w/api.php",
+                params={"action":"query","list":"search","srsearch":name,"format":"json","srlimit":5},
+                headers=HDRS, timeout=TIMEOUT
+            ).json()
+            pages = sr.get("query", {}).get("search", [])
+            if not pages: return None
+            title = pages[0]["title"]
+
+            # Получаем pageimage/thumbnail
+            q = requests.get(
+                f"https://{lang}.wikipedia.org/w/api.php",
+                params={"action":"query","prop":"pageimages","format":"json","piprop":"thumbnail|name","pithumbsize":1200,"titles":title},
+                headers=HDRS, timeout=TIMEOUT
+            ).json()
+            pages = q.get("query", {}).get("pages", {})
+            for _, pdata in pages.items():
+                thumb = pdata.get("thumbnail", {})
+                src = thumb.get("source")
+                if src: return src
+            return None
+        except Exception:
+            return None
+
+    # ---------- Google CSE (только портреты лиц) ----------
+    def _search_google_faces(self, artist_name: str, count: int = 8) -> List[str]:
+        api_key = os.getenv('GOOGLE_API_KEY')
+        cx = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
+        if not api_key or not cx:
+            logger.info("⚠️ Google CSE ключи не заданы — пропускаем")
+            return []
+        try:
+            params = {
+                "q": f'{artist_name} portrait photo -album -cover -single -artwork',
+                "key": api_key,
+                "cx": cx,
+                "searchType": "image",
+                "num": min(10, max(1, count)),
+                "imgType": "face",         # <— ключевой параметр
+                "safe": "active",
+                "imgSize": "large"
+            }
+            r = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=TIMEOUT)
+            if r.status_code != 200:
+                logger.warning(f"Google CSE HTTP {r.status_code}")
+                return []
+            data = r.json()
+            items = data.get("items", []) or []
+            out = []
+            for it in items:
+                link = it.get("link") or ""
+                if not link: continue
+                if is_coverish_url(link) and not is_trusted(link): 
+                    continue
+                out.append(link)
+            return out
+        except Exception as e:
+            logger.warning(f"Google CSE error: {e}")
+            return []
+
+    # ---------- Яндекс (низкий приоритет, без гарантий) ----------
+    def _search_yandex_simple(self, artist_name: str) -> List[str]:
+        try:
+            q = f"{artist_name} фото портрет".replace(" ", "+")
+            url = f"https://yandex.ru/images/search?text={q}"
+            r = requests.get(url, headers=HDRS, timeout=TIMEOUT)
+            if r.status_code != 200: return []
+            # грубый HTML-парс: берём большие картинки и отбрасываем «обложки»
+            urls = []
+            for m in re.finditer(r'"url":"(https:[^"]+)"', r.text):
+                u = m.group(1).encode().decode("unicode_escape")
+                if any(u.lower().endswith(ext) for ext in (".jpg",".jpeg",".png",".webp")):
+                    if not is_coverish_url(u):
+                        urls.append(u)
+                if len(urls) >= 8: break
+            return urls
+        except Exception:
+            return []
+
+    # ---------- placeholder ----------
+    def _create_placeholder_image(self, artist_name: str, track_id: int) -> str:
+        try:
+            w, h = 600, 600
+            img = Image.new("RGB", (w,h), (40,55,95))
+            draw = ImageDraw.Draw(img)
+            font = self._get_best_font(36)
+            text = artist_name if len(artist_name)<=32 else artist_name[:29]+"..."
+            tw, th = draw.textlength(text, font=font), 36
+            draw.text(((w-tw)/2, (h-th)/2), text, fill=(235,240,255), font=font)
+            out = Path(self.images_dir) / f"{track_id}_artist.png"
+            img.save(out, "PNG")
+            logger.info(f"🖼️ Placeholder: {out}")
+            return str(out)
+        except Exception as e:
+            logger.error(f"❌ Ошибка placeholder: {e}")
+            return str(Path(self.images_dir) / f"{track_id}_artist.png")
+
+    def _get_best_font(self, size: int):
+        paths = [
+            "C:/Windows/Fonts/arial.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "C:/Windows/Fonts/arial.ttf"
+            "/System/Library/Fonts/Arial.ttf",
+            "arial.ttf","Arial.ttf"
         ]
-        
-        for font_path in font_paths:
+        for p in paths:
             try:
-                return ImageFont.truetype(font_path, size)
-            except:
-                continue
-        
+                return ImageFont.truetype(p, size)
+            except: pass
         return ImageFont.load_default()
 
-    def clear_photo_cache(self, artist_name=None):
-        """Очистка кэша фото"""
-        try:
-            if artist_name:
-                artist_key = artist_name.lower().strip()
-                if artist_key in self.photo_cache:
-                    del self.photo_cache[artist_key]
-                    logger.info(f"🗑️ Очищен кэш для: {artist_name}")
-            else:
-                self.photo_cache = {}
-                logger.info("🗑️ Очищен весь кэш фото")
-            
-            self._save_photo_cache()
-            return True
-        except Exception as e:
-            logger.error(f"❌ Ошибка очистки кэша: {e}")
-            return False
 
 # Глобальный экземпляр
 image_searcher = SimpleArtistImageSearch()

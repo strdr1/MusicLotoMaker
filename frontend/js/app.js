@@ -13,7 +13,20 @@ let playbackInterval = null;
 let audioElement = null;
 let isGeneratingWaveform = false;
 let isUploading = false;
+// === Upload queue & progress (многопоточная загрузка) ===
+const MAX_FILES_TOTAL = 120;           // верхний предел выбранных файлов
+const MAX_CONCURRENT_UPLOADS = 6;      // параллельно грузим до 6
 
+let uploadQueue = [];                  // очередь File объектов
+let activeUploads = 0;                 // сколько сейчас в полёте
+let currentUploads = new Map();        // id -> { xhr, file, rowEl }
+let uploadCounter = 0;                 // для уникальных id строк
+
+// элементы панели прогресса
+const uploadPanel = () => document.getElementById('uploadProgressPanel');
+const uploadRows = () => document.getElementById('uploadRows');
+const uploadSummary = () => document.getElementById('uploadSummary');
+const cancelAllBtn = () => document.getElementById('cancelAllUploadsBtn');
 // Volume Control
 let currentVolume = 50;
 let isMuted = false;
@@ -30,6 +43,18 @@ let currentPhotoUrls = [];
 let currentPhotoIndex = 0;
 let isSearchingPhotos = false;
 
+// Track Download
+let isDownloading = false;
+
+// ===== helpers (селекторы и генератор кнопки) =====
+const $ = (sel) =>
+    document.querySelector(sel) ||
+    document.querySelector(`[data-id="${sel.replace('#', '').replace('.', '')}"]`);
+
+function getGenerateBtn() {
+    return document.querySelector('[data-id="btn-generate"]') || document.getElementById('btn-generate') || document.querySelector('#presentation .btn-primary.btn-large');
+}
+
 // Инициализация при загрузке страницы
 document.addEventListener('DOMContentLoaded', function () {
     console.log('🎵 Music Loto Maker инициализирован');
@@ -39,30 +64,62 @@ document.addEventListener('DOMContentLoaded', function () {
     loadSystemStatus();
     setupEventListeners();
     addTimingsButton();
+    addDebugButton(); // Добавляем кнопку дебага
+
+    // авто-обновление счётчика каждые 10 сек
+    setInterval(updateTracksCount, 10000);
+
+    // обновляем при возвращении на вкладку браузера
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) updateTracksCount();
+    });
+
+    // если сразу открыта вкладка презентации — инициализируем превью
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset?.tab;
+    if (activeTab === 'presentation') {
+        initPresentationDesigner();
+    }
 });
 
 function setupEventListeners() {
+    // Отмена всех загрузок
+    const cancelAll = document.getElementById('cancelAllUploadsBtn');
+    if (cancelAll) {
+        cancelAll.addEventListener('click', cancelAllUploads);
+    }
+
+    // предупреждать, если есть активные загрузки
+    window.addEventListener('beforeunload', (e) => {
+        if (activeUploads > 0 || uploadQueue.length > 0) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    });
     // Обработчик загрузки файлов
-    document.getElementById('fileInput').addEventListener('change', handleFileUpload);
+    const fileInput = document.getElementById('fileInput');
+    if (fileInput) fileInput.addEventListener('change', handleFileUpload);
 
     // Обработчик закрытия модальных окон
-    document.getElementById('editModal').addEventListener('click', function (e) {
-        if (e.target === this) {
-            closeEditModal();
-        }
-    });
+    const editModal = document.getElementById('editModal');
+    if (editModal) {
+        editModal.addEventListener('click', function (e) {
+            if (e.target === this) closeEditModal();
+        });
+    }
 
-    document.getElementById('audioEditorModal').addEventListener('click', function (e) {
-        if (e.target === this) {
-            closeAudioEditor();
-        }
-    });
+    const audioEditorModal = document.getElementById('audioEditorModal');
+    if (audioEditorModal) {
+        audioEditorModal.addEventListener('click', function (e) {
+            if (e.target === this) closeAudioEditor();
+        });
+    }
 
-    document.getElementById('photoModal').addEventListener('click', function (e) {
-        if (e.target === this) {
-            closePhotoModal();
-        }
-    });
+    const photoModal = document.getElementById('photoModal');
+    if (photoModal) {
+        photoModal.addEventListener('click', function (e) {
+            if (e.target === this) closePhotoModal();
+        });
+    }
 
     // Обработчик слайдера времени
     const timeSlider = document.getElementById('timeSlider');
@@ -75,7 +132,7 @@ function setupEventListeners() {
 
     // Горячие клавиши
     document.addEventListener('keydown', function (e) {
-        if (document.getElementById('audioEditorModal').style.display === 'block') {
+        if (document.getElementById('audioEditorModal')?.style.display === 'block') {
             switch (e.key) {
                 case ' ':
                     e.preventDefault();
@@ -97,7 +154,7 @@ function setupEventListeners() {
         }
 
         // Горячие клавиши для фото модалки
-        if (document.getElementById('photoModal').style.display === 'block') {
+        if (document.getElementById('photoModal')?.style.display === 'block') {
             switch (e.key) {
                 case 'ArrowRight':
                     e.preventDefault();
@@ -118,13 +175,477 @@ function setupEventListeners() {
             }
         }
     });
+
+    // Горячие клавиши для текстового поля скачивания
+    const trackListTextarea = document.getElementById('trackList');
+    if (trackListTextarea) {
+        trackListTextarea.addEventListener('keydown', function (e) {
+            if (e.ctrlKey && e.key === 'Enter') {
+                downloadTrackList();
+            }
+        });
+    }
+}
+
+// =========================
+// DEBUG FUNCTIONS
+// =========================
+
+function addDebugButton() {
+    const toolbar = document.querySelector('.toolbar');
+    if (toolbar && !document.getElementById('debugBtn')) {
+        const debugBtn = document.createElement('button');
+        debugBtn.id = 'debugBtn';
+        debugBtn.className = 'btn btn-warning';
+        debugBtn.innerHTML = '🐛 Debug';
+        debugBtn.onclick = debugCurrentButton;
+        debugBtn.title = 'Отладочная информация о текущей кнопке';
+        toolbar.appendChild(debugBtn);
+    }
+}
+
+async function debugCurrentButton() {
+    try {
+        showNotification('🔍 Проверяем текущую кнопку...', 'info');
+
+        // Проверяем конфигурацию
+        const configResponse = await fetch(`${API_BASE}/debug/current-config`);
+        const configData = await configResponse.json();
+
+        console.log('🔧 DEBUG CONFIG:', configData);
+
+        let debugInfo = `📋 Конфигурация:\n`;
+        debugInfo += `- Файл конфига: ${configData.config_exists ? '✅ существует' : '❌ не существует'}\n`;
+        debugInfo += `- Путь к кнопке: ${configData.custom_button_path || '❌ не установлен'}\n`;
+        debugInfo += `- Background: ${JSON.stringify(configData.background_config || {})}\n`;
+
+        // Если есть путь к кнопке, проверяем файл
+        if (configData.custom_button_path) {
+            const filename = configData.custom_button_path.split('/').pop();
+            const fileResponse = await fetch(`${API_BASE}/debug/check-file/${filename}`);
+            const fileData = await fileResponse.json();
+
+            console.log('📁 DEBUG FILE:', fileData);
+
+            debugInfo += `\n📁 Проверка файла "${filename}":\n`;
+            fileData.results.forEach(result => {
+                debugInfo += `- ${result.path}: ${result.exists ? `✅ существует (${result.size} байт)` : '❌ не существует'}\n`;
+            });
+
+            if (fileData.dir_contents && fileData.dir_contents.length > 0) {
+                debugInfo += `\n📂 Содержимое custom_buttons:\n`;
+                fileData.dir_contents.forEach(file => {
+                    debugInfo += `- ${file}\n`;
+                });
+            }
+        }
+
+        // Проверяем фоновые изображения
+        if (configData.background_config && configData.background_config.imageURL) {
+            const bgFilename = configData.background_config.imageURL.split('/').pop();
+            const bgResponse = await fetch(`${API_BASE}/debug/check-file/${bgFilename}`);
+            const bgData = await bgResponse.json();
+
+            debugInfo += `\n🎨 Проверка фона "${bgFilename}":\n`;
+            bgData.results.forEach(result => {
+                debugInfo += `- ${result.path}: ${result.exists ? `✅ существует (${result.size} байт)` : '❌ не существует'}\n`;
+            });
+
+            if (bgData.bg_contents && bgData.bg_contents.length > 0) {
+                debugInfo += `\n📂 Содержимое backgrounds:\n`;
+                bgData.bg_contents.forEach(file => {
+                    debugInfo += `- ${file}\n`;
+                });
+            }
+        }
+
+        // Показываем информацию в alert и в консоли
+        alert(debugInfo);
+        console.log(debugInfo);
+
+    } catch (error) {
+        console.error('❌ Ошибка отладки:', error);
+        showNotification('❌ Ошибка отладки', 'error');
+    }
+}
+
+async function debugCheckButtonFile(filename) {
+    try {
+        const response = await fetch(`${API_BASE}/debug/check-file/${filename}`);
+        const data = await response.json();
+        console.log('🔍 DEBUG FILE CHECK:', data);
+        return data;
+    } catch (error) {
+        console.error('❌ Ошибка проверки файла:', error);
+        return null;
+    }
+}
+
+// =========================
+// INTERNET TRACK DOWNLOAD FUNCTIONS
+// =========================
+
+async function downloadTrackList() {
+    if (isDownloading) {
+        showNotification('Загрузка уже выполняется', 'warning');
+        return;
+    }
+
+    const trackListText = document.getElementById('trackList').value.trim();
+    if (!trackListText) {
+        showNotification('Введите список треков для скачивания', 'warning');
+        return;
+    }
+
+    isDownloading = true;
+    showNotification('🔄 Начинаем скачивание треков...', 'info');
+
+    // Показываем прогресс
+    updateDownloadProgress(0, 1, 'Подготовка...');
+
+    try {
+        const response = await fetch(`${API_BASE}/tracks/download-from-list`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                track_list: trackListText,
+                auto_search_photos: document.getElementById('autoSearchPhotos').checked,
+                use_smart_segments: document.getElementById('useSmartSegments').checked
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error('Ошибка скачивания треков');
+        }
+
+        const result = await response.json();
+
+        if (result.success) {
+            const successCount = result.downloaded || 0;
+            const totalCount = result.results.length;
+
+            showNotification(`✅ Скачано ${successCount} из ${totalCount} треков`, 'success');
+
+            // Показываем детали результатов
+            showDownloadResults(result.results);
+
+            // Обновляем список треков
+            await loadTracks();
+
+            // Обновляем счетчик треков
+            updateTracksCount();
+        } else {
+            throw new Error(result.message || 'Ошибка скачивания');
+        }
+
+    } catch (error) {
+        console.error('❌ Ошибка скачивания треков:', error);
+        showNotification(`❌ Ошибка: ${error.message}`, 'error');
+    } finally {
+        isDownloading = false;
+        updateDownloadProgress(0, 0, 'Завершено');
+    }
+}
+
+function showDownloadResults(results) {
+    const progressDetails = document.getElementById('progressDetails');
+    if (!progressDetails) return;
+
+    let html = '<div style="max-height: 200px; overflow-y: auto;">';
+
+    results.forEach((result, index) => {
+        const statusClass = result.success ? 'status-found' : 'status-error';
+        const statusIcon = result.success ? '✅' : '❌';
+        const sourceInfo = result.source ? ` (${result.source})` : '';
+
+        html += `
+            <div class="track-status ${statusClass}" style="margin: 4px 0; padding: 6px; border-radius: 4px;">
+                <span style="font-weight: 600;">${index + 1}.</span>
+                ${statusIcon} ${escapeHtml(result.original_line)}${sourceInfo}
+                ${!result.success ? `<br><small style="color: var(--text-muted);">Ошибка: ${result.error}</small>` : ''}
+            </div>
+        `;
+    });
+
+    html += '</div>';
+    progressDetails.innerHTML = html;
+
+    // Показываем статистику
+    const successCount = results.filter(r => r.success).length;
+    const totalCount = results.length;
+
+    const statsHtml = `
+        <div style="margin-top: 10px; padding: 8px; background: var(--bg-dark); border-radius: 4px;">
+            <strong>Статистика:</strong> ${successCount}/${totalCount} успешно
+            (${Math.round((successCount / totalCount) * 100)}%)
+            <br><small style="color: var(--text-muted);">
+                Источник: YouTube Music
+            </small>
+        </div>
+    `;
+
+    progressDetails.insertAdjacentHTML('beforeend', statsHtml);
+}
+
+async function testParseTrackList() {
+    const trackListText = document.getElementById('trackList').value.trim();
+    if (!trackListText) {
+        showNotification('Введите список треков для проверки', 'warning');
+        return;
+    }
+
+    try {
+        const tracks = parseTrackListClient(trackListText);
+
+        showNotification(`🔍 Распознано ${tracks.length} треков`, 'info');
+
+        // Показываем детали в блоке прогресса
+        const progressDetails = document.getElementById('progressDetails');
+        if (progressDetails) {
+            let html = '<div style="max-height: 200px; overflow-y: auto;">';
+
+            tracks.forEach((track, i) => {
+                const artistDisplay = track.artist || '<span style="color: var(--warning)">Не указан</span>';
+                html += `
+                    <div style="margin: 4px 0; padding: 6px; background: var(--bg-dark); border-radius: 4px;">
+                        <strong>${i + 1}.</strong> 
+                        <span style="color: var(--primary)">${escapeHtml(artistDisplay)}</span> - 
+                        <strong>${escapeHtml(track.title)}</strong>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            progressDetails.innerHTML = html;
+        }
+
+    } catch (error) {
+        console.error('❌ Ошибка парсинга списка:', error);
+        showNotification('Ошибка анализа списка треков', 'error');
+    }
+}
+
+function parseTrackListClient(text) {
+    const tracks = [];
+    const lines = text.split('\n');
+
+    lines.forEach(line => {
+        line = line.trim();
+        if (!line) return;
+
+        let artist = '', title = '';
+
+        // Пробуем разные форматы
+        const separators = [' - ', ' – ', ' — ', ' | '];
+        let found = false;
+
+        for (const sep of separators) {
+            if (line.includes(sep)) {
+                const parts = line.split(sep);
+                if (parts.length >= 2) {
+                    artist = parts[0].trim();
+                    title = parts.slice(1).join(sep).trim();
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // Формат "Название (Исполнитель)"
+        if (!found) {
+            const match = line.match(/(.+?)\s+\((.+?)\)$/);
+            if (match) {
+                title = match[1].trim();
+                artist = match[2].trim();
+                found = true;
+            }
+        }
+
+        // Если формат не распознан, считаем всю строку названием
+        if (!found) {
+            title = line;
+            artist = '';
+        }
+
+        tracks.push({ artist, title, original_line: line });
+    });
+
+    return tracks;
+}
+
+function clearTrackList() {
+    document.getElementById('trackList').value = '';
+    const progressDetails = document.getElementById('progressDetails');
+    if (progressDetails) progressDetails.innerHTML = '';
+}
+
+function updateDownloadProgress(current, total, status) {
+    const progressFill = document.getElementById('progressFill');
+    const progressStatus = document.getElementById('progressStatus');
+    const progressCount = document.getElementById('progressCount');
+    const progressPanel = document.getElementById('listSearchProgress');
+
+    if (progressFill && progressStatus && progressCount && progressPanel) {
+        const percent = total > 0 ? (current / total) * 100 : 0;
+        progressFill.style.width = `${percent}%`;
+        progressStatus.textContent = status;
+        progressCount.textContent = total > 0 ? `${current}/${total}` : '';
+        progressPanel.style.display = 'block';
+    }
+}
+
+// =========================
+// DESIGN MANAGEMENT FUNCTIONS
+// =========================
+
+async function saveDesignAsDefault() {
+    const saveBtn = document.getElementById('d_save_btn');
+    const statusEl = document.getElementById('d_save_status');
+
+    if (!saveBtn || !statusEl) return;
+
+    try {
+        saveBtn.disabled = true;
+        statusEl.style.display = 'block';
+        statusEl.textContent = '💾 Сохраняем дизайн...';
+        statusEl.className = 'status loading';
+
+        const designConfig = readDesignFromUI();
+
+        console.log('🎨 DESIGN CONFIG TO SAVE:', designConfig);
+
+        const response = await fetch(`${API_BASE}/config/presentation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(designConfig)
+        });
+
+        if (!response.ok) {
+            throw new Error('Ошибка сохранения');
+        }
+
+        const result = await response.json();
+        console.log('💾 DESIGN SAVE RESPONSE:', result);
+
+        statusEl.textContent = '✅ Дизайн сохранен как стандартный!';
+        statusEl.className = 'status success';
+
+        showNotification('Дизайн успешно сохранен как стандартный', 'success');
+
+    } catch (error) {
+        console.error('❌ Ошибка сохранения дизайна:', error);
+        statusEl.textContent = '❌ Ошибка сохранения дизайна';
+        statusEl.className = 'status error';
+        showNotification('Ошибка сохранения дизайна', 'error');
+    } finally {
+        setTimeout(() => {
+            statusEl.style.display = 'none';
+            saveBtn.disabled = false;
+        }, 3000);
+    }
+}
+
+async function loadSavedDesign() {
+    try {
+        console.log('🔄 Загружаем сохраненный дизайн...');
+        const response = await fetch(`${API_BASE}/config/presentation`);
+        if (!response.ok) {
+            console.log('❌ Не удалось загрузить дизайн, статус:', response.status);
+            return;
+        }
+
+        const config = await response.json();
+        console.log('📥 LOADED DESIGN CONFIG:', config);
+        applyDesignConfig(config);
+
+    } catch (error) {
+        console.error('❌ Ошибка загрузки дизайна:', error);
+    }
+}
+
+function applyDesignConfig(config) {
+    if (!config) {
+        console.log('⚠️ Конфигурация дизайна пустая');
+        return;
+    }
+
+    console.log('🎯 APPLYING DESIGN CONFIG:', config);
+
+    setValue('d_font_family', config.fontFamily || config.font_family);
+    setValue('d_title_size', config.titleSize || config.title_size);
+    setValue('d_text_size', config.textSize || config.text_size);
+    setChecked('d_bold_titles', config.boldTitles !== false);
+    setChecked('d_upper_titles', config.upperTitles || false);
+    setValue('d_text_color', config.textColor || config.text_color);
+    setValue('d_accent_color', config.accentColor || config.accent_color);
+
+    setValue('d_layout', config.layout);
+    setValue('d_photo_radius', config.photoRadius || config.photo_radius);
+
+    setChecked('d_show_numbers', config.showNumbers !== false);
+
+    const background = config.background || {};
+    const bgMode = background.mode || 'solid';
+    console.log('🎨 Background mode:', bgMode);
+
+    setRadioValue('bgMode', bgMode);
+    setValue('d_bg_color', background.color || '#121B2F');
+    setValue('d_grad_from', background.gradFrom || '#1A2340');
+    setValue('d_grad_to', background.gradTo || '#0F1623');
+
+    // Восстанавливаем фоновое изображение если есть
+    if (bgMode === 'image' && background.imageURL) {
+        const filename = background.imageURL.split('/').pop();
+        const downloadUrl = `${API_BASE}/download/${filename}`;
+        const bgPreview = document.getElementById('d_bg_preview');
+        if (bgPreview) {
+            bgPreview.src = downloadUrl;
+            bgPreview.style.display = 'block';
+        }
+        console.log('🎯 Восстановлен фон:', downloadUrl);
+    } else {
+        const bgPreview = document.getElementById('d_bg_preview');
+        if (bgPreview) {
+            bgPreview.style.display = 'none';
+            bgPreview.src = '';
+        }
+    }
+
+    // Восстанавливаем кастомную кнопку если есть
+    if (config.custom_button_path) {
+        const filename = config.custom_button_path.split('/').pop();
+        const downloadUrl = `${API_BASE}/download/${filename}`;
+        updateMiniConstructor(downloadUrl);
+        console.log('🎯 Восстановлена кастомная кнопка:', downloadUrl);
+    } else {
+        updateMiniConstructor(null);
+    }
+
+    toggleBgRows();
+    drawDesignPreview();
+
+    console.log('✅ Дизайн применен к UI');
+}
+
+function setValue(id, value) {
+    const element = document.getElementById(id);
+    if (element && value !== undefined) element.value = value;
+}
+
+function setChecked(id, checked) {
+    const element = document.getElementById(id);
+    if (element) element.checked = !!checked;
+}
+
+function setRadioValue(name, value) {
+    const radio = document.querySelector(`input[name="${name}"][value="${value}"]`);
+    if (radio) radio.checked = true;
 }
 
 // =========================
 // TIMING MANAGEMENT FUNCTIONS
 // =========================
 
-// Функция для сохранения всех таймингов в основной JSON
 async function saveAllTimings() {
     try {
         showNotification('💾 Сохраняем все тайминги в основной файл...', 'info');
@@ -151,17 +672,142 @@ async function saveAllTimings() {
     }
 }
 
-// Добавьте кнопку в тулбар
 function addTimingsButton() {
     const toolbar = document.querySelector('.toolbar');
     if (toolbar && !document.getElementById('saveTimingsBtn')) {
         const timingsBtn = document.createElement('button');
         timingsBtn.id = 'saveTimingsBtn';
         timingsBtn.className = 'btn btn-warning';
-        timingsBtn.innerHTML = '💾 Записать тайминги';
+        timingsBtn.innerHTML = '💾 Тайминги';
         timingsBtn.onclick = saveAllTimings;
         timingsBtn.title = 'Сохранить все тайминги отрезков в основной JSON файл';
         toolbar.appendChild(timingsBtn);
+    }
+}
+
+// =========================
+// PRESENTATION GENERATION FUNCTIONS
+// =========================
+
+async function generatePresentation() {
+    const statusId = 'presentationStatus';
+    showStatus(statusId, '🔄 Генерируем презентацию по шаблону PDF...', 'loading');
+
+    try {
+        const pptType = 'pptx';
+        const templateId = 'presentation_default';
+
+        const countNow = await fetch(`${API_BASE}/tracks/count`).then(r => r.ok ? r.json() : { count: currentTracks.length }).then(d => d.count ?? currentTracks.length);
+        if (countNow < 40) {
+            showStatus(statusId, `❌ Для генерации презентации нужно минимум 120 треков (сейчас: ${countNow})`, 'error');
+            showNotification(`Нужно больше треков: ${countNow}/40`, 'warning');
+            updateGenerateButtonState(countNow);
+            return;
+        }
+
+        const designConfig = readDesignFromUI();
+        console.log('🚀 GENERATING PRESENTATION WITH DESIGN:', designConfig);
+
+        const requestBody = {
+            template_id: templateId,
+            output: pptType,
+            design: designConfig,
+            rounds: [
+                { name: "Раунд 1", numbers: Array.from({ length: 40 }, (_, i) => i + 1) },
+                { name: "Раунд 2", numbers: Array.from({ length: 40 }, (_, i) => i + 1) },
+                { name: "Раунд 3", numbers: Array.from({ length: 40 }, (_, i) => i + 1) }
+            ]
+        };
+
+        console.log('📤 API REQUEST BODY:', requestBody);
+
+        const response = await fetch(`${API_BASE}/presentation/build`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            console.error('❌ API ERROR:', errorData);
+            throw new Error(errorData.detail || 'Ошибка генерации презентации');
+        }
+
+        const result = await response.json();
+        console.log('✅ PRESENTATION GENERATION RESULT:', result);
+
+        if (result.success) {
+            const downloadHref = `${API_BASE}/download/${result.file}`;
+            showStatus(
+                statusId,
+                `✅ Презентация по шаблону PDF готова!<br>
+                 <strong>Треков использовано:</strong> ${result.tracks_count}<br>
+                 <strong>Формат:</strong> ${pptType.toUpperCase()}<br>
+                 <a href="${downloadHref}" class="download-link" download>
+                    📥 Скачать презентацию
+                 </a>`,
+                'success'
+            );
+            showNotification('Презентация успешно создана по шаблону PDF!', 'success');
+        } else {
+            throw new Error(result.message || 'Ошибка генерации');
+        }
+
+    } catch (error) {
+        console.error('❌ Ошибка генерации презентации:', error);
+        showStatus(statusId, `❌ Ошибка: ${error.message}`, 'error');
+        showNotification('Ошибка создания презентации', 'error');
+    } finally {
+        updateTracksCount();
+    }
+}
+
+async function generateTickets() {
+    const count = parseInt(document.getElementById('ticketsCount').value) || 24;
+
+    if (count < 1 || count > 100) {
+        showNotification('Количество билетов должно быть от 1 до 100', 'warning');
+        return;
+    }
+
+    showStatus('ticketsStatus', '🔄 Генерируем билеты...', 'loading');
+
+    try {
+        const response = await fetch(`${API_BASE}/tickets/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                count: count,
+                template_id: 'tickets_default'
+            })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || 'Ошибка генерации');
+        }
+
+        const result = await response.json();
+
+        if (result.success) {
+            const downloadHref = `${API_BASE}/download/${result.file}`;
+            showStatus('ticketsStatus',
+                `✅ ${result.message}<br>
+                 <a href="${downloadHref}" class="download-link" download>
+                    📥 Скачать билеты (PDF)
+                 </a>`,
+                'success'
+            );
+
+            showNotification(`Создано ${count} билетов!`, 'success');
+        } else {
+            throw new Error(result.message || 'Ошибка генерации');
+        }
+
+    } catch (error) {
+        console.error('Ошибка генерации билетов:', error);
+        showStatus('ticketsStatus', `❌ Ошибка: ${error.message}`, 'error');
+        showNotification('Ошибка создания билетов', 'error');
     }
 }
 
@@ -179,6 +825,7 @@ function initTabs() {
                 loadSystemStatus();
             } else if (btn.dataset.tab === 'presentation') {
                 updateTracksCount();
+                initPresentationDesigner();
             }
         });
     });
@@ -208,6 +855,8 @@ async function loadTracks() {
 // Отображение треков
 function renderTracks(tracks) {
     const container = document.getElementById('tracksList');
+
+    if (!container) return;
 
     if (tracks.length === 0) {
         container.innerHTML = `
@@ -242,16 +891,16 @@ function renderTracks(tracks) {
             </div>
             <div class="col-actions">
                 <button class="btn btn-secondary btn-small" onclick="openAudioEditor(${track.id})" title="Аудио редактор">
-                    🎚️ Редактор
+                    🎚️
                 </button>
                 <button class="btn btn-secondary btn-small" onclick="editTrack(${track.id})" title="Редактировать метаданные">
-                    ✏️ Текст
+                    ✏️
                 </button>
                 <button class="btn btn-secondary btn-small" onclick="addArtistPhoto(${track.id})" title="Добавить фото артиста">
-                    📷 Фото
+                    📷
                 </button>
                 <button class="btn btn-danger btn-small" onclick="deleteTrack(${track.id})" title="Удалить">
-                    🗑️ Удалить
+                    🗑️
                 </button>
             </div>
         </div>
@@ -260,58 +909,211 @@ function renderTracks(tracks) {
 
 // Загрузка файлов
 async function handleFileUpload(event) {
-    const files = event.target.files;
-    if (files.length === 0 || isUploading) return;
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) return;
 
-    isUploading = true;
-    showStatus('mediaStatus', `🔄 Загружаем ${files.length} файл(ов)...`, 'loading');
+    isUploading = false;
+
+    const alreadyPlanned = uploadQueue.length + currentUploads.size;
+    const allowed = Math.max(0, MAX_FILES_TOTAL - alreadyPlanned);
+    const toEnqueue = files.slice(0, allowed);
+    const skipped = files.length - toEnqueue.length;
+
+    if (skipped > 0) {
+        showNotification(`Лимит ${MAX_FILES_TOTAL} файлов. Пропущено: ${skipped}`, 'warning');
+    }
+
+    toEnqueue.forEach(file => {
+        const id = ++uploadCounter;
+        file.__id = id;
+        uploadQueue.push(file);
+        createUploadRow(file, id);
+    });
+
+    event.target.value = '';
+
+    pumpUploadQueue();
+
+    showStatus('mediaStatus', `🔄 План загрузок: ${toEnqueue.length}, активных сейчас: ${activeUploads}`, 'loading');
+}
+
+function pumpUploadQueue() {
+    updateUploadSummaryText();
+    while (activeUploads < MAX_CONCURRENT_UPLOADS && uploadQueue.length > 0) {
+        const file = uploadQueue.shift();
+        if (!file) break;
+        uploadSingleFile(file);
+    }
+}
+
+function uploadSingleFile(file) {
+    const id = file.__id;
+    const url = `${API_BASE}/tracks/upload`;
 
     const formData = new FormData();
-    for (let file of files) {
-        if (file.size > 100 * 1024 * 1024) {
-            showNotification(`Файл ${file.name} слишком большой (макс. 100MB)`, 'error');
-            continue;
+    formData.append('files', file);
+
+    const xhr = new XMLHttpRequest();
+    currentUploads.set(id, { xhr, file });
+
+    setUploadStatus(id, 'Подключение…');
+
+    xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+            const percent = Math.min(99, Math.round((e.loaded / e.total) * 100));
+            setUploadProgress(id, percent);
+            setUploadStatus(id, `Загрузка ${percent}%`);
         }
-        formData.append('files', file);
-    }
+    };
 
-    try {
-        const response = await fetch(`${API_BASE}/tracks/upload`, {
-            method: 'POST',
-            body: formData
-        });
+    xhr.onloadstart = () => {
+        activeUploads++;
+        updateUploadSummaryText();
+    };
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+    xhr.onerror = () => {
+        finishUploadRow(id, false);
+        currentUploads.delete(id);
+        activeUploads = Math.max(0, activeUploads - 1);
+        showStatus('mediaStatus', `❌ Ошибка загрузки: ${file.name}`, 'error');
+        pumpUploadQueue();
+    };
+
+    xhr.onabort = () => {
+        setUploadStatus(id, 'Отменено', 'warning');
+        setUploadProgress(id, 0);
+        currentUploads.delete(id);
+        activeUploads = Math.max(0, activeUploads - 1);
+        pumpUploadQueue();
+        updateUploadSummaryText();
+    };
+
+    xhr.onload = async () => {
+        let ok = (xhr.status >= 200 && xhr.status < 300);
+        if (ok) {
+            try {
+                const res = JSON.parse(xhr.responseText || '{}');
+                if (res.errors && res.errors.length) {
+                    ok = false;
+                }
+            } catch {
+            }
         }
-
-        const result = await response.json();
-
-        if (result.errors && result.errors.length > 0) {
-            showStatus('mediaStatus', `⚠️ Загружено с ошибками: ${result.errors.join(', ')}`, 'warning');
+        if (ok) {
+            finishUploadRow(id, true);
         } else {
-            showStatus('mediaStatus', `✅ ${result.message}`, 'success');
+            finishUploadRow(id, false);
         }
 
-        // Загружаем обновленный список треков
-        await loadTracks();
+        currentUploads.delete(id);
+        activeUploads = Math.max(0, activeUploads - 1);
 
-    } catch (error) {
-        console.error('Ошибка загрузки:', error);
-        showStatus('mediaStatus', `❌ Ошибка: ${error.message}`, 'error');
-    } finally {
-        // Сбрасываем input и снимаем блокировку
-        event.target.value = '';
-        isUploading = false;
+        try { await loadTracks(); } catch { }
+
+        pumpUploadQueue();
+        updateUploadSummaryText();
+    };
+
+    xhr.open('POST', url, true);
+    xhr.send(formData);
+}
+
+function showUploadPanel(show) {
+    const panel = uploadPanel();
+    if (!panel) return;
+    panel.style.display = show ? 'block' : 'none';
+}
+
+function updateUploadSummaryText() {
+    const total = currentUploads.size + uploadQueue.length;
+    const inFlight = activeUploads;
+    const pending = uploadQueue.length;
+    if (total === 0) {
+        uploadSummary().textContent = 'Загрузок нет';
+        cancelAllBtn().style.display = 'none';
+        showUploadPanel(false);
+    } else {
+        uploadSummary().textContent = `Загрузки: выполняется ${inFlight}, в очереди ${pending} (всего ${total})`;
+        cancelAllBtn().style.display = 'inline-flex';
+        showUploadPanel(true);
     }
+}
+
+function createUploadRow(file, id) {
+    const row = document.createElement('div');
+    row.className = 'upload-row';
+    row.id = `upload-row-${id}`;
+    row.innerHTML = `
+        <div class="upload-row-top">
+            <span class="upload-file-name" title="${file.name}">${file.name}</span>
+            <span class="upload-percent" id="upload-percent-${id}">0%</span>
+        </div>
+        <div class="upload-progressbar">
+            <div class="upload-bar" id="upload-bar-${id}" style="width:0%"></div>
+        </div>
+        <div class="upload-row-bottom">
+            <span class="upload-status" id="upload-status-${id}">Ожидание...</span>
+            <button class="btn btn-small btn-danger" id="upload-cancel-${id}">Отмена</button>
+        </div>
+    `;
+    uploadRows().appendChild(row);
+    document.getElementById(`upload-cancel-${id}`).onclick = () => cancelSingleUpload(id);
+    updateUploadSummaryText();
+    return row;
+}
+
+function setUploadProgress(id, percent) {
+    const bar = document.getElementById(`upload-bar-${id}`);
+    const pct = document.getElementById(`upload-percent-${id}`);
+    if (bar) bar.style.width = `${percent}%`;
+    if (pct) pct.textContent = `${percent}%`;
+}
+
+function setUploadStatus(id, text, kind = 'info') {
+    const el = document.getElementById(`upload-status-${id}`);
+    if (!el) return;
+    el.textContent = text;
+    el.className = `upload-status ${kind}`;
+}
+
+function finishUploadRow(id, ok = true) {
+    setUploadProgress(id, 100);
+    setUploadStatus(id, ok ? 'Готово' : 'Ошибка', ok ? 'success' : 'error');
+    const btn = document.getElementById(`upload-cancel-${id}`);
+    if (btn) btn.disabled = true;
+}
+
+function removeUploadRow(id) {
+    const row = document.getElementById(`upload-row-${id}`);
+    if (row && row.parentElement) row.parentElement.removeChild(row);
+    updateUploadSummaryText();
+}
+
+function cancelSingleUpload(id) {
+    const rec = currentUploads.get(id);
+    if (rec && rec.xhr) {
+        try { rec.xhr.abort(); } catch (e) { }
+    } else {
+        uploadQueue = uploadQueue.filter(item => item.__id !== id);
+        removeUploadRow(id);
+        updateUploadSummaryText();
+    }
+}
+
+function cancelAllUploads() {
+    for (const [id, rec] of currentUploads.entries()) {
+        try { rec.xhr && rec.xhr.abort(); } catch (e) { }
+    }
+    uploadQueue = [];
+    currentUploads.clear();
+    uploadRows().innerHTML = '';
+    updateUploadSummaryText();
 }
 
 // =========================
 // ARTIST PHOTO FUNCTIONS
 // =========================
 
-// Функция для добавления фото артиста
 async function addArtistPhoto(trackId) {
     const track = currentTracks.find(t => t.id === trackId);
     if (!track) {
@@ -323,12 +1125,10 @@ async function addArtistPhoto(trackId) {
     currentPhotoUrls = [];
     currentPhotoIndex = 0;
 
-    // Показываем модальное окно
     document.getElementById('photoArtistName').textContent = track.artist;
     document.getElementById('photoPreview').style.display = 'none';
     document.getElementById('photoStatus').style.display = 'none';
 
-    // Очищаем предыдущую навигацию
     const previewContainer = document.getElementById('photoPreview');
     const existingNav = previewContainer.querySelector('.photo-navigation');
     if (existingNav) {
@@ -338,7 +1138,6 @@ async function addArtistPhoto(trackId) {
     document.getElementById('photoModal').style.display = 'block';
 }
 
-// Функция для поиска фото в интернете
 async function searchArtistPhoto() {
     if (!currentPhotoTrackId || isSearchingPhotos) return;
 
@@ -351,9 +1150,7 @@ async function searchArtistPhoto() {
     try {
         const response = await fetch(`${API_BASE}/tracks/${currentPhotoTrackId}/search-artist-photo`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 artist: track.artist,
                 get_multiple: true
@@ -389,7 +1186,6 @@ async function searchArtistPhoto() {
     }
 }
 
-// Показать текущее фото
 function showCurrentPhoto() {
     if (currentPhotoUrls.length === 0) return;
 
@@ -397,11 +1193,9 @@ function showCurrentPhoto() {
     const previewImg = document.getElementById('photoPreviewImage');
     const previewContainer = document.getElementById('photoPreview');
 
-    // Показываем загрузку
     previewImg.style.display = 'none';
     previewContainer.style.display = 'block';
 
-    // Загружаем изображение
     const img = new Image();
     img.onload = function () {
         previewImg.src = photoUrl;
@@ -415,7 +1209,6 @@ function showCurrentPhoto() {
     img.src = photoUrl;
 }
 
-// Обновить навигацию по фото
 function updatePhotoNavigation() {
     const previewContainer = document.getElementById('photoPreview');
     const existingNav = previewContainer.querySelector('.photo-navigation');
@@ -425,27 +1218,27 @@ function updatePhotoNavigation() {
     }
 
     const navHtml = `
-        <div class="photo-navigation" style="margin-top: 15px;">
-            <div style="display: flex; gap: 10px; justify-content: center; align-items: center; margin-bottom: 10px;">
-                <button class="btn btn-small" onclick="previousPhoto()" ${currentPhotoIndex === 0 ? 'disabled' : ''} style="min-width: 80px;">
-                    ⬅️ Назад
+        <div class="photo-navigation">
+            <div style="display: flex; gap: 8px; justify-content: center; align-items: center; margin-bottom: 10px;">
+                <button class="btn btn-small" onclick="previousPhoto()" ${currentPhotoIndex === 0 ? 'disabled' : ''}>
+                    ⬅️
                 </button>
-                <span style="color: var(--text-muted); font-weight: 600; min-width: 60px; text-align: center;">
+                <span style="color: var(--text-muted); font-weight: 600; min-width: 50px; text-align: center; font-size: 12px;">
                     ${currentPhotoIndex + 1} / ${currentPhotoUrls.length}
                 </span>
-                <button class="btn btn-small" onclick="nextPhoto()" ${currentPhotoIndex === currentPhotoUrls.length - 1 ? 'disabled' : ''} style="min-width: 80px;">
-                    Вперед ➡️
+                <button class="btn btn-small" onclick="nextPhoto()" ${currentPhotoIndex === currentPhotoUrls.length - 1 ? 'disabled' : ''}>
+                    ➡️
                 </button>
             </div>
-            <div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">
-                <button class="btn btn-small btn-primary" onclick="saveCurrentPhoto()" style="min-width: 140px;">
-                    ✅ Сохранить это фото
+            <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                <button class="btn btn-small btn-primary" onclick="saveCurrentPhoto()">
+                    ✅ Сохранить
                 </button>
-                <button class="btn btn-small btn-secondary" onclick="searchArtistPhoto()" ${isSearchingPhotos ? 'disabled' : ''} style="min-width: 140px;">
-                    ${isSearchingPhotos ? '🔍 Поиск...' : '🔄 Найти другие'}
+                <button class="btn btn-small btn-secondary" onclick="searchArtistPhoto()" ${isSearchingPhotos ? 'disabled' : ''}>
+                    🔄 Ещё
                 </button>
-                <button class="btn btn-small btn-warning" onclick="uploadArtistPhoto()" style="min-width: 140px;">
-                    📁 Загрузить своё
+                <button class="btn btn-small btn-warning" onclick="uploadArtistPhoto()">
+                    📁 Своё
                 </button>
             </div>
         </div>
@@ -453,7 +1246,6 @@ function updatePhotoNavigation() {
     previewContainer.insertAdjacentHTML('beforeend', navHtml);
 }
 
-// Навигация по фото
 function previousPhoto() {
     if (currentPhotoIndex > 0) {
         currentPhotoIndex--;
@@ -468,7 +1260,6 @@ function nextPhoto() {
     }
 }
 
-// Сохранить текущее фото
 async function saveCurrentPhoto() {
     if (!currentPhotoTrackId || currentPhotoUrls.length === 0) return;
 
@@ -479,9 +1270,7 @@ async function saveCurrentPhoto() {
     try {
         const response = await fetch(`${API_BASE}/tracks/${currentPhotoTrackId}/save-artist-photo`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 photo_url: photoUrl,
                 artist: currentTracks.find(t => t.id === currentPhotoTrackId).artist
@@ -498,7 +1287,7 @@ async function saveCurrentPhoto() {
             showPhotoStatus('✅ Фото артиста сохранено!', 'success');
             setTimeout(() => {
                 closePhotoModal();
-                loadTracks(); // Обновляем список треков
+                loadTracks();
             }, 1500);
         } else {
             showPhotoStatus('❌ Ошибка сохранения фото', 'error');
@@ -510,7 +1299,6 @@ async function saveCurrentPhoto() {
     }
 }
 
-// Функция для загрузки своего фото
 function uploadArtistPhoto() {
     const input = document.createElement('input');
     input.type = 'file';
@@ -520,7 +1308,6 @@ function uploadArtistPhoto() {
         const file = e.target.files[0];
         if (!file) return;
 
-        // Проверяем тип файла
         if (!file.type.startsWith('image/')) {
             showPhotoStatus('❌ Пожалуйста, выберите изображение', 'error');
             return;
@@ -547,7 +1334,7 @@ function uploadArtistPhoto() {
                 showPhotoStatus('✅ Фото артиста загружено!', 'success');
                 setTimeout(() => {
                     closePhotoModal();
-                    loadTracks(); // Обновляем список треков
+                    loadTracks();
                 }, 1500);
             } else {
                 showPhotoStatus('❌ Ошибка загрузки фото', 'error');
@@ -562,17 +1349,17 @@ function uploadArtistPhoto() {
     input.click();
 }
 
-// Вспомогательная функция для показа статуса
 function showPhotoStatus(message, type) {
     const statusElement = document.getElementById('photoStatus');
+    if (!statusElement) return;
     statusElement.innerHTML = message;
     statusElement.className = `status ${type}`;
     statusElement.style.display = 'block';
 }
 
-// Закрытие модального окна
 function closePhotoModal() {
-    document.getElementById('photoModal').style.display = 'none';
+    const modal = document.getElementById('photoModal');
+    if (modal) modal.style.display = 'none';
     currentPhotoTrackId = null;
     currentPhotoUrls = [];
     currentPhotoIndex = 0;
@@ -583,7 +1370,6 @@ function closePhotoModal() {
 // TRACK MANAGEMENT FUNCTIONS
 // =========================
 
-// Редактирование трека
 async function editTrack(trackId) {
     const track = currentTracks.find(t => t.id === trackId);
     if (!track) {
@@ -593,23 +1379,19 @@ async function editTrack(trackId) {
 
     currentEditingTrack = track;
 
-    // Заполняем форму
     document.getElementById('editTrackId').value = track.id;
     document.getElementById('editArtist').value = track.artist;
     document.getElementById('editTitle').value = track.title;
 
-    // Показываем модальное окно
     document.getElementById('editModal').style.display = 'block';
 }
 
-// Закрытие модального окна редактирования
 function closeEditModal() {
     document.getElementById('editModal').style.display = 'none';
     currentEditingTrack = null;
-    document.getElementById('editForm').reset();
+    document.getElementById('editForm')?.reset();
 }
 
-// Сохранение трека
 async function saveTrack(event) {
     event.preventDefault();
 
@@ -625,23 +1407,18 @@ async function saveTrack(event) {
     try {
         const response = await fetch(`${API_BASE}/tracks/${trackId}`, {
             method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                artist: artist,
-                title: title
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ artist, title })
         });
 
         if (!response.ok) {
-            const errorData = await response.json();
+            const errorData = await response.json().catch(() => ({}));
             throw new Error(errorData.detail || 'Ошибка обновления');
         }
 
         showNotification('Трек успешно обновлен', 'success');
         closeEditModal();
-        await loadTracks(); // Перезагружаем список
+        await loadTracks();
 
     } catch (error) {
         console.error('Ошибка сохранения:', error);
@@ -649,24 +1426,19 @@ async function saveTrack(event) {
     }
 }
 
-// Удаление трека
 async function deleteTrack(trackId) {
-    if (!confirm('Вы уверены, что хотите удалить этот трек?')) {
-        return;
-    }
+    if (!confirm('Вы уверены, что хотите удалить этот трек?')) return;
 
     try {
-        const response = await fetch(`${API_BASE}/tracks/${trackId}`, {
-            method: 'DELETE'
-        });
+        const response = await fetch(`${API_BASE}/tracks/${trackId}`, { method: 'DELETE' });
 
         if (!response.ok) {
-            const errorData = await response.json();
+            const errorData = await response.json().catch(() => ({}));
             throw new Error(errorData.detail || 'Ошибка удаления');
         }
 
         showNotification('Трек успешно удален', 'success');
-        await loadTracks(); // Перезагружаем список
+        await loadTracks();
 
     } catch (error) {
         console.error('Ошибка удаления:', error);
@@ -674,26 +1446,21 @@ async function deleteTrack(trackId) {
     }
 }
 
-// Очистка всех треков
 async function clearTracks() {
-    if (!confirm('Вы уверены, что хотите очистить всю медиатеку? Это действие нельзя отменить.')) {
-        return;
-    }
+    if (!confirm('Вы уверены, что хотите очистить всю медиатеку? Это действие нельзя отменить.')) return;
 
     showStatus('mediaStatus', '🔄 Очищаем медиатеку...', 'loading');
 
     try {
-        const response = await fetch(`${API_BASE}/tracks`, {
-            method: 'DELETE'
-        });
+        const response = await fetch(`${API_BASE}/tracks`, { method: 'DELETE' });
 
         if (!response.ok) {
-            const errorData = await response.json();
+            const errorData = await response.json().catch(() => ({}));
             throw new Error(errorData.detail || 'Ошибка очистки');
         }
 
         showStatus('mediaStatus', '✅ Медиатека очищена', 'success');
-        await loadTracks(); // Перезагружаем список
+        await loadTracks();
 
     } catch (error) {
         console.error('Ошибка очистки:', error);
@@ -701,91 +1468,15 @@ async function clearTracks() {
     }
 }
 
-// Генерация презентации
-async function generatePresentation() {
-    const statusElement = document.getElementById('presentationStatus');
-    showStatus('presentationStatus', '🔄 Генерируем презентацию...', 'loading');
-
-    try {
-        const response = await fetch(`${API_BASE}/generate/presentation`, {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Ошибка генерации');
-        }
-
-        const result = await response.json();
-
-        showStatus('presentationStatus',
-            `✅ ${result.message} 
-             <br><a href="${API_BASE}/download/${result.file_name}" class="download-link" download>
-                 📥 Скачать презентацию
-             </a>`,
-            'success'
-        );
-
-        showNotification('Презентация успешно создана!', 'success');
-
-    } catch (error) {
-        console.error('Ошибка генерации презентации:', error);
-        showStatus('presentationStatus', `❌ Ошибка: ${error.message}`, 'error');
-        showNotification('Ошибка создания презентации', 'error');
-    }
-}
-
-// Генерация билетов
-async function generateTickets() {
-    const count = parseInt(document.getElementById('ticketsCount').value) || 24;
-
-    if (count < 1 || count > 100) {
-        showNotification('Количество билетов должно быть от 1 до 100', 'warning');
-        return;
-    }
-
-    const statusElement = document.getElementById('ticketsStatus');
-    showStatus('ticketsStatus', '🔄 Генерируем билеты...', 'loading');
-
-    try {
-        const response = await fetch(`${API_BASE}/generate/tickets?count=${count}`, {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Ошибка генерации');
-        }
-
-        const result = await response.json();
-
-        showStatus('ticketsStatus',
-            `✅ ${result.message} 
-             <br><a href="${API_BASE}/download/${result.file_name}" class="download-link" download>
-                 📥 Скачать билеты (PDF)
-             </a>`,
-            'success'
-        );
-
-        showNotification(`Создано ${count} билетов!`, 'success');
-
-    } catch (error) {
-        console.error('Ошибка генерации билетов:', error);
-        showStatus('ticketsStatus', `❌ Ошибка: ${error.message}`, 'error');
-        showNotification('Ошибка создания билетов', 'error');
-    }
-}
-
 // Загрузка статуса системы
 async function loadSystemStatus() {
     const container = document.getElementById('systemStatus');
+    if (!container) return;
     container.innerHTML = '<p>🔄 Загружаем информацию о системе...</p>';
 
     try {
         const response = await fetch(`${API_BASE}/status`);
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
         const status = await response.json();
 
@@ -802,6 +1493,10 @@ async function loadSystemStatus() {
                 <div class="status-item ${status.tracks_with_photos > 0 ? 'success' : 'warning'}">
                     <span class="label">Треков с фото:</span>
                     <span class="value">${status.tracks_with_photos || 0}</span>
+                </div>
+                <div class="status-item ${status.musical_loto_ready ? 'success' : 'warning'}">
+                    <span class="label">Готовность к лото:</span>
+                    <span class="value">${status.musical_loto_ready ? '✅ Готово' : '❌ Недостаточно треков'}</span>
                 </div>
                 <div class="status-item">
                     <span class="label">Версия приложения:</span>
@@ -824,14 +1519,59 @@ async function loadSystemStatus() {
     }
 }
 
-// Обновление счетчика треков
-function updateTracksCount() {
-    document.getElementById('tracksCount').textContent = currentTracks.length;
+// ===== КЛЮЧЕВОЕ: корректный счётчик треков из /api/tracks/count =====
+async function updateTracksCount() {
+    try {
+        const res = await fetch(`${API_BASE}/tracks/count`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const count = Number(data.count ?? 0);
+
+        const countElement = document.getElementById('tracksCount');
+        if (countElement) countElement.textContent = count;
+
+        const infoBox = document.querySelector('.info-box');
+        if (infoBox) {
+            if (count >= 40) {
+                infoBox.innerHTML = `<strong>✅ Готово к генерации! Треков: ${count}</strong>`;
+            } else {
+                infoBox.innerHTML = `<strong>⚠️ Нужно ещё ${120 - count} треков. Сейчас: ${count}</strong>`;
+            }
+        }
+
+        const banner = document.querySelector('[data-id="tracks-needed"]') || document.querySelector('.notice');
+        if (banner) {
+            banner.textContent = (count >= 40)
+                ? `Готово к генерации. Треков: ${count}`
+                : `Нужно ещё ${Math.max(40 - count, 0)} треков. Сейчас: ${count}`;
+        }
+
+        const badge = document.querySelector('[data-id="tracks-badge"]');
+        if (badge) badge.textContent = `${Math.min(count, 40)}/40`;
+
+        updateGenerateButtonState(count);
+
+    } catch (e) {
+        console.warn('Не удалось обновить счётчик треков:', e);
+        updateGenerateButtonState(0);
+    }
+}
+
+function updateGenerateButtonState(count) {
+    const btn = getGenerateBtn();
+    if (!btn) return;
+
+    const ready = count >= 40;
+    btn.disabled = !ready;
+    btn.title = ready
+        ? 'Сгенерировать презентацию'
+        : `Нужно минимум 40 треков (сейчас: ${count})`;
 }
 
 // Показать статус
 function showStatus(elementId, message, type = 'info') {
     const element = document.getElementById(elementId);
+    if (!element) return;
     element.innerHTML = message;
     element.className = `status ${type}`;
 }
@@ -840,7 +1580,6 @@ function showStatus(elementId, message, type = 'info') {
 // AUDIO EDITOR FUNCTIONS
 // =========================
 
-// Открытие аудио-редактора
 async function openAudioEditor(trackId) {
     console.log('Opening audio editor for track:', trackId);
 
@@ -851,38 +1590,29 @@ async function openAudioEditor(trackId) {
 
     currentEditorTrack = trackId;
 
-    // Загружаем информацию о треке
     const track = await loadTrackInfo(trackId);
     if (!track) {
         showNotification('Ошибка загрузки трека', 'error');
         return;
     }
 
-    // Устанавливаем начальные значения
     segmentStart = track.segment_start || 0;
     segmentDuration = track.segment_duration || 30;
     totalTrackDuration = track.duration || 180;
 
-    // Показываем модальное окно
     document.getElementById('audioEditorModal').style.display = 'block';
 
-    // Обновляем информацию о треке
     updateTrackInfo(track);
 
-    // Загружаем и отображаем waveform
     await loadWaveform(trackId);
 
-    // Обновляем таймлайн
     updateTimelineDisplay();
 
-    // Скрываем результаты анализа
     document.getElementById('analysisInfo').style.display = 'none';
 
-    // Создаем аудио элемент для воспроизведения
     initAudioPlayer();
 }
 
-// Инициализация аудио плеера
 function initAudioPlayer() {
     if (audioElement) {
         audioElement.pause();
@@ -908,7 +1638,6 @@ function initAudioPlayer() {
     });
 }
 
-// Закрытие редактора
 function closeAudioEditor() {
     stopPlayback();
     document.getElementById('audioEditorModal').style.display = 'none';
@@ -921,7 +1650,6 @@ function closeAudioEditor() {
     }
 }
 
-// Загрузка информации о треке для редактора
 async function loadTrackInfo(trackId) {
     try {
         const response = await fetch(`${API_BASE}/tracks`);
@@ -935,19 +1663,19 @@ async function loadTrackInfo(trackId) {
     }
 }
 
-// Обновление информации о треке в редактора
 function updateTrackInfo(track) {
     const infoElement = document.getElementById('editorTrackInfo');
+    if (!infoElement) return;
     infoElement.innerHTML = `
         <h4>${escapeHtml(track.artist)} - ${escapeHtml(track.title)}</h4>
         <p>Файл: ${track.original_filename}</p>
         <p class="text-muted">Текущий отрезок: ${formatTime(track.segment_start || 0)} - ${formatTime((track.segment_start || 0) + (track.segment_duration || 30))}</p>
     `;
 
-    document.getElementById('totalDurationDisplay').textContent = formatTime(totalTrackDuration);
+    const totalEl = document.getElementById('totalDurationDisplay');
+    if (totalEl) totalEl.textContent = formatTime(totalTrackDuration);
 }
 
-// Загрузка waveform
 async function loadWaveform(trackId) {
     if (isGeneratingWaveform) {
         console.log('Waveform generation already in progress');
@@ -955,6 +1683,7 @@ async function loadWaveform(trackId) {
     }
 
     const container = document.getElementById('waveformContainer');
+    if (!container) return;
     container.innerHTML = '<div class="waveform-loading">Генерация waveform...</div>';
 
     isGeneratingWaveform = true;
@@ -974,7 +1703,7 @@ async function loadWaveform(trackId) {
                 <div class="segment-marker" id="segmentMarker">
                     <div class="segment-handle segment-handle-left" id="handleLeft" 
                          onmousedown="startDrag(event, 'left')"></div>
-                    <div class="segment-handle segment-handle-right" id="handleRight"
+                    <div class="segment-handle segment-handle-right" id="handleRight" 
                          onmousedown="startDrag(event, 'right')"></div>
                 </div>
             `;
@@ -989,24 +1718,19 @@ async function loadWaveform(trackId) {
     }
 }
 
-// Обработчик ошибки загрузки waveform
 function handleWaveformError() {
     const container = document.getElementById('waveformContainer');
-    container.innerHTML = '<div class="waveform-loading">Ошибка загрузки изображения waveform</div>';
+    if (container) container.innerHTML = '<div class="waveform-loading">Ошибка загрузки изображения waveform</div>';
     isGeneratingWaveform = false;
 }
 
-// Инициализация маркера отрезка
 function initSegmentMarker() {
     updateSegmentMarker();
     const marker = document.getElementById('segmentMarker');
-    if (marker) {
-        marker.style.display = 'block';
-    }
+    if (marker) marker.style.display = 'block';
     isGeneratingWaveform = false;
 }
 
-// Обновление позиции маркера отрезка
 function updateSegmentMarker() {
     const marker = document.getElementById('segmentMarker');
     const container = document.getElementById('waveformContainer');
@@ -1020,12 +1744,10 @@ function updateSegmentMarker() {
     marker.style.width = durationPercent + '%';
 }
 
-// Обновление отображения времени
 function updateTimelineDisplay() {
     const startTime = segmentStart;
     const endTime = Math.min(segmentStart + segmentDuration, totalTrackDuration);
 
-    // Обновляем все отображения времени
     const timeElements = [
         'timeDisplay',
         'segmentStartTime',
@@ -1047,23 +1769,22 @@ function updateTimelineDisplay() {
         }
     });
 
-    document.getElementById('segmentDurationDisplay').textContent = `${segmentDuration} сек`;
-    document.getElementById('previewInfo').textContent = `Начните с ${formatTime(startTime)}, длительность ${segmentDuration} секунд`;
+    const durEl = document.getElementById('segmentDurationDisplay');
+    if (durEl) durEl.textContent = `${segmentDuration} сек`;
+    const prevInfo = document.getElementById('previewInfo');
+    if (prevInfo) prevInfo.textContent = `Начните с ${formatTime(startTime)}, длительность ${segmentDuration} секунд`;
 
-    // Обновляем слайдер
     const slider = document.getElementById('timeSlider');
     if (slider) {
         const maxValue = Math.max(0, totalTrackDuration - segmentDuration);
         slider.max = maxValue;
         slider.value = segmentStart;
-
         slider.disabled = maxValue <= 0;
     }
 
     updateSegmentMarker();
 }
 
-// Перемещение отрезка
 function moveSegment(seconds) {
     const newStart = segmentStart + seconds;
 
@@ -1078,25 +1799,21 @@ function moveSegment(seconds) {
     updateTimelineDisplay();
 }
 
-// Установка отрезка в начало
 function setSegmentToStart() {
     segmentStart = 0;
     updateTimelineDisplay();
 }
 
-// Установка отрезка в середину
 function setSegmentToMiddle() {
     segmentStart = Math.max(0, (totalTrackDuration - segmentDuration) / 2);
     updateTimelineDisplay();
 }
 
-// Установка отрезка в конец
 function setSegmentToEnd() {
     segmentStart = Math.max(0, totalTrackDuration - segmentDuration);
     updateTimelineDisplay();
 }
 
-// Умный анализ отрезка
 async function suggestBestSegment() {
     if (!currentEditorTrack) return;
 
@@ -1127,7 +1844,6 @@ async function suggestBestSegment() {
     }
 }
 
-// Показать результаты анализа
 function showAnalysisResults(analysis) {
     const analysisInfo = document.getElementById('analysisInfo');
     const analysisResult = document.getElementById('analysisResult');
@@ -1160,15 +1876,12 @@ function showAnalysisResults(analysis) {
     analysisResult.innerHTML = html;
 }
 
-// Воспроизведение отрезка
 async function playSegment() {
     if (!currentEditorTrack || isPlaying) return;
 
     try {
         const track = await loadTrackInfo(currentEditorTrack);
-        if (!track) {
-            throw new Error('Track not found');
-        }
+        if (!track) throw new Error('Track not found');
 
         const segmentUrl = `${API_BASE}/tracks/${currentEditorTrack}/segment-file?start_time=${segmentStart}&duration=${segmentDuration}`;
 
@@ -1178,10 +1891,7 @@ async function playSegment() {
         audioElement.currentTime = 0;
 
         const playPromise = audioElement.play();
-
-        if (playPromise !== undefined) {
-            await playPromise;
-        }
+        if (playPromise !== undefined) await playPromise;
 
         isPlaying = true;
         updatePlayButton();
@@ -1195,7 +1905,6 @@ async function playSegment() {
     }
 }
 
-// Остановка воспроизведения
 function stopPlayback() {
     if (audioElement) {
         audioElement.pause();
@@ -1205,19 +1914,15 @@ function stopPlayback() {
     isPlaying = false;
     clearInterval(playbackInterval);
     updatePlayButton();
-    document.getElementById('playbackTime').textContent = '--:--';
+    const t = document.getElementById('playbackTime');
+    if (t) t.textContent = '--:--';
 }
 
-// Переключение воспроизведения
 function togglePlayback() {
-    if (isPlaying) {
-        stopPlayback();
-    } else {
-        playSegment();
-    }
+    if (isPlaying) stopPlayback();
+    else playSegment();
 }
 
-// Обновление кнопки воспроизведения
 function updatePlayButton() {
     const playBtn = document.getElementById('playBtn');
     const stopBtn = document.getElementById('stopBtn');
@@ -1233,7 +1938,6 @@ function updatePlayButton() {
     }
 }
 
-// Таймер воспроизведения
 function startPlaybackTimer() {
     let elapsed = 0;
     const playbackTimeElement = document.getElementById('playbackTime');
@@ -1253,24 +1957,18 @@ function startPlaybackTimer() {
     }, 1000);
 }
 
-// Сохранение отрезка
 async function saveSegment() {
     if (!currentEditorTrack) return;
 
     try {
         const response = await fetch(`${API_BASE}/tracks/${currentEditorTrack}/segment`, {
             method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                start_time: segmentStart,
-                duration: segmentDuration
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ start_time: segmentStart, duration: segmentDuration })
         });
 
         if (response.ok) {
-            const result = await response.json();
+            await response.json().catch(() => { });
             showNotification('Отрезок сохранен!', 'success');
             closeAudioEditor();
             await loadTracks();
@@ -1283,7 +1981,6 @@ async function saveSegment() {
     }
 }
 
-// Drag & Drop для отрезка
 function startDrag(event, type) {
     isDragging = true;
     dragType = type;
@@ -1323,7 +2020,6 @@ function stopDrag() {
     document.removeEventListener('mouseup', stopDrag);
 }
 
-// Клик по waveform для установки начала
 function handleWaveformClick(event) {
     if (isDragging) return;
 
@@ -1342,24 +2038,16 @@ function handleWaveformClick(event) {
 function changeVolume(value) {
     currentVolume = parseInt(value);
     const volumeValueElement = document.getElementById('volumeValue');
-    if (volumeValueElement) {
-        volumeValueElement.textContent = value + '%';
-    }
+    if (volumeValueElement) volumeValueElement.textContent = value + '%';
 
-    if (audioElement) {
-        audioElement.volume = currentVolume / 100;
-    }
+    if (audioElement) audioElement.volume = currentVolume / 100;
 
     updateVolumeIcon();
 }
 
 function toggleMute() {
     isMuted = !isMuted;
-
-    if (audioElement) {
-        audioElement.muted = isMuted;
-    }
-
+    if (audioElement) audioElement.muted = isMuted;
     updateVolumeIcon();
 }
 
@@ -1367,17 +2055,11 @@ function updateVolumeIcon() {
     const icon = document.getElementById('volumeIcon');
     if (!icon) return;
 
-    if (isMuted) {
-        icon.textContent = '🔇';
-    } else if (currentVolume === 0) {
-        icon.textContent = '🔇';
-    } else if (currentVolume < 30) {
-        icon.textContent = '🔈';
-    } else if (currentVolume < 70) {
-        icon.textContent = '🔉';
-    } else {
-        icon.textContent = '🔊';
-    }
+    if (isMuted) icon.textContent = '🔇';
+    else if (currentVolume === 0) icon.textContent = '🔇';
+    else if (currentVolume < 30) icon.textContent = '🔈';
+    else if (currentVolume < 70) icon.textContent = '🔉';
+    else icon.textContent = '🔊';
 }
 
 // Форматирование времени
@@ -1456,29 +2138,17 @@ function showNotification(message, type = 'info') {
     document.body.appendChild(notification);
 
     setTimeout(() => {
-        if (notification.parentElement) {
-            notification.remove();
-        }
+        if (notification.parentElement) notification.remove();
     }, 5000);
 }
 
 function getNotificationIcon(type) {
-    const icons = {
-        'success': '✅',
-        'error': '❌',
-        'warning': '⚠️',
-        'info': 'ℹ️'
-    };
+    const icons = { 'success': '✅', 'error': '❌', 'warning': '⚠️', 'info': 'ℹ️' };
     return icons[type] || 'ℹ️';
 }
 
 function getNotificationColor(type) {
-    const colors = {
-        'success': '#16a34a',
-        'error': '#dc2626',
-        'warning': '#d97706',
-        'info': '#2563eb'
-    };
+    const colors = { 'success': '#16a34a', 'error': '#dc2626', 'warning': '#d97706', 'info': '#2563eb' };
     return colors[type] || '#2563eb';
 }
 
@@ -1493,3 +2163,466 @@ window.addEventListener('unhandledrejection', function (e) {
 });
 
 console.log('🎵 Music Loto Maker frontend загружен!');
+
+/* =======================
+   MINI-DESIGNER (preview)
+   ======================= */
+
+const Designer = {
+    loaded: false,
+    customButtonObjectURL: null,
+    bgObjectURL: null,
+};
+
+(function ensureRoundRectPolyfill() {
+    const p = window.CanvasRenderingContext2D && CanvasRenderingContext2D.prototype;
+    if (p && typeof p.roundRect !== 'function') {
+        p.roundRect = function (x, y, w, h, r = 0) {
+            r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+            this.beginPath();
+            this.moveTo(x + r, y);
+            this.lineTo(x + w - r, y);
+            this.arcTo(x + w, y, x + w, y + r, r);
+            this.lineTo(x + w, y + h - r);
+            this.arcTo(x + w, y + h, x + w - r, y + h, r);
+            this.lineTo(x + r, y + h);
+            this.arcTo(x, y + h, x, y + h - r, r);
+            this.lineTo(x, y + r);
+            this.arcTo(x, y, x + r, y, r);
+            return this;
+        };
+    }
+})();
+
+let _designResizeObs = null;
+function ensureDesignCanvasSize() {
+    const canvas = document.getElementById('designPreview');
+    const holder = canvas?.parentElement;
+    if (!canvas || !holder) return false;
+
+    const cssW = Math.max(320, holder.clientWidth);
+    const cssH = Math.max(220, Math.floor(holder.clientWidth * 9 / 16));
+    const needResize = canvas.width !== cssW || canvas.height !== cssH;
+    if (needResize) {
+        canvas.width = cssW;
+        canvas.height = cssH;
+    }
+
+    if (!_designResizeObs) {
+        _designResizeObs = new ResizeObserver(() => {
+            const beforeW = canvas.width, beforeH = canvas.height;
+            const ok = ensureDesignCanvasSize();
+            if (ok && (canvas.width !== beforeW || canvas.height !== beforeH)) {
+                drawDesignPreview();
+            }
+        });
+        _designResizeObs.observe(holder);
+    }
+    return true;
+}
+
+function readDesignFromUI() {
+    const design = {
+        fontFamily: document.getElementById("d_font_family").value,
+        titleSize: parseInt(document.getElementById("d_title_size").value),
+        textSize: parseInt(document.getElementById("d_text_size").value),
+        boldTitles: document.getElementById("d_bold_titles").checked,
+        upperTitles: document.getElementById("d_upper_titles").checked,
+        textColor: document.getElementById("d_text_color").value,
+        accentColor: document.getElementById("d_accent_color").value,
+        layout: document.getElementById("d_layout").value,
+        photoRadius: parseInt(document.getElementById("d_photo_radius").value),
+        showNumbers: document.getElementById("d_show_numbers").checked,
+        custom_button_path: null, // Будет установлено ниже
+        background: getBackgroundConfig()
+    };
+
+    // Получаем актуальный путь к кнопке из конфигурации
+    const btnPrev = document.getElementById('d_btn_preview');
+    if (btnPrev && btnPrev.src && btnPrev.style.display !== 'none') {
+        const src = btnPrev.src;
+        if (src.includes('/api/download/')) {
+            const filename = src.split('/api/download/')[1].split('?')[0];
+            design.custom_button_path = `assets/custom_buttons/${filename}`;
+            console.log('🎯 Установлен custom_button_path:', design.custom_button_path);
+        }
+    }
+
+    console.log("🎨 DESIGN OBJ TO SEND:", design);
+    return design;
+}
+
+function drawDesignPreview() {
+    const canvas = document.getElementById('designPreview');
+    if (!canvas) return;
+    ensureDesignCanvasSize();
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const W = canvas.width, H = canvas.height;
+    const cfg = readDesignFromUI();
+
+    if (cfg.background.mode === 'solid') {
+        ctx.fillStyle = cfg.background.color;
+        ctx.fillRect(0, 0, W, H);
+        drawContent();
+    } else if (cfg.background.mode === 'gradient') {
+        const g = ctx.createLinearGradient(0, 0, W, H);
+        g.addColorStop(0, cfg.background.gradFrom);
+        g.addColorStop(1, cfg.background.gradTo);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+        drawContent();
+    } else {
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, W, H);
+        const url = cfg.background.imageURL;
+        if (url) {
+            const img = new Image();
+            img.onload = () => {
+                const r1 = W / H, r2 = img.width / img.height;
+                let w, h, x, y;
+                if (r2 > r1) { h = H; w = r2 * H; x = (W - w) / 2; y = 0; }
+                else { w = W; h = W / r2; x = 0; y = (H - h) / 2; }
+                ctx.drawImage(img, x, y, w, h);
+                drawContent();
+            };
+            img.onerror = drawContent;
+            img.src = url;
+        } else {
+            drawContent();
+        }
+    }
+
+    function drawContent() {
+        const pad = 32;
+        const photoSize = Math.min(W, H) * 0.35;
+        let photoX = pad, photoY = pad;
+        let textX = photoX + photoSize + pad, textW = W - textX - pad;
+
+        if (cfg.layout === 'photo_right') {
+            photoX = W - pad - photoSize;
+            textX = pad; textW = W - photoSize - pad * 3;
+        } else if (cfg.layout === 'photo_top') {
+            photoX = (W - photoSize) / 2;
+            textX = pad; textW = W - pad * 2;
+            photoY = pad;
+        } else if (cfg.layout === 'photo_only') {
+            photoX = (W - photoSize) / 2;
+            photoY = (H - photoSize) / 2 - 40;
+            textX = pad; textW = W - pad * 2;
+        }
+
+        ctx.fillStyle = 'rgba(255,255,255,0.10)';
+        ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.roundRect(photoX, photoY, photoSize, photoSize, cfg.photoRadius);
+        ctx.fill();
+        ctx.stroke();
+
+        const title = (cfg.upperTitles ? 'БОЛЬШОЕ МУЗЛОТО' : 'Большое МузЛото');
+        ctx.fillStyle = cfg.textColor;
+        ctx.textBaseline = 'top';
+        ctx.font = `${cfg.boldTitles ? '700 ' : ''}${cfg.titleSize}px ${cfg.fontFamily}`;
+        ctx.fillText(title, textX, photoY);
+
+        ctx.font = `400 ${cfg.textSize}px ${cfg.fontFamily}`;
+        ctx.fillStyle = cfg.textColor + 'cc';
+        const sub = 'Юрий Шатунов — Седая ночь';
+        wrapText(ctx, sub, textX, photoY + cfg.titleSize + 8, textW, cfg.textSize + 6);
+
+        const btnW = 160, btnH = 100, bx = W - btnW - pad, by = H - btnH - pad;
+
+        // Используем кастомную кнопку если есть
+        if (cfg.custom_button_path) {
+            const img = new Image();
+            img.onload = () => {
+                ctx.drawImage(img, bx, by, btnW, btnH);
+                if (cfg.showNumbers) drawNumber();
+            };
+            img.onerror = () => drawFallbackButton();
+            const filename = cfg.custom_button_path.split('/').pop();
+            img.src = `${API_BASE}/download/${filename}?t=${Date.now()}`;
+        } else {
+            drawFallbackButton();
+        }
+
+        function drawFallbackButton() {
+            ctx.fillStyle = 'rgba(255,255,255,0.12)';
+            ctx.strokeStyle = cfg.accentColor;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.roundRect(bx, by, btnW, btnH, 12);
+            ctx.fill();
+            ctx.stroke();
+            if (cfg.showNumbers) drawNumber();
+        }
+
+        function drawNumber() {
+            ctx.fillStyle = '#fff';
+            ctx.font = `700 ${Math.floor(btnH * 0.45)}px ${cfg.fontFamily}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('12', bx + btnW / 2, by + btnH / 2 + 2);
+            ctx.textAlign = 'start';
+            ctx.textBaseline = 'alphabetic';
+        }
+    }
+
+    function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+        const words = text.split(' ');
+        let line = '';
+        for (let i = 0; i < words.length; i++) {
+            const test = line + words[i] + ' ';
+            const w = ctx.measureText(test).width;
+            if (w > maxWidth && i > 0) {
+                ctx.fillText(line, x, y);
+                line = words[i] + ' ';
+                y += lineHeight;
+            } else {
+                line = test;
+            }
+        }
+        ctx.fillText(line, x, y);
+    }
+}
+
+function bindDesignerEvents() {
+    const root = document.querySelector('#presentation .settings-card');
+    if (!root) return;
+
+    const rerender = () => drawDesignPreview();
+
+    root.querySelectorAll('input, select').forEach(el => {
+        el.addEventListener('input', rerender);
+        el.addEventListener('change', rerender);
+    });
+
+    const radios = root.querySelectorAll('input[name="bgMode"]');
+    const rowSolid = document.getElementById('bgSolidRow');
+    const rowGrad = document.getElementById('bgGradientRow');
+    const rowImg = document.getElementById('bgImageRow');
+    function toggleBgRows() {
+        const mode = root.querySelector('input[name="bgMode"]:checked')?.value || 'solid';
+        rowSolid.style.display = mode === 'solid' ? 'flex' : 'none';
+        rowGrad.style.display = mode === 'gradient' ? 'flex' : 'none';
+        rowImg.style.display = mode === 'image' ? 'flex' : 'none';
+    }
+    radios.forEach(r => r.addEventListener('change', () => { toggleBgRows(); rerender(); }));
+    toggleBgRows();
+
+    // Обработчик загрузки кастомной кнопки
+    const btnUpload = document.getElementById('d_btn_upload');
+    const btnReset = document.getElementById('d_btn_reset');
+
+    if (btnUpload) {
+        btnUpload.addEventListener('change', async () => {
+            const file = btnUpload.files?.[0];
+            if (!file) return;
+
+            showNotification('🔼 Загружаем кнопку...', 'info');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/assets/custom-button`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Ошибка загрузки');
+                }
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Обновляем превью
+                    const downloadUrl = `${API_BASE}/download/${result.filename}?t=${Date.now()}`;
+                    updateMiniConstructor(downloadUrl);
+
+                    showNotification('✅ Кнопка загружена!', 'success');
+                    console.log('🎯 Кнопка загружена:', result);
+
+                    // Проверяем файл
+                    await debugCheckButtonFile(result.filename);
+                } else {
+                    throw new Error(result.error || 'Неизвестная ошибка');
+                }
+            } catch (error) {
+                console.error('❌ Ошибка загрузки кнопки:', error);
+                showNotification('❌ Ошибка загрузки кнопки', 'error');
+            }
+        });
+    }
+
+    if (btnReset) {
+        btnReset.addEventListener('click', async () => {
+            try {
+                showNotification('🔄 Сбрасываем кнопку...', 'info');
+
+                // Обновляем конфигурацию
+                const configResponse = await fetch(`${API_BASE}/config/presentation`);
+                if (configResponse.ok) {
+                    const config = await configResponse.json();
+                    config.custom_button_path = null;
+
+                    await fetch(`${API_BASE}/config/presentation`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(config)
+                    });
+                }
+
+                // Обновляем UI
+                updateMiniConstructor(null);
+                showNotification('✅ Кнопка сброшена', 'success');
+
+            } catch (error) {
+                console.error('❌ Ошибка сброса кнопки:', error);
+                showNotification('❌ Ошибка сброса кнопки', 'error');
+            }
+        });
+    }
+
+    const bgUpload = document.getElementById('d_bg_upload');
+    const bgReset = document.getElementById('d_bg_reset');
+    const bgPrev = document.getElementById('d_bg_preview');
+
+    if (bgUpload) {
+        bgUpload.addEventListener('change', async () => {
+            const file = bgUpload.files?.[0];
+            if (!file) return;
+
+            showNotification('🔼 Загружаем фон...', 'info');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/assets/background`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error('Ошибка загрузки');
+                }
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Обновляем превью
+                    const downloadUrl = `${API_BASE}/download/${result.filename}?t=${Date.now()}`;
+                    bgPrev.src = downloadUrl;
+                    bgPrev.style.display = 'inline-block';
+
+                    // Устанавливаем режим "image"
+                    const radio = document.querySelector('input[name="bgMode"][value="image"]');
+                    if (radio) radio.checked = true;
+
+                    // Обновляем строки отображения
+                    document.getElementById('bgSolidRow').style.display = 'none';
+                    document.getElementById('bgGradientRow').style.display = 'none';
+                    document.getElementById('bgImageRow').style.display = 'flex';
+
+                    showNotification('✅ Фон загружен!', 'success');
+                    drawDesignPreview();
+
+                } else {
+                    throw new Error(result.error || 'Неизвестная ошибка');
+                }
+            } catch (error) {
+                console.error('❌ Ошибка загрузки фона:', error);
+                showNotification('❌ Ошибка загрузки фона', 'error');
+            }
+        });
+    }
+
+    if (bgReset) {
+        bgReset.addEventListener('click', () => {
+            // Сбрасываем на сплошной цвет
+            const radio = document.querySelector('input[name="bgMode"][value="solid"]');
+            if (radio) radio.checked = true;
+
+            document.getElementById('bgSolidRow').style.display = 'flex';
+            document.getElementById('bgGradientRow').style.display = 'none';
+            document.getElementById('bgImageRow').style.display = 'none';
+
+            if (bgPrev) {
+                bgPrev.style.display = 'none';
+                bgPrev.src = '';
+            }
+            if (bgUpload) bgUpload.value = '';
+
+            drawDesignPreview();
+            showNotification('Фон сброшен', 'info');
+        });
+    }
+
+    const saveBtn = document.getElementById('d_save_btn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', saveDesignAsDefault);
+    }
+}
+
+// Глобальная функция обновления мини-конструктора
+window.updateMiniConstructor = function (customButtonPath) {
+    const preview = document.getElementById("d_btn_preview");
+    if (preview) {
+        if (customButtonPath) {
+            preview.src = customButtonPath;
+            preview.style.display = "block";
+            console.log('🎯 Превью кнопки обновлено:', customButtonPath);
+        } else {
+            preview.style.display = "none";
+            preview.src = "";
+            console.log('🎯 Превью кнопки скрыто');
+        }
+    }
+    if (typeof drawDesignPreview === "function") {
+        drawDesignPreview();
+    }
+};
+
+async function initPresentationDesigner() {
+    if (Designer.loaded) {
+        drawDesignPreview();
+        return;
+    }
+
+    bindDesignerEvents();
+    ensureDesignCanvasSize();
+
+    await loadSavedDesign();
+
+    drawDesignPreview();
+
+    Designer.loaded = true;
+}
+
+// 🔧 Защита от отсутствия функции getBackgroundConfig
+if (typeof getBackgroundConfig === "undefined") {
+    function getBackgroundConfig() {
+        const mode = document.querySelector('input[name="bgMode"]:checked')?.value || "solid";
+        const color = document.getElementById("d_bg_color")?.value || "#121B2F";
+        const gradFrom = document.getElementById("d_grad_from")?.value || "#1A2340";
+        const gradTo = document.getElementById("d_grad_to")?.value || "#0F1623";
+
+        // Получаем URL фонового изображения из превью
+        let imageURL = null;
+        const bgPreview = document.getElementById('d_bg_preview');
+        if (mode === 'image' && bgPreview && bgPreview.style.display !== 'none' && bgPreview.src) {
+            imageURL = bgPreview.src;
+        }
+
+        return { mode, color, gradFrom, gradTo, imageURL };
+    }
+    console.warn("⚠️ getBackgroundConfig was missing — added fallback implementation.");
+}
+
+// ============================================================
+// --- FIX --- КОНЕЦ блока исправлений
+// ============================================================

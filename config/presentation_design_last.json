@@ -1,0 +1,20 @@
+{
+  "fontFamily": "Arial",
+  "titleSize": 36,
+  "textSize": 22,
+  "boldTitles": true,
+  "upperTitles": false,
+  "textColor": "#000000",
+  "accentColor": "#e2e7f3",
+  "layout": "photo_left",
+  "photoRadius": 16,
+  "showNumbers": true,
+  "custom_button_path": null,
+  "background": {
+    "mode": "image",
+    "color": "#c383b8",
+    "gradFrom": "#ffffff",
+    "gradTo": "#000000",
+    "imageURL": "http://127.0.0.1:8000/api/download/background_1761052136335.png"
+  }
+}

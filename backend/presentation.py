@@ -1,604 +1,718 @@
-﻿# backend/presentation.py
+﻿# presentation.py - ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ
+from __future__ import annotations
+
+import os
+import random
+import logging
+from datetime import datetime
+from typing import List, Dict, Tuple, Optional
+
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
-from pptx.enum.shapes import MSO_SHAPE
-import logging
-import os
-from datetime import datetime
-import random
+from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE
 
 logger = logging.getLogger(__name__)
 
-class ModernPresentationGenerator:
-    def __init__(self):
-        # Современная цветовая палитра для игрового дизайна
-        self.colors = {
-            'primary': RGBColor(41, 128, 185),    # Синий
-            'secondary': RGBColor(231, 76, 60),   # Красный
-            'accent': RGBColor(241, 196, 15),     # Желтый
-            'success': RGBColor(46, 204, 113),    # Зеленый
-            'dark': RGBColor(44, 62, 80),         # Темно-синий
-            'light': RGBColor(236, 240, 241),     # Светло-серый
-            'white': RGBColor(255, 255, 255),
-            'purple': RGBColor(155, 89, 182),     # Фиолетовый
-            'orange': RGBColor(230, 126, 34)      # Оранжевый
-        }
+
+# ------------------------------
+# Helpers / Options
+# ------------------------------
+def _rgb_from_hex(hex_color: str, fallback: RGBColor) -> RGBColor:
+    try:
+        h = hex_color.strip().lstrip("#")
+        if len(h) == 3:
+            h = "".join(ch * 2 for ch in h)
+        r = int(h[0:2], 16)
+        g = int(h[2:4], 16)
+        b = int(h[4:6], 16)
+        return RGBColor(r, g, b)
+    except Exception:
+        return fallback
+
+
+class DesignOptions:
+    """
+    Набор всех пользовательских опций дизайна.
+    """
+    def __init__(
+        self,
+        font_family: str = "Arial",
+        title_size: int = 44,
+        text_size: int = 24,
+        bold_titles: bool = True,
+        upper_titles: bool = False,
+        text_color: RGBColor = RGBColor(232, 238, 252),
+        accent_color: RGBColor = RGBColor(78, 124, 255),
+
+        layout: str = "photo_right",
+        photo_radius: int = 0,
+
+        show_numbers: bool = True,
+        custom_button_path: Optional[str] = None,
+
+        bg_mode: str = "solid",
+        bg_color: RGBColor = RGBColor(18, 27, 47),
+        bg_grad_from: RGBColor = RGBColor(26, 35, 64),
+        bg_grad_to: RGBColor = RGBColor(15, 22, 35),
+        bg_image_path: Optional[str] = None,
+    ) -> None:
+        self.font_family = font_family
+        self.title_size = int(title_size)
+        self.text_size = int(text_size)
+        self.bold_titles = bool(bold_titles)
+        self.upper_titles = bool(upper_titles)
+        self.text_color = text_color
+        self.accent_color = accent_color
+
+        self.layout = layout
+        self.photo_radius = int(photo_radius)
+
+        self.show_numbers = bool(show_numbers)
+        self.custom_button_path = custom_button_path
+
+        self.bg_mode = bg_mode
+        self.bg_color = bg_color
+        self.bg_grad_from = bg_grad_from
+        self.bg_grad_to = bg_grad_to
+        self.bg_image_path = bg_image_path
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> "DesignOptions":
+        logger.info(f"🎨 DesignOptions.from_dict вызван")
     
-    def generate_musical_loto_presentation(self, tracks, output_path):
-        """Генерация современной презентации для музыкального лото"""
-        try:
-            logger.info(f"🎲 Генерация Musical Loto для {len(tracks)} треков")
-            
-            prs = Presentation()
-            
-            # Современное соотношение сторон 16:9
-            prs.slide_width = Inches(13.333)
-            prs.slide_height = Inches(7.5)
-            
-            # 1. Титульный слайд (игровой стиль)
-            self._create_title_slide(prs)
-            
-            # 2. Слайд с правилами
-            self._create_rules_slide(prs)
-            
-            # 3. Раунды (разбиваем треки на 3 раунда по 40)
-            rounds = self._split_tracks_into_rounds(tracks, 3, 40)
-            
-            for round_num, round_tracks in enumerate(rounds, 1):
-                # Слайд начала раунда
-                self._create_round_start_slide(prs, round_num, len(round_tracks))
+        if not data:
+            logger.info("🎨 Используются настройки по умолчанию")
+            return cls()
+
+        # Обрабатываем background
+        background_data = data.get("background", {})
+        logger.info(f"🎨 BACKGROUND DATA: {background_data}")
+
+        # Цвета могут приходиться строками #RRGGBB
+        text_color = _rgb_from_hex(data.get("text_color", data.get("textColor", "#E8EEFC")), RGBColor(232, 238, 252))
+        accent_color = _rgb_from_hex(data.get("accent_color", data.get("accentColor", "#4E7CFF")), RGBColor(78, 124, 255))
+        bg_color = _rgb_from_hex(data.get("bg_color", data.get("background_color", background_data.get("color", "#121B2F"))), RGBColor(18, 27, 47))
+        grad_from = _rgb_from_hex(data.get("grad_from", data.get("bg_gradient_from", background_data.get("gradFrom", "#1A2340"))), RGBColor(26, 35, 64))
+        grad_to = _rgb_from_hex(data.get("grad_to", data.get("bg_gradient_to", background_data.get("gradTo", "#0F1623"))), RGBColor(15, 22, 35))
+
+        # Получаем custom_button_path
+        custom_button_url = data.get("custom_button_path")
+        custom_button_path = None
+
+        if custom_button_url:
+            try:
+                logger.info(f"🔍 Обработка custom_button_url: {custom_button_url}")
+                base_dir = os.path.dirname(os.path.dirname(__file__))
                 
-                # Слайды с исполнителями раунда
-                self._create_round_artists_slides(prs, round_tracks, round_num)
-                
-                # Слайд с кнопками для раунда
-                self._create_round_buttons_slide(prs, round_num, len(round_tracks))
-            
-            # Финальный слайд
-            self._create_final_slide(prs)
-            
-            prs.save(output_path)
-            logger.info(f"✅ Musical Loto презентация создана: {output_path}")
-            return output_path
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка генерации Musical Loto: {e}")
-            return None
+                # Если это относительный путь
+                if custom_button_url.startswith('assets/custom_buttons/'):
+                    filename = custom_button_url.replace('assets/custom_buttons/', '')
+                    custom_buttons_dir = os.path.join(base_dir, "assets", "custom_buttons")
+                    primary_path = os.path.join(custom_buttons_dir, filename)
+                    
+                    if os.path.exists(primary_path):
+                        custom_button_path = primary_path
+                        logger.info(f"✅ Кастомная кнопка найдена: {primary_path}")
+                    else:
+                        logger.warning(f"⚠️ Файл кнопки не найден: {primary_path}")
+    
+            except Exception as e:
+                logger.error(f"❌ Ошибка обработки custom_button_path: {e}")
 
-    def generate_modern_pptx(self, tracks, output_path):
-        """Генерация современной презентации (альтернативный стиль)"""
-        try:
-            logger.info(f"🎨 Генерация современной презентации для {len(tracks)} треков")
+        # Получаем bg_image_path - ИСПРАВЛЕННАЯ ЧАСТЬ
+        bg_image_path = None
+        bg_mode = background_data.get("mode", "solid")
+        
+        if bg_mode == "image":
+            image_url = background_data.get("imageURL")
+            logger.info(f"🔍 Поиск фонового изображения: {image_url}")
             
-            prs = Presentation()
-            prs.slide_width = Inches(13.333)
-            prs.slide_height = Inches(7.5)
-            
-            # Титульный слайд
-            self._create_modern_title_slide(prs, len(tracks))
-            
-            # Слайды с треками
-            for i, track in enumerate(tracks, 1):
-                self._create_modern_track_slide(prs, track, i, len(tracks))
-            
-            # Слайд статистики
-            self._create_modern_stats_slide(prs, tracks)
-            
-            prs.save(output_path)
-            logger.info(f"✅ Современная презентация создана: {output_path}")
-            return output_path
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка генерации современной презентации: {e}")
-            return None
+            if image_url:
+                try:
+                    base_dir = os.path.dirname(os.path.dirname(__file__))
+                    
+                    # Если это относительный путь
+                    if image_url.startswith('assets/backgrounds/'):
+                        filename = image_url.replace('assets/backgrounds/', '')
+                        bg_image_path = os.path.join(base_dir, "assets", "backgrounds", filename)
+                    
+                    # Если это полный путь или имя файла
+                    elif 'background_' in image_url and ('.png' in image_url or '.jpg' in image_url or '.jpeg' in image_url):
+                        # Извлекаем имя файла из URL
+                        if '/' in image_url:
+                            filename = image_url.split('/')[-1].split('?')[0]
+                        else:
+                            filename = image_url
+                        bg_image_path = os.path.join(base_dir, "assets", "backgrounds", filename)
+                    
+                    # Если это data URL (из превью), игнорируем
+                    elif image_url.startswith('data:'):
+                        logger.info("ℹ️ Пропускаем data URL из превью")
+                        bg_mode = "solid"  # Fallback to solid color
+                    
+                    # Проверяем существование файла
+                    if bg_image_path and os.path.exists(bg_image_path):
+                        logger.info(f"✅ Фоновое изображение найдено: {bg_image_path}")
+                    else:
+                        logger.warning(f"⚠️ Фоновое изображение не найдено: {bg_image_path}")
+                        bg_mode = "solid"  # Fallback to solid color
+                        
+                        # Поиск по всем файлам в backgrounds
+                        backgrounds_dir = os.path.join(base_dir, "assets", "backgrounds")
+                        if os.path.exists(backgrounds_dir):
+                            for file in os.listdir(backgrounds_dir):
+                                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                                    potential_path = os.path.join(backgrounds_dir, file)
+                                    if os.path.exists(potential_path):
+                                        bg_image_path = potential_path
+                                        bg_mode = "image"
+                                        logger.info(f"✅ Найдено альтернативное фоновое изображение: {bg_image_path}")
+                                        break
+                               
+                except Exception as e:
+                    logger.error(f"❌ Ошибка поиска фонового изображения: {e}")
+                    bg_mode = "solid"  # Fallback to solid color
 
-    def generate_modern_pdf(self, tracks, output_path):
-        """Генерация PDF версии (заглушка)"""
-        try:
-            logger.info(f"📊 Генерация PDF для {len(tracks)} треков")
-            # Пока возвращаем тот же файл что и для PPTX
-            pptx_path = output_path.replace('.pdf', '.pptx')
-            result = self.generate_modern_pptx(tracks, pptx_path)
-            return result
-        except Exception as e:
-            logger.error(f"❌ Ошибка генерации PDF: {e}")
-            return None
+        result = cls(
+            font_family=str(data.get("font_family", data.get("fontFamily", "Arial"))),
+            title_size=int(data.get("title_size", data.get("titleSize", 44))),
+            text_size=int(data.get("text_size", data.get("textSize", 24))),
+            bold_titles=bool(data.get("bold_titles", data.get("boldTitles", True))),
+            upper_titles=bool(data.get("upper_titles", data.get("upperTitles", False))),
+            text_color=text_color,
+            accent_color=accent_color,
 
-    def _create_title_slide(self, prs):
-        """Создание титульного слайда в игровом стиле"""
-        slide_layout = prs.slide_layouts[6]  # Пустой слайд
-        slide = prs.slides.add_slide(slide_layout)
-        
-        # Градиентный фон
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['dark']
-        
-        # Декоративные элементы - конфетти
-        self._add_confetti(slide)
-        
-        # Главный заголовок
-        title_box = slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(11), Inches(2))
-        title_frame = title_box.text_frame
-        title_frame.text = "БОЛЬШОЕ\nМУЗЫКАЛЬНОЕ\nЛОТО"
-        
-        title_paragraph = title_frame.paragraphs[0]
-        title_paragraph.font.size = Pt(54)
-        title_paragraph.font.color.rgb = self.colors['accent']
-        title_paragraph.font.bold = True
-        title_paragraph.alignment = PP_ALIGN.CENTER
-        
-        # Подзаголовок
-        subtitle_box = slide.shapes.add_textbox(Inches(2), Inches(4), Inches(9), Inches(1))
-        subtitle_frame = subtitle_box.text_frame
-        subtitle_frame.text = "🎵 ИГРАЙ И УГАДЫВАЙ 🎵"
-        
-        subtitle_paragraph = subtitle_frame.paragraphs[0]
-        subtitle_paragraph.font.size = Pt(28)
-        subtitle_paragraph.font.color.rgb = self.colors['white']
-        subtitle_paragraph.alignment = PP_ALIGN.CENTER
-        
-        # Кнопка "Начать игру"
-        button = slide.shapes.add_shape(
-            MSO_SHAPE.ROUNDED_RECTANGLE,
-            Inches(5), Inches(5.5), Inches(3), Inches(0.8)
+            layout=str(data.get("layout", "photo_right")),
+            photo_radius=int(data.get("photo_radius", data.get("photoRadius", 0))),
+
+            show_numbers=bool(data.get("show_numbers", data.get("showNumbers", True))),
+            custom_button_path=custom_button_path,
+
+            bg_mode=str(bg_mode),  # Используем переменную bg_mode
+            bg_color=bg_color,
+            bg_grad_from=grad_from,
+            bg_grad_to=grad_to,
+            bg_image_path=bg_image_path,
         )
-        button.fill.solid()
-        button.fill.fore_color.rgb = self.colors['primary']
-        button.line.color.rgb = self.colors['white']
-        button.line.width = Pt(3)
-        
-        button_text = slide.shapes.add_textbox(Inches(5.1), Inches(5.6), Inches(2.8), Inches(0.6))
-        button_frame = button_text.text_frame
-        button_frame.text = "🎮 НАЧАТЬ ИГРУ"
-        button_frame.paragraphs[0].font.size = Pt(18)
-        button_frame.paragraphs[0].font.color.rgb = self.colors['white']
-        button_frame.paragraphs[0].font.bold = True
-        button_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
 
-    def _create_modern_title_slide(self, prs, total_tracks):
-        """Современный титульный слайд для обычной презентации"""
-        slide_layout = prs.slide_layouts[0]  # Title Slide
-        slide = prs.slides.add_slide(slide_layout)
-        
-        # Устанавливаем темный фон
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['dark']
-        
-        # Заголовок
-        title_shape = slide.shapes.title
-        title_shape.text = "Музыкальная Коллекция"
-        title_shape.text_frame.paragraphs[0].font.color.rgb = self.colors['accent']
-        title_shape.text_frame.paragraphs[0].font.size = Pt(44)
-        title_shape.text_frame.paragraphs[0].font.bold = True
-        
-        # Подзаголовок
-        subtitle_shape = slide.placeholders[1]
-        subtitle_shape.text = f"Всего треков: {total_tracks}\nСовременная презентация"
-        subtitle_shape.text_frame.paragraphs[0].font.color.rgb = self.colors['white']
-        subtitle_shape.text_frame.paragraphs[0].font.size = Pt(20)
-        
-        # Добавляем дату генерации
-        date_box = slide.shapes.add_textbox(Inches(0.5), Inches(6.5), Inches(4), Inches(0.5))
-        date_frame = date_box.text_frame
-        date_frame.text = f"Сгенерировано: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-        date_frame.paragraphs[0].font.size = Pt(12)
-        date_frame.paragraphs[0].font.color.rgb = self.colors['white']
+        logger.info(f"🎨 СОЗДАН DesignOptions:")
+        logger.info(f"   bg_mode: {result.bg_mode}")
+        logger.info(f"   bg_image_path: {result.bg_image_path}")
+        logger.info(f"   bg_image_exists: {os.path.exists(result.bg_image_path) if result.bg_image_path else False}")
 
-    def _create_modern_track_slide(self, prs, track, current_num, total_tracks):
-        """Современный слайд с информацией о треке"""
-        slide_layout = prs.slide_layouts[1]  # Title and Content
-        slide = prs.slides.add_slide(slide_layout)
-        
-        # Темный фон
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['dark']
-        
-        # Заголовок слайда
-        title_shape = slide.shapes.title
-        title_shape.text = f"Трек #{current_num}"
-        title_shape.text_frame.paragraphs[0].font.color.rgb = self.colors['accent']
-        title_shape.text_frame.paragraphs[0].font.size = Pt(32)
-        title_shape.text_frame.paragraphs[0].font.bold = True
-        
-        # Содержание - информация о треке
-        content_shape = slide.placeholders[1]
-        content_frame = content_shape.text_frame
-        content_frame.clear()  # Очищаем стандартный текст
-        
-        # Исполнитель
-        artist_p = content_frame.paragraphs[0]
-        artist_p.text = "🎤 Исполнитель:"
-        artist_p.font.bold = True
-        artist_p.font.color.rgb = self.colors['white']
-        artist_p.font.size = Pt(18)
-        
-        artist_name_p = content_frame.add_paragraph()
-        artist_name_p.text = track.get('artist', 'Неизвестный исполнитель')
-        artist_name_p.font.color.rgb = self.colors['primary']
-        artist_name_p.font.size = Pt(20)
-        artist_name_p.font.bold = True
-        
-        # Название трека
-        title_p = content_frame.add_paragraph()
-        title_p.text = "🎵 Название трека:"
-        title_p.font.bold = True
-        title_p.font.color.rgb = self.colors['white']
-        title_p.font.size = Pt(18)
-        
-        track_title_p = content_frame.add_paragraph()
-        track_title_p.text = track.get('title', 'Без названия')
-        track_title_p.font.color.rgb = self.colors['white']
-        track_title_p.font.size = Pt(16)
-        
-        # Информация о файле
-        file_p = content_frame.add_paragraph()
-        file_p.text = "📁 Оригинальный файл:"
-        file_p.font.bold = True
-        file_p.font.color.rgb = self.colors['light']
-        file_p.font.size = Pt(14)
-        
-        filename_p = content_frame.add_paragraph()
-        filename_p.text = track.get('original_filename', 'Неизвестно')
-        filename_p.font.color.rgb = self.colors['light']
-        filename_p.font.size = Pt(12)
-        
-        # Номер слайда
-        slide_num = slide.shapes.add_textbox(Inches(11.5), Inches(6.8), Inches(1.5), Inches(0.4))
-        slide_num_frame = slide_num.text_frame
-        slide_num_frame.text = f"{current_num}/{total_tracks}"
-        slide_num_frame.paragraphs[0].font.size = Pt(12)
-        slide_num_frame.paragraphs[0].font.color.rgb = self.colors['light']
-        slide_num_frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
+        return result
 
-    def _create_modern_stats_slide(self, prs, tracks):
-        """Современный слайд со статистикой"""
-        slide_layout = prs.slide_layouts[1]
-        slide = prs.slides.add_slide(slide_layout)
-        
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['dark']
-        
-        # Заголовок
-        title_shape = slide.shapes.title
-        title_shape.text = "Статистика"
-        title_shape.text_frame.paragraphs[0].font.color.rgb = self.colors['accent']
-        title_shape.text_frame.paragraphs[0].font.size = Pt(32)
-        
-        # Статистика
-        content_shape = slide.placeholders[1]
-        content_frame = content_shape.text_frame
-        content_frame.clear()
-        
-        artists = [track.get('artist', 'Неизвестно') for track in tracks]
-        unique_artists = len(set(artists))
-        
-        stats_data = [
-            f"📊 Всего треков: {len(tracks)}",
-            f"🎤 Уникальных исполнителей: {unique_artists}",
-            f"⏱️ Общая продолжительность: ~{len(tracks) * 0.5} минут",
-            f"📅 Дата генерации: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-        ]
-        
-        for stat in stats_data:
-            p = content_frame.add_paragraph()
-            p.text = stat
-            p.font.size = Pt(16)
-            p.font.color.rgb = self.colors['white']
-            p.space_after = Pt(12)
+# ------------------------------
+# Generator
+# ------------------------------
+class ModernPresentationGenerator:
+    """
+    Генератор презентации «Большое музыкальное лото».
+    """
 
-    def _create_rules_slide(self, prs):
-        """Создание слайда с правилами игры"""
-        slide_layout = prs.slide_layouts[1]  # Title and Content
-        slide = prs.slides.add_slide(slide_layout)
+    def __init__(self) -> None:
+        self._opts = DesignOptions()
+
+    def generate_presentation_by_template(
+        self,
+        tracks: List[dict],
+        output_path: str,
+        design: Optional[dict] = None,
+    ) -> Tuple[str | None, List[Dict]]:
+        """
+        Генерирует .pptx по структуре
+        """
+        logger.info("🚀 НАЧАЛО ГЕНЕРАЦИИ ПРЕЗЕНТАЦИИ")
+        logger.info(f"📊 Треков: {len(tracks)}")
+        logger.info(f"📁 Выходной файл: {output_path}")
         
-        # Фон
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['light']
+        try:
+            # применяем пользовательские опции
+            self._opts = DesignOptions.from_dict(design or {})
+
+            prs = Presentation()
+            prs.slide_width = Inches(13.333)  # 1280x720 (16:9)
+            prs.slide_height = Inches(7.5)
+
+            # 1) титульный + правила
+            self._slide_title(prs)
+            self._slide_rules(prs)
+
+            # 2) подготовка треков: минимум 120
+            tracks_120 = self._pad_to_120(tracks)
+            rounds = self._split_into_rounds(tracks_120, num_rounds=3, per_round=40)
+
+            track_slide_map: List[Dict] = []
+
+            # 3) раунды
+            for rnd_idx, round_tracks in enumerate(rounds, start=1):
+                self._slide_round_title(prs, rnd_idx)
+                menu_slide = self._slide_round_menu(prs, rnd_idx)
+
+                # создаём 40 карточек и линкуем кнопки из меню
+                card_slides = []
+                for i, tr in enumerate(round_tracks, start=1):
+                    s = self._slide_track(
+                        prs=prs,
+                        track=tr,
+                        track_num=i,
+                        round_num=rnd_idx,
+                        menu_slide=menu_slide,
+                    )
+                    if s:
+                        card_slides.append(s)
+                        track_slide_map.append(
+                            {
+                                "round": rnd_idx,
+                                "num": i,
+                                "artist": tr.get("artist", ""),
+                                "title": tr.get("title", ""),
+                            }
+                        )
+
+                # привязка кнопок меню к карточкам
+                if hasattr(menu_slide, '_round_menu_buttons'):
+                    self._wire_menu_buttons_to_cards(menu_slide, card_slides)
+
+                # пауза после 1 и 2 раунда
+                if rnd_idx < 3:
+                    self._slide_pause(prs, rnd_idx)
+
+            # 4) финальный
+            self._slide_final(prs)
+
+            # 5) сохранить
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            prs.save(output_path)
+            logger.info("✅ PPTX создан: %s", output_path)
+            return output_path, track_slide_map
+
+        except Exception as e:
+            logger.exception("❌ Ошибка генерации презентации: %s", e)
+            return None, []
+
+    # ---------- INTERNAL ----------
+
+    def _pad_to_120(self, tracks: List[dict]) -> List[dict]:
+        if not tracks:
+            return []
+        if len(tracks) >= 120:
+            return tracks[:120]
+        need = 120 - len(tracks)
+        extra = [self._clone_track_random(tracks) for _ in range(need)]
+        out = list(tracks) + extra
+        random.shuffle(out)
+        return out[:120]
+
+    def _clone_track_random(self, tracks: List[dict]) -> dict:
+        base = dict(random.choice(tracks))
+        base["id"] = f"dup_{base.get('id', '')}_{random.randint(1000,9999)}"
+        return base
+
+    def _split_into_rounds(self, tracks: List[dict], num_rounds: int, per_round: int) -> List[List[dict]]:
+        return [tracks[i * per_round : (i + 1) * per_round] for i in range(num_rounds)]
+
+    # ---------- BG / TEXT utilities ----------
+
+    def _apply_background(self, slide, prs) -> None:
+        """
+        Применяет фон согласно опциям.
+        """
+        try:
+            slide_width = prs.slide_width
+            slide_height = prs.slide_height
         
-        # Заголовок
-        title_shape = slide.shapes.title
-        title_shape.text = "🎯 ПРАВИЛА ИГРЫ"
-        title_shape.text_frame.paragraphs[0].font.color.rgb = self.colors['primary']
-        
-        # Правила
-        content_shape = slide.placeholders[1]
-        content_frame = content_shape.text_frame
-        content_frame.clear()
-        
-        rules = [
-            "🎲 3 раунда по 40 исполнителей",
-            "🎵 Каждый трек - 30 секунд",
-            "🏆 Угадай исполнителя и название",
-            "⭐ 1 балл за исполнителя, 2 балла за название",
-            "🎯 Нажимай кнопки для прослушивания",
-            "🏅 Победит самый музыкальный!"
-        ]
-        
-        for rule in rules:
-            p = content_frame.add_paragraph()
-            p.text = rule
-            p.font.size = Pt(20)
-            p.font.color.rgb = self.colors['dark']
-            p.space_after = Pt(12)
-            
-        # Декоративные элементы
-        self._add_game_elements(slide)
-    
-    def _create_round_start_slide(self, prs, round_num, tracks_count):
-        """Слайд начала раунда"""
-        slide_layout = prs.slide_layouts[6]
-        slide = prs.slides.add_slide(slide_layout)
-        
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['primary']
-        
-        # Номер раунда
-        round_box = slide.shapes.add_textbox(Inches(2), Inches(1), Inches(9), Inches(2))
-        round_frame = round_box.text_frame
-        round_frame.text = f"РАУНД {round_num}"
-        
-        round_paragraph = round_frame.paragraphs[0]
-        round_paragraph.font.size = Pt(48)
-        round_paragraph.font.color.rgb = self.colors['white']
-        round_paragraph.font.bold = True
-        round_paragraph.alignment = PP_ALIGN.CENTER
-        
-        # Количество треков
-        count_box = slide.shapes.add_textbox(Inches(3), Inches(3), Inches(7), Inches(1))
-        count_frame = count_box.text_frame
-        count_frame.text = f"{tracks_count} музыкальных треков"
-        
-        count_paragraph = count_frame.paragraphs[0]
-        count_paragraph.font.size = Pt(24)
-        count_paragraph.font.color.rgb = self.colors['accent']
-        count_paragraph.alignment = PP_ALIGN.CENTER
-        
-        # Готовность
-        ready_box = slide.shapes.add_textbox(Inches(4), Inches(4.5), Inches(5), Inches(1))
-        ready_frame = ready_box.text_frame
-        ready_frame.text = "🎧 ГОТОВЫ СЛУШАТЬ?"
-        
-        ready_paragraph = ready_frame.paragraphs[0]
-        ready_paragraph.font.size = Pt(28)
-        ready_paragraph.font.color.rgb = self.colors['white']
-        ready_paragraph.alignment = PP_ALIGN.CENTER
-    
-    def _create_round_artists_slides(self, prs, tracks, round_num):
-        """Создание слайдов с исполнителями раунда"""
-        # Разбиваем на группы по 8 исполнителей на слайд
-        chunk_size = 8
-        for i in range(0, len(tracks), chunk_size):
-            chunk = tracks[i:i + chunk_size]
-            self._create_artists_chunk_slide(prs, chunk, round_num, i//chunk_size + 1, (len(tracks)-1)//chunk_size + 1)
-    
-    def _create_artists_chunk_slide(self, prs, tracks_chunk, round_num, chunk_num, total_chunks):
-        """Создание слайда с группой исполнителей"""
-        slide_layout = prs.slide_layouts[6]
-        slide = prs.slides.add_slide(slide_layout)
-        
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['light']
-        
-        # Заголовок слайда
-        title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.8))
-        title_frame = title_box.text_frame
-        title_frame.text = f"РАУНД {round_num} - ИСПОЛНИТЕЛИ ({chunk_num}/{total_chunks})"
-        
-        title_paragraph = title_frame.paragraphs[0]
-        title_paragraph.font.size = Pt(20)
-        title_paragraph.font.color.rgb = self.colors['primary']
-        title_paragraph.font.bold = True
-        
-        # Сетка исполнителей
-        artists_per_row = 2
-        card_width = Inches(5.5)
-        card_height = Inches(1.2)
-        margin = Inches(0.3)
-        
-        for idx, track in enumerate(tracks_chunk):
-            row = idx // artists_per_row
-            col = idx % artists_per_row
-            
-            left = margin + col * (card_width + margin)
-            top = Inches(1.5) + row * (card_height + margin)
-            
-            # Карточка исполнителя
-            card = slide.shapes.add_shape(
-                MSO_SHAPE.ROUNDED_RECTANGLE,
-                left, top, card_width, card_height
-            )
-            card.fill.solid()
-            card.fill.fore_color.rgb = self.colors['white']
-            card.line.color.rgb = self.colors['secondary']
-            card.line.width = Pt(2)
-            
-            # Номер и информация
-            num_text = slide.shapes.add_textbox(left + Inches(0.2), top + Inches(0.1), Inches(0.6), Inches(0.3))
-            num_frame = num_text.text_frame
-            num_frame.text = f"{idx + 1 + (chunk_num-1)*8}"
-            num_frame.paragraphs[0].font.size = Pt(16)
-            num_frame.paragraphs[0].font.color.rgb = self.colors['primary']
-            num_frame.paragraphs[0].font.bold = True
-            
-            artist_text = slide.shapes.add_textbox(left + Inches(0.2), top + Inches(0.4), card_width - Inches(0.4), Inches(0.7))
-            artist_frame = artist_text.text_frame
-            artist_frame.text = f"{track.get('artist', 'Неизвестно')}\n«{track.get('title', 'Без названия')}»"
-            
-            for paragraph in artist_frame.paragraphs:
-                paragraph.font.size = Pt(12)
-                paragraph.font.color.rgb = self.colors['dark']
-    
-    def _create_round_buttons_slide(self, prs, round_num, tracks_count):
-        """Создание слайда с кнопками для прослушивания"""
-        slide_layout = prs.slide_layouts[6]
-        slide = prs.slides.add_slide(slide_layout)
-        
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['dark']
-        
-        # Заголовок
-        title_box = slide.shapes.add_textbox(Inches(1), Inches(0.5), Inches(11), Inches(1))
-        title_frame = title_box.text_frame
-        title_frame.text = f"РАУНД {round_num} - ПРОСЛУШИВАНИЕ"
-        
-        title_paragraph = title_frame.paragraphs[0]
-        title_paragraph.font.size = Pt(32)
-        title_paragraph.font.color.rgb = self.colors['accent']
-        title_paragraph.alignment = PP_ALIGN.CENTER
-        
-        # Сетка кнопок 8x5
-        button_size = Inches(1.2)
-        margin = Inches(0.2)
-        start_x = Inches(1)
-        start_y = Inches(2)
-        
-        for i in range(tracks_count):
-            row = i // 8
-            col = i % 8
-            
-            left = start_x + col * (button_size + margin)
-            top = start_y + row * (button_size + margin)
-            
-            if top > Inches(6.5):  # Не выходить за пределы слайда
-                continue
+            if self._opts.bg_mode == "image" and self._opts.bg_image_path:
+                if os.path.exists(self._opts.bg_image_path):
+                    try:
+                        logger.info(f"🖼️ Загрузка фонового изображения: {self._opts.bg_image_path}")
+                    
+                        # Просто добавляем изображение - оно будет фоном
+                        pic = slide.shapes.add_picture(
+                            self._opts.bg_image_path,
+                            Inches(0), Inches(0), slide_width, slide_height
+                        )
+                        logger.info("✅ Фоновое изображение установлено")
+                    
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка установки фонового изображения: {e}")
+                        self._apply_solid_background(slide, self._opts.bg_color)
+                else:
+                    logger.warning(f"⚠️ Фоновое изображение не найдено: {self._opts.bg_image_path}")
+                    self._apply_solid_background(slide, self._opts.bg_color)
                 
-            # Кнопка
-            button = slide.shapes.add_shape(
-                MSO_SHAPE.ROUNDED_RECTANGLE,
-                left, top, button_size, button_size
-            )
-            button.fill.solid()
-            button.fill.fore_color.rgb = self.colors['primary']
-            button.line.color.rgb = self.colors['white']
-            button.line.width = Pt(2)
+            elif self._opts.bg_mode == "gradient":
+                try:
+                    background = slide.background
+                    fill = background.fill
+                    fill.solid()
+                    fill.fore_color.rgb = self._opts.bg_grad_from
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось установить градиент: {e}")
+                    self._apply_solid_background(slide, self._opts.bg_grad_from)
+                
+            else:
+                self._apply_solid_background(slide, self._opts.bg_color)
             
-            # Номер на кнопке
-            num_text = slide.shapes.add_textbox(left + Inches(0.3), top + Inches(0.4), Inches(0.6), Inches(0.4))
-            num_frame = num_text.text_frame
-            num_frame.text = str(i + 1)
-            num_frame.paragraphs[0].font.size = Pt(20)
-            num_frame.paragraphs[0].font.color.rgb = self.colors['white']
-            num_frame.paragraphs[0].font.bold = True
-            num_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+        except Exception as e:
+            logger.error(f"❌ Ошибка применения фона: {e}")
+            try:
+                background = slide.background
+                fill = background.fill
+                fill.solid()
+                fill.fore_color.rgb = RGBColor(18, 27, 47)
+            except:
+                pass
+
+    def _apply_solid_background(self, slide, color):
+        """Применяет сплошной цвет фона"""
+        try:
+            background = slide.background
+            fill = background.fill
+            fill.solid()
+            fill.fore_color.rgb = color
+        except Exception as e:
+            logger.error(f"❌ Ошибка установки сплошного фона: {e}")
+
+    def _add_text(
+        self,
+        slide,
+        text: str,
+        left,
+        top,
+        width,
+        height,
+        size: int,
+        bold: bool = False,
+        align=PP_ALIGN.LEFT,
+        color: Optional[RGBColor] = None,
+        force_upper: bool = False,
+    ):
+        try:
+            if force_upper:
+                text = text.upper()
+            tb = slide.shapes.add_textbox(left, top, width, height)
+            tf = tb.text_frame
+            tf.clear()
+            p = tf.paragraphs[0]
+            p.text = text
+            p.font.name = self._opts.font_family
+            p.font.size = Pt(size)
+            p.font.bold = bold
+            p.font.color.rgb = color or self._opts.text_color
+            p.alignment = align
+            return tb
+        except Exception as e:
+            logger.error(f"❌ Ошибка добавления текста: {e}")
+            return None
+
+    def _add_artist_photo(self, slide, img_path: str, left, top, width, height):
+        """Добавляет фото артиста"""
+        try:
+            if img_path and os.path.exists(img_path):
+                return slide.shapes.add_picture(img_path, left, top, width, height)
+            return None
+        except Exception as e:
+            logger.warning(f"Не удалось вставить фото '{img_path}': {e}")
+            return None
+
+    # ---------- Slides ----------
+
+    def _slide_title(self, prs):
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        self._apply_background(s, prs)
+        self._add_text(
+            s,
+            "БОЛЬШОЕ\nМУЗЫКАЛЬНОЕ ЛОТО",
+            Inches(0.8),
+            Inches(1.6),
+            Inches(11.5),
+            Inches(3.5),
+            size=self._opts.title_size if self._opts.title_size > 34 else 60,
+            bold=self._opts.bold_titles,
+            align=PP_ALIGN.CENTER,
+            force_upper=self._opts.upper_titles,
+        )
+        self._add_text(
+            s,
+            "Музыкальная викторина в стиле PowerPoint",
+            Inches(2.5),
+            Inches(5.3),
+            Inches(8.3),
+            Inches(1.0),
+            size=max(self._opts.text_size, 18),
+            align=PP_ALIGN.CENTER,
+            color=self._opts.accent_color,
+        )
+
+    def _slide_rules(self, prs):
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        self._apply_background(s, prs)  
+        self._add_text(
+            s,
+            "ПРАВИЛА",
+            Inches(0.8),
+            Inches(0.7),
+            Inches(11.5),
+            Inches(0.9),
+            max(self._opts.title_size - 4, 28),
+            True,
+            PP_ALIGN.CENTER,
+            force_upper=self._opts.upper_titles,
+        )
+        rules = [
+            "1) Собери комбинацию и крикни «БИНГО» первым.",
+            "2) Пой и получай удовольствие.",
+            "3) В каждом раунде — 40 номеров.",
+            "4) При выборе номера звучит 30с отрывок трека.",
+        ]
+        for i, line in enumerate(rules):
+            self._add_text(
+                s,
+                line,
+                Inches(1.0),
+                Inches(2.0 + i * 0.8),
+                Inches(11.0),
+                Inches(0.7),
+                max(self._opts.text_size, 20),
+                False,
+                PP_ALIGN.LEFT,
+                color=self._opts.text_color,
+            )
+
+    def _slide_round_title(self, prs, round_num: int):
+        roman = ["I", "II", "III"][round_num - 1]
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        self._apply_background(s, prs)
+        self._add_text(
+            s,
+            f"{roman} РАУНД — выбор номера",
+            Inches(0.8),
+            Inches(2.8),
+            Inches(11.5),
+            Inches(1.2),
+            max(self._opts.title_size - 2, 32),
+            self._opts.bold_titles,
+            PP_ALIGN.CENTER,
+            force_upper=self._opts.upper_titles,
+        )
+
+    def _slide_round_menu(self, prs, round_num: int):
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        self._apply_background(s, prs)
+
+        # создаём 40 кнопок-шейпов
+        buttons = []
+        custom_btn_ok = (
+            self._opts.custom_button_path
+            and os.path.exists(self._opts.custom_button_path)
+        )
+
+        # сетка 4x10
+        start_x, start_y = Inches(0.9), Inches(1.4)
+        w, h = Inches(1.2), Inches(0.8)
+        gap_x, gap_y = Inches(0.2), Inches(0.25)
+
+        for r in range(4):
+            for c in range(10):
+                num = r * 10 + c + 1
+                left = start_x + c * (w + gap_x)
+                top = start_y + r * (h + gap_y)
+
+                if custom_btn_ok:
+                    try:
+                        shape = s.shapes.add_picture(self._opts.custom_button_path, left, top, w, h)
+                        # Нумерация поверх
+                        if self._opts.show_numbers:
+                            self._add_text(
+                                s,
+                                str(num),
+                                left,
+                                top,
+                                w,
+                                h,
+                                size=max(self._opts.text_size, 20),
+                                bold=True,
+                                align=PP_ALIGN.CENTER,
+                                color=self._opts.text_color,
+                            )
+                        buttons.append(shape)
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка загрузки кастомной кнопки: {e}")
+                        # Fallback to default button
+                        shape = self._create_default_button(s, left, top, w, h, num)
+                        if shape:
+                            buttons.append(shape)
+                else:
+                    shape = self._create_default_button(s, left, top, w, h, num)
+                    if shape:
+                        buttons.append(shape)
+
+        s._round_menu_buttons = buttons
+        return s
+
+    def _create_default_button(self, slide, left, top, width, height, number):
+        """Создает стандартную кнопку"""
+        try:
+            shape = slide.shapes.add_shape(MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE, left, top, width, height)
+            fill = shape.fill
+            fill.solid()
+            fill.fore_color.rgb = self._opts.accent_color
+            line = shape.line
+            line.color.rgb = self._opts.accent_color
             
-            # Подпись "30 сек"
-            time_text = slide.shapes.add_textbox(left, top + Inches(0.8), button_size, Inches(0.3))
-            time_frame = time_text.text_frame
-            time_frame.text = "30 сек"
-            time_frame.paragraphs[0].font.size = Pt(10)
-            time_frame.paragraphs[0].font.color.rgb = self.colors['accent']
-            time_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
-    
-    def _create_final_slide(self, prs):
-        """Финальный слайд"""
-        slide_layout = prs.slide_layouts[6]
-        slide = prs.slides.add_slide(slide_layout)
-        
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        fill.fore_color.rgb = self.colors['success']
-        
-        # Благодарность
-        thanks_box = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(11), Inches(2))
-        thanks_frame = thanks_box.text_frame
-        thanks_frame.text = "СПАСИБО,\nЧТО ПРОВЕЛИ ЭТО ВРЕМЯ\nС НАМИ!"
-        
-        thanks_paragraph = thanks_frame.paragraphs[0]
-        thanks_paragraph.font.size = Pt(36)
-        thanks_paragraph.font.color.rgb = self.colors['white']
-        thanks_paragraph.alignment = PP_ALIGN.CENTER
-        
-        # Финальный логотип
-        logo_box = slide.shapes.add_textbox(Inches(3), Inches(4.5), Inches(7), Inches(1.5))
-        logo_frame = logo_box.text_frame
-        logo_frame.text = "БОЛЬШОЕ\nМУЗЫКАЛЬНОЕ\nЛОТО"
-        
-        for paragraph in logo_frame.paragraphs:
-            paragraph.font.size = Pt(28)
-            paragraph.font.color.rgb = self.colors['accent']
-            paragraph.font.bold = True
-            paragraph.alignment = PP_ALIGN.CENTER
-        
-        self._add_confetti(slide)
-    
-    def _split_tracks_into_rounds(self, tracks, num_rounds, tracks_per_round):
-        """Разбивает треки на раунды"""
-        # Если треков меньше чем нужно, дублируем случайные
-        total_needed = num_rounds * tracks_per_round
-        if len(tracks) < total_needed:
-            # Дублируем случайные треки чтобы набрать нужное количество
-            additional = total_needed - len(tracks)
-            extra_tracks = random.choices(tracks, k=additional)
-            all_tracks = tracks + extra_tracks
-        else:
-            all_tracks = tracks[:total_needed]
-        
-        # Разбиваем на раунды
-        rounds = []
-        for i in range(num_rounds):
-            start_idx = i * tracks_per_round
-            end_idx = start_idx + tracks_per_round
-            rounds.append(all_tracks[start_idx:end_idx])
-        
-        return rounds
-    
-    def _add_confetti(self, slide):
-        """Добавляет декоративные конфетти"""
-        for i in range(15):
-            shape = slide.shapes.add_shape(
-                MSO_SHAPE.OVAL,
-                Inches(random.uniform(0.5, 12)),
-                Inches(random.uniform(0.5, 6)),
-                Inches(0.1),
-                Inches(0.1)
+            # текст
+            if self._opts.show_numbers:
+                tf = shape.text_frame
+                tf.clear()
+                p = tf.paragraphs[0]
+                p.text = str(number)
+                p.font.name = self._opts.font_family
+                p.font.size = Pt(max(self._opts.text_size, 20))
+                p.font.bold = True
+                p.font.color.rgb = self._opts.text_color
+                p.alignment = PP_ALIGN.CENTER
+            
+            return shape
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания кнопки: {e}")
+            # Создаем простую кнопку как запасной вариант
+            try:
+                shape = slide.shapes.add_shape(MSO_AUTO_SHAPE_TYPE.RECTANGLE, left, top, width, height)
+                shape.fill.solid()
+                shape.fill.fore_color.rgb = RGBColor(78, 124, 255)
+                return shape
+            except:
+                return None
+
+    def _wire_menu_buttons_to_cards(self, menu_slide, card_slides: List):
+        try:
+            if not hasattr(menu_slide, '_round_menu_buttons'):
+                return
+                
+            for i, (shape, target) in enumerate(zip(menu_slide._round_menu_buttons, card_slides)):
+                if shape and target and i < len(card_slides):
+                    try:
+                        shape.click_action.target_slide = target
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось связать кнопку {i+1} со слайдом: {e}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка связывания кнопок: {e}")
+
+    def _slide_track(self, prs, track: dict, track_num: int, round_num: int, menu_slide):
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        self._apply_background(s, prs)
+
+        # номер / заголовки
+        subtitle_color = self._opts.text_color
+        self._add_text(
+            s,
+            f"Раунд {round_num}, №{track_num}",
+            Inches(0.8),
+            Inches(0.5),
+            Inches(5.0),
+            Inches(0.7),
+            max(self._opts.text_size - 6, 16),
+            False,
+            PP_ALIGN.LEFT,
+            subtitle_color,
+        )
+        artist = track.get("artist", "Неизвестный исполнитель")
+        title = track.get("title", "Без названия")
+        if self._opts.upper_titles:
+            artist = artist.upper()
+            title = title.upper()
+
+        # ФИКСИРОВАННЫЙ РАЗМЕР ФОТО
+        PHOTO_WIDTH = Inches(4.0)
+        PHOTO_HEIGHT = Inches(4.0)
+
+        # Позиции зависят от пресета
+        if self._opts.layout == "photo_left":
+            # фото слева, текст справа
+            img_left, img_top = Inches(0.8), Inches(1.2)
+            text_left, text_top, text_w = Inches(5.0), Inches(1.2), Inches(7.8)
+        elif self._opts.layout == "photo_top":
+            img_left, img_top = Inches(4.5), Inches(0.9)
+            text_left, text_top, text_w = Inches(0.8), Inches(5.1), Inches(11.5)
+        elif self._opts.layout == "photo_only":
+            img_left, img_top = Inches(4.6), Inches(1.0)
+            text_left, text_top, text_w = Inches(0.8), Inches(5.6), Inches(11.5)
+        else:  # photo_right (дефолт)
+            img_left, img_top = Inches(8.5), Inches(1.2)
+            text_left, text_top, text_w = Inches(0.8), Inches(1.2), Inches(8.0)
+
+        # Заголовки
+        self._add_text(
+            s, artist, text_left, text_top, text_w, Inches(1.2),
+            max(self._opts.title_size, 28), self._opts.bold_titles, PP_ALIGN.LEFT, self._opts.text_color
+        )
+        self._add_text(
+            s, f"«{title}»", text_left, text_top + Inches(1.1), text_w, Inches(1.0),
+            max(self._opts.text_size, 20), False, PP_ALIGN.LEFT, self._opts.accent_color
+        )
+
+        # Фото артиста
+        img_path = track.get("image_path")
+        if img_path and os.path.exists(img_path):
+            try:
+                self._add_artist_photo(s, img_path, img_left, img_top, PHOTO_WIDTH, PHOTO_HEIGHT)
+            except Exception as e:
+                logger.warning("Не удалось вставить фото '%s': %s", img_path, e)
+
+        # кнопка «назад в меню»
+        try:
+            btn = s.shapes.add_shape(
+                MSO_AUTO_SHAPE_TYPE.ACTION_BUTTON_BACK_OR_PREVIOUS, Inches(12.2), Inches(0.35), Inches(0.8), Inches(0.6)
             )
-            color = random.choice([self.colors['accent'], self.colors['secondary'], self.colors['success']])
-            shape.fill.solid()
-            shape.fill.fore_color.rgb = color
-            shape.line.fill.background()
-    
-    def _add_game_elements(self, slide):
-        """Добавляет игровые элементы"""
-        # Ноты
-        notes = ["♪", "♫", "♬", "🎵", "🎶"]
-        for i in range(8):
-            note_box = slide.shapes.add_textbox(
-                Inches(random.uniform(0.5, 12)),
-                Inches(random.uniform(1, 6)),
-                Inches(0.5), Inches(0.5)
-            )
-            note_frame = note_box.text_frame
-            note_frame.text = random.choice(notes)
-            note_frame.paragraphs[0].font.size = Pt(20)
-            note_frame.paragraphs[0].font.color.rgb = self.colors['primary']
+            btn.fill.solid()
+            btn.fill.fore_color.rgb = self._opts.accent_color
+            btn.line.color.rgb = self._opts.accent_color
+            if menu_slide:
+                btn.click_action.target_slide = menu_slide
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания кнопки назад: {e}")
+
+        return s
+
+    def _slide_pause(self, prs, after_round: int):
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        self._apply_background(s, prs)
+        self._add_text(s, "ПАУЗА", Inches(4.5), Inches(3.0), Inches(4.3), Inches(1.2),
+                       max(self._opts.title_size + 16, 48), True, PP_ALIGN.CENTER)
+
+    def _slide_final(self, prs):
+        s = prs.slides.add_slide(prs.slide_layouts[6])
+        self._apply_background(s, prs)
+        self._add_text(
+            s, "СПАСИБО, ЧТО БЫЛИ С НАМИ!", Inches(1.0), Inches(1.4), Inches(11.3), Inches(1.0),
+            max(self._opts.title_size - 4, 28), True, PP_ALIGN.CENTER
+        )
 
 
 class TicketGenerator:
-    def generate_modern_tickets(self, tracks, count=24):
-        """Генерация билетов в современном стиле"""
+    def generate_modern_tickets(self, tracks: List[dict], count: int = 24) -> str | None:
+        """Заглушка генерации билетов"""
         try:
-            logger.info(f"🎫 Генерация {count} билетов для {len(tracks)} треков")
-            # Заглушка - возвращаем временный путь
-            return f"/tmp/modern_tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            out = f"/tmp/musical_loto_tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            with open(out, "w", encoding="utf-8") as f:
+                f.write("Tickets placeholder")
+            return out
         except Exception as e:
-            logger.error(f"❌ Ошибка генерации билетов: {e}")
-            return f"/tmp/tickets_error_{datetime.now().strftime('%H%M%S')}.pdf"
+            logger.error("❌ Ошибка генерации билетов: %s", e)
+            return None
+
+
+# ------------------------------
+# small color util
+# ------------------------------
+def _dim(rgb: RGBColor, k: float) -> RGBColor:
+    """
+    Сделать цвет темнее/прозрачнее
+    """
+    r = max(0, min(255, int(rgb[0] * (1 - (1 - k)))))
+    g = max(0, min(255, int(rgb[1] * (1 - (1 - k)))))
+    b = max(0, min(255, int(rgb[2] * (1 - (1 - k)))))
+    return RGBColor(r, g, b)

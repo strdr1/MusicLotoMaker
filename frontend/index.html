@@ -23,6 +23,7 @@
         <!-- Вкладка Медиатека -->
         <div id="media" class="tab-content active">
             <div class="toolbar">
+
                 <input type="file" id="fileInput" multiple accept="audio/*" style="display: none;">
                 <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
                     📁 Загрузить треки
@@ -37,6 +38,56 @@
                     🗑️ Очистить все
                 </button>
             </div>
+            <!-- Блок скачивания треков из интернета -->
+            <div class="list-search-section">
+                <h3>📥 Скачать треки из интернета</h3>
+
+                <div class="list-search-controls">
+                    <div class="list-search-input">
+                        <label>Список треков (каждый с новой строки):</label>
+                        <textarea id="trackList" class="form-input" rows="8" placeholder="Формат:
+Исполнитель - Название трека
+Another Artist - Another Song
+Просто название трека
+Название (Исполнитель)"></textarea>
+                        <small class="text-muted">Поддерживаются форматы: "Исполнитель - Название", "Название (Исполнитель)" или просто название</small>
+                    </div>
+
+                    <div class="list-search-actions">
+                        <button class="btn btn-primary" onclick="downloadTrackList()">
+                            📥 Скачать все треки
+                        </button>
+                        <button class="btn btn-secondary" onclick="testParseTrackList()">
+                            🔍 Проверить список
+                        </button>
+                        <button class="btn btn-warning" onclick="clearTrackList()">
+                            🗑️ Очистить
+                        </button>
+
+                        <div class="batch-download-controls">
+                            <label>
+                                <input type="checkbox" id="autoSearchPhotos" checked>
+                                Автоматически искать фото артистов
+                            </label>
+                            <label>
+                                <input type="checkbox" id="useSmartSegments" checked>
+                                Умные отрезки
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="listSearchProgress" style="display: none;">
+                    <div class="progress-info">
+                        <span id="progressStatus">Подготовка...</span>
+                        <span id="progressCount">0/0</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div id="progressDetails" style="margin-top: 10px; font-size: 12px;"></div>
+                </div>
+            </div>
 
             <div class="tracks-container">
                 <div class="tracks-header">
@@ -50,6 +101,16 @@
                     <!-- Треки будут здесь -->
                 </div>
             </div>
+
+            <!-- ПАНЕЛЬ ПОФАЙЛОВОГО ПРОГРЕССА ЗАГРУЗОК -->
+            <div id="uploadProgressPanel" class="upload-progress-panel" aria-live="polite">
+                <div class="upload-progress-header">
+                    <span id="uploadSummary">Загрузок нет</span>
+                    <button id="cancelAllUploadsBtn" class="btn btn-small btn-danger" style="display:none;">✖ Отменить все</button>
+                </div>
+                <div id="uploadRows"></div>
+            </div>
+            <!-- /ПАНЕЛЬ ПРОГРЕССА -->
 
             <div id="mediaStatus" class="status"></div>
         </div>
@@ -69,37 +130,284 @@
                 </button>
 
                 <div id="presentationStatus" class="status"></div>
+
+                <!-- ===== Мини-конструктор дизайна ===== -->
+                <div class="settings-card">
+                    <h3 style="text-align:left;margin-bottom:12px;">🎨 Дизайн презентации</h3>
+
+                    <div class="settings-grid">
+                        <!-- Левая колонка: настройки -->
+                        <div class="settings-controls">
+
+                            <div class="group">
+                                <h4>Шрифты</h4>
+                                <label>
+                                    Семейство
+                                    <select id="d_font_family" class="form-input">
+                                        <option>Inter</option>
+                                        <option>Arial</option>
+                                        <option>Calibri</option>
+                                        <option>Segoe UI</option>
+                                        <option>Montserrat</option>
+                                        <option>Roboto</option>
+                                    </select>
+                                </label>
+                                <div class="row">
+                                    <label style="flex:1;">
+                                        Размер заголовка
+                                        <input id="d_title_size" type="number" class="form-input" value="44" min="16" max="96">
+                                    </label>
+                                    <label style="flex:1;">
+                                        Размер текста
+                                        <input id="d_text_size" type="number" class="form-input" value="24" min="12" max="72">
+                                    </label>
+                                </div>
+                                <div class="row">
+                                    <label><input id="d_bold_titles" type="checkbox" checked> Жирные заголовки</label>
+                                    <label><input id="d_upper_titles" type="checkbox"> ВЕРХНИЙ РЕГИСТР</label>
+                                </div>
+                                <div class="row">
+                                    <label style="flex:1;">
+                                        Цвет текста
+                                        <input id="d_text_color" type="color" class="form-input" value="#E8EEFC">
+                                    </label>
+                                    <label style="flex:1;">
+                                        Акцент
+                                        <input id="d_accent_color" type="color" class="form-input" value="#4E7CFF">
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="group">
+                                <h4>Расположение карточки песни</h4>
+                                <div class="row">
+                                    <label style="flex:1;">
+                                        Пресет
+                                        <select id="d_layout" class="form-input">
+                                            <option value="photo_left">Фото слева, текст справа</option>
+                                            <option value="photo_right">Фото справа, текст слева</option>
+                                            <option value="photo_top">Фото сверху, текст снизу</option>
+                                            <option value="photo_only">Только фото (крупно)</option>
+                                        </select>
+                                    </label>
+                                    <label style="flex:1;">
+                                        Радиус фото
+                                        <input id="d_photo_radius" type="number" class="form-input" value="16" min="0" max="60">
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="group">
+                                <h4>Кнопки меню раунда</h4>
+                                <div class="row">
+                                    <label><input id="d_show_numbers" type="checkbox" checked> Показывать нумерацию</label>
+                                </div>
+                                <div class="row">
+                                    <label style="flex:1;">
+                                        Загрузить свою кнопку (PNG)
+                                        <input id="d_btn_upload" type="file" accept="image/png" class="form-input">
+                                    </label>
+                                    <button class="btn btn-secondary" id="d_btn_reset" style="align-self:flex-end;">Сбросить</button>
+                                </div>
+                                <small class="text-muted">Если кастомная кнопка не загружена, будут стандартные блоки.</small>
+                                <div style="margin-top:10px" id="d_btn_preview_wrap">
+                                    <img id="d_btn_preview" alt="" style="display:none;max-width:160px;border-radius:8px;border:1px solid var(--border)">
+                                </div>
+                            </div>
+
+                            <div class="group">
+                                <h4>Фон слайдов</h4>
+                                <div class="row">
+                                    <label><input type="radio" name="bgMode" value="solid" checked> Сплошной цвет</label>
+                                    <label><input type="radio" name="bgMode" value="gradient"> Градиент</label>
+                                    <label><input type="radio" name="bgMode" value="image"> Картинка</label>
+                                </div>
+                                <div class="row" id="bgSolidRow">
+                                    <label style="flex:1;">
+                                        Цвет
+                                        <input id="d_bg_color" type="color" class="form-input" value="#121B2F">
+                                    </label>
+                                </div>
+                                <div class="row" id="bgGradientRow" style="display:none;">
+                                    <label style="flex:1;">
+                                        Градиент от
+                                        <input id="d_grad_from" type="color" class="form-input" value="#1A2340">
+                                    </label>
+                                    <label style="flex:1;">
+                                        до
+                                        <input id="d_grad_to" type="color" class="form-input" value="#0F1623">
+                                    </label>
+                                </div>
+                                <!-- В разделе фона заменить этот блок: -->
+                                <div class="row" id="bgImageRow" style="display:none;">
+                                    <label style="flex:1;">
+                                        Картинка-фон (JPG/PNG)
+                                        <input id="d_bg_upload" type="file" accept="image/*" class="form-input">
+                                    </label>
+                                    <button class="btn btn-secondary" id="d_bg_reset" style="align-self:flex-end;">Сбросить</button>
+                                </div>
+                                <div id="d_bg_preview_wrap" style="margin-top:10px">
+                                    <img id="d_bg_preview" alt="" style="display:none;max-width:220px;border-radius:8px;border:1px solid var(--border)">
+                                </div>
+                                <div id="d_bg_preview_wrap" style="margin-top:10px">
+                                    <img id="d_bg_preview" alt="" style="display:none;max-width:220px;border-radius:8px;border:1px solid var(--border)">
+                                </div>
+                            </div>
+
+                            <div class="group">
+                                <button class="btn btn-primary" id="d_save_btn">💾 Сохранить дизайн по умолчанию</button>
+                                <span id="d_save_status" class="status" style="display:none"></span>
+                            </div>
+                        </div>
+
+                        <!-- Правая колонка: живой превью -->
+                        <div class="settings-preview">
+                            <canvas id="designPreview" width="840" height="472"></canvas>
+                            <div class="muted">Предпросмотр для быстрой проверки стиля</div>
+                        </div>
+                    </div>
+                </div>
+                <!-- ===== /Мини-конструктор ===== -->
             </div>
         </div>
-
-        <!-- Вкладка Билеты -->
+        <!-- === Вкладка: Билеты === -->
         <div id="tickets" class="tab-content">
             <div class="generator-card">
-                <h2>🎫 Генератор билетов лото</h2>
-                <p>Создайте набор билетов для игры в музыкальное лото</p>
+                <h2>🎫 Генератор билетов</h2>
+                <p>Создавайте билеты лото из треков медиатеки. Настройте дизайн мини-конструктора и укажите количество билетов.</p>
 
                 <div class="form-group">
-                    <label for="ticketsCount">Количество билетов:</label>
-                    <input type="number" id="ticketsCount" value="24" min="1" max="100" class="form-input">
+                    <label>Количество билетов (1–100):</label>
+                    <input id="t_count" type="number" class="form-input" value="10" min="1" max="100">
                 </div>
 
-                <button class="btn btn-large btn-primary" onclick="generateTickets()">
-                    🎫 Сгенерировать билеты
-                </button>
+                <div class="settings-card">
+                    <h3>🎨 Дизайн билета</h3>
 
-                <div id="ticketsStatus" class="status"></div>
+                    <div class="row" style="gap:12px;">
+                        <label style="flex:1;">
+                            Шрифт
+                            <select id="t_font" class="form-input">
+                                <option>Helvetica</option>
+                                <option>Arial</option>
+                                <option>Times-Roman</option>
+                                <option>Courier</option>
+                            </select>
+                        </label>
+
+                        <label style="flex:1;">
+                            Размер названия
+                            <input id="t_title_size" type="number" class="form-input" value="14" min="8" max="36">
+                        </label>
+
+                        <label style="flex:1;">
+                            Размер артиста
+                            <input id="t_artist_size" type="number" class="form-input" value="11" min="6" max="28">
+                        </label>
+                    </div>
+
+                    <div class="row" style="gap:12px;margin-top:10px;">
+                        <label style="flex:1;">
+                            Цвет текста
+                            <input id="t_text_color" type="color" class="form-input" value="#E8EEFC">
+                        </label>
+                        <label style="flex:1;">
+                            Цвет акцента
+                            <input id="t_accent_color" type="color" class="form-input" value="#4E7CFF">
+                        </label>
+                        <label style="flex:1;">
+                            <input id="t_bold" type="checkbox" checked> Жирный шрифт названий
+                        </label>
+                        <label style="flex:1;">
+                            <input id="t_upper" type="checkbox"> ВЕРХНИЙ РЕГИСТР
+                        </label>
+                    </div>
+
+                    <!-- НОВЫЕ НАСТРОЙКИ ПОЗИЦИОНИРОВАНИЯ -->
+                    <div class="row" style="gap:12px;margin-top:15px;padding:15px;background:#1a2432;border-radius:8px;">
+                        <label style="flex:1;">
+                            Позиция названия трека
+                            <input id="t_title_position" type="range" class="form-input" min="0" max="100" value="30">
+                            <small style="color:#ccc;">Сверху: 0% ↓ Снизу: 100%</small>
+                        </label>
+
+                        <label style="flex:1;">
+                            Позиция имени артиста
+                            <input id="t_artist_position" type="range" class="form-input" min="0" max="100" value="70">
+                            <small style="color:#ccc;">Сверху: 0% ↓ Снизу: 100%</small>
+                        </label>
+
+                        <label style="flex:1;">
+                            Вертикальный отступ
+                            <input id="t_vertical_padding" type="range" class="form-input" min="5" max="30" value="15">
+                            <small style="color:#ccc;">Меньше: 5px ↔ Больше: 30px</small>
+                        </label>
+                    </div>
+
+                    <div style="margin-top:14px;">
+                        <button id="generateTicketsBtn" class="btn btn-large btn-primary">🎫 Сгенерировать билеты</button>
+                    </div>
+
+                    <!-- УВЕЛИЧЕННОЕ ПРЕВЬЮ -->
+                    <div id="ticketsPreview" style="margin-top:24px;">
+                        <h4 style="text-align:center; margin-bottom:16px;">📋 Превью билета (увеличено)</h4>
+                        <div style="display:flex; justify-content:center; gap:20px; flex-wrap:wrap;">
+                            <!-- Основной билет увеличен -->
+                            <div id="ticketPreviewCard"
+                                 style="width:800px; border:3px solid #2b3744; padding:25px; background:#0f1720; border-radius:15px; text-align:center; box-shadow:0 12px 32px rgba(0,0,0,0.4);">
+                                <div id="ticketPreviewTitle"
+                                     style="color:#4E7CFF; font-weight:700; margin-bottom:20px; font-size:24px; padding-bottom:12px; border-bottom:2px solid #2b3744;">
+                                    БИЛЕТ №1 - МУЗЫКАЛЬНОЕ ЛОТО
+                                </div>
+                                <div id="ticketPreviewGrid"
+                                     style="display:grid; grid-template-columns:repeat(6, 1fr); gap:10px; background:#101823; padding:20px; border-radius:12px; min-height:500px;">
+                                    <!-- Сетка 6x6 будет заполнена JavaScript -->
+                                </div>
+                                <div style="margin-top:15px; font-size:13px; color:#888; font-style:italic;">
+                                    Музыкальное лото — отметьте сыгранные треки
+                                </div>
+                            </div>
+
+                            <!-- Дополнительная информация -->
+                            <div style="width:350px; background:#0f1720; border-radius:12px; padding:20px; border:2px solid #2b3744;">
+                                <h4 style="color:#4E7CFF; margin-bottom:15px; font-size:18px;">📊 Статистика</h4>
+                                <div style="text-align:left; line-height:1.7; font-size:14px;">
+                                    <div><strong>Треков в медиатеке:</strong> <span id="previewTrackCount">0</span></div>
+                                    <div><strong>Требуется для билета:</strong> 36 треков</div>
+                                    <div><strong>Размер сетки:</strong> 6×6 = 36 ячеек</div>
+                                    <div><strong>Размер превью:</strong> 800×600px</div>
+                                    <div><strong>Статус:</strong> <span id="previewStatus">Загрузка...</span></div>
+                                </div>
+
+                                <div style="margin-top:20px; padding:15px; background:#1a2432; border-radius:8px;">
+                                    <h5 style="margin-bottom:10px; color:#E8EEFC; font-size:16px;">🎯 Настройки позиционирования</h5>
+                                    <ul style="text-align:left; font-size:13px; color:#ccc; padding-left:18px; line-height:1.5;">
+                                        <li><strong>Позиция названия</strong> - регулируйте вертикальное положение названия трека</li>
+                                        <li><strong>Позиция артиста</strong> - настройте положение имени исполнителя</li>
+                                        <li><strong>Вертикальный отступ</strong> - общий отступ текста от краев ячейки</li>
+                                        <li>Все названия треков отображаются полностью без обрезки</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- /УВЕЛИЧЕННОЕ ПРЕВЬЮ -->
+
+                </div>
             </div>
         </div>
 
-        <!-- Вкладка Статус -->
-        <div id="status" class="tab-content">
-            <div class="generator-card">
-                <h2>📊 Статус системы</h2>
-                <div id="systemStatus">
-                    <p>🔄 Загружаем информацию...</p>
-                </div>
+    </div>
+
+    <!-- Вкладка Статус -->
+    <div id="status" class="tab-content">
+        <div class="generator-card">
+            <h2>📊 Статус системы</h2>
+            <div id="systemStatus">
+                <p>🔄 Загружаем информацию...</p>
             </div>
         </div>
+    </div>
     </div>
 
     <!-- Модальное окно редактирования метаданных -->
@@ -148,8 +456,8 @@
                     </button>
                 </div>
                 <div id="photoPreview" style="margin-top: 20px; text-align: center; display: none;">
-                    <img id="photoPreviewImage" src="" alt="Предпросмотр" style="max-width: 200px; max-height: 200px; border-radius: 8px;">
-                    <p style="margin-top: 10px; color: var(--text-muted);">Предпросмотр</p>
+                    <img id="photoPreviewImage" src="" alt="Предпросмотр" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                    <div id="photoNavigation" style="margin-top: 15px;"></div>
                 </div>
                 <div id="photoStatus" class="status" style="margin-top: 15px; display: none;"></div>
             </div>
@@ -282,7 +590,8 @@
             </div>
         </div>
     </div>
-
     <script src="static/js/app.js"></script>
+    <script src="static/js/tickets.js"></script>
+
 </body>
 </html>
