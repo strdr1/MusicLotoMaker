@@ -502,11 +502,8 @@ def parse_track_line(line: str) -> tuple:
 
 
 async def search_youtube_music(query: str, track_info: dict) -> dict:
-    """Асинхронная-совместимая обёртка поиска/скачивания через yt_dlp.
-    Внутренняя работа yt_dlp выполняется в отдельном потоке через asyncio.to_thread,
-    чтобы не блокировать основной event loop."""
+    """Асинхронная-совместимая обёртка поиска/скачивания через yt_dlp с обходом блокировок."""
     try:
-        # run blocking yt_dlp calls in thread
         def _yt_search_and_download(q, track_info_local):
             try:
                 ydl_opts = {
@@ -517,22 +514,63 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
                     'extractaudio': True,
                     'audioformat': 'mp3',
                     'noplaylist': True,
+                    # Добавляем заголовки для обхода блокировок
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-us,en;q=0.5',
+                        'Accept-Encoding': 'gzip,deflate',
+                        'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+                        'Connection': 'keep-alive',
+                    },
+                    # Альтернативные экстракторы
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['android', 'web'],
+                        }
+                    },
                 }
+                
                 os.makedirs(os.path.join(tempfile.gettempdir(), 'youtube_dl'), exist_ok=True)
+                
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    # Пробуем разные форматы поиска
                     search_query = f"{q} official audio"
-                    info = ydl.extract_info(f"ytsearch:{search_query}", download=False)
+                    logger.info(f"🔍 Поиск на YouTube: {search_query}")
+                    
+                    # Пробуем прямой поиск
+                    try:
+                        info = ydl.extract_info(f"ytsearch:{search_query}", download=False)
+                    except Exception as search_error:
+                        logger.warning(f"⚠️ Ошибка поиска, пробуем альтернативный метод: {search_error}")
+                        # Альтернативный метод поиска
+                        search_query_alt = f"{q} audio"
+                        info = ydl.extract_info(f"ytsearch:{search_query_alt}", download=False)
+                    
                     if info and 'entries' in info and info['entries']:
                         video_info = info['entries'][0]
                         video_url = video_info['webpage_url']
                         video_title = video_info.get('title') or video_info.get('id')
-                        logger.info(f"🎵 Найден на YouTube (thread): {video_title}")
+                        logger.info(f"🎵 Найден на YouTube: {video_title}")
+                        
+                        # Скачиваем с дополнительными опциями
                         download_info = ydl.extract_info(video_url, download=True)
                         downloaded_file = ydl.prepare_filename(download_info)
-                        return {'success': True, 'file_path': downloaded_file, 'video_title': video_title}
+                        
+                        return {
+                            'success': True, 
+                            'file_path': downloaded_file, 
+                            'video_title': video_title,
+                            'duration': download_info.get('duration', 0)
+                        }
                     return {'success': False, 'error': 'Трек не найден на YouTube'}
+                    
+            except yt_dlp.DownloadError as e:
+                logger.error(f"❌ Ошибка скачивания yt-dlp: {e}")
+                return {'success': False, 'error': f'Ошибка YouTube: {str(e)}'}
             except Exception as e:
-                return {'success': False, 'error': str(e)}
+                logger.error(f"❌ Неожиданная ошибка: {e}")
+                return {'success': False, 'error': f'Неожиданная ошибка: {str(e)}'}
 
         result = await asyncio.to_thread(_yt_search_and_download, query, track_info)
         return result
