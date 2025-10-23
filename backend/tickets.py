@@ -1,225 +1,275 @@
 ﻿# backend/tickets.py
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.colors import HexColor
+from reportlab.lib.colors import HexColor, white, black
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 import random
 import os
 import logging
+from datetime import datetime
+from PyPDF2 import PdfMerger
 
 logger = logging.getLogger(__name__)
+
 
 class TicketGenerator:
     def __init__(self, output_dir="output"):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
+        self._register_cyrillic_fonts()
+        logger.info(f"TicketGenerator initialized with output_dir: {output_dir}")
+
+    def _register_cyrillic_fonts(self):
+        """Регистрирует кириллические шрифты (Arial на Windows)."""
+        try:
+            for path in ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"]:
+                if os.path.exists(path):
+                    name = "Arial-Bold" if "bd" in path.lower() else "Arial"
+                    try:
+                        pdfmetrics.registerFont(TTFont(name, path))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _get_safe_font(self, font_family, bold=False):
+        """Возвращает безопасный шрифт (Arial или Helvetica)."""
+        try:
+            if pdfmetrics.getFont("Arial"):
+                if bold and pdfmetrics.getFont("Arial-Bold"):
+                    return "Arial-Bold"
+                return "Arial"
+        except Exception:
+            pass
+        return "Helvetica-Bold" if bold else "Helvetica"
+
+    def _get_text_width(self, text, font, size):
+        if not text:
+            return 0
+        avg = size * 0.6
+        wide = set('WMДЖЩФ')
+        narrow = set('il1ft.,;:! ')
+        w = 0
+        for ch in text:
+            if ch in wide:
+                w += size * 0.8
+            elif ch in narrow:
+                w += size * 0.3
+            else:
+                w += avg
+        return w
+
+    def _get_centered_x(self, text, font, size, x, width):
+        return x + (width - self._get_text_width(text, font, size)) / 2
+
+    def _wrap_text(self, text, font, size, max_width):
+        if not text:
+            return [""]
+        if self._get_text_width(text, font, size) <= max_width:
+            return [text]
+        words = text.split()
+        if len(words) == 1:
+            approx_chars = max(1, int(max_width / (size * 0.6)) - 3)
+            return [text[:approx_chars] + ("..." if len(text) > approx_chars else "")]
+        lines, current = [], words[0]
+        for w in words[1:]:
+            if self._get_text_width(current + " " + w, font, size) <= max_width:
+                current += " " + w
+            else:
+                lines.append(current)
+                current = w
+            if len(lines) == 2:
+                break
+        lines.append(current)
+        result = []
+        for ln in lines[:2]:
+            if self._get_text_width(ln, font, size) > max_width:
+                approx_chars = max(1, int(max_width / (size * 0.6)) - 3)
+                result.append(ln[:approx_chars] + ("..." if len(ln) > approx_chars else ""))
+            else:
+                result.append(ln)
+        return result
 
     def generate_modern_tickets(self, tracks, count=10, design=None):
-        """
-        Сгенерировать PDF с билетами.
-        tracks: список словарей {'artist': '..', 'title': '..', ...}
-        count: количество билетов
-        design: словарь параметров дизайна:
-            {
-                "font_family": "Helvetica",
-                "title_size": 14,
-                "artist_size": 10,
-                "text_color": "#000000",
-                "accent_color": "#2563eb",
-                "bold": True,
-                "uppercase": False
-            }
-        Возвращает полный путь к PDF.
-        """
-        if not tracks or len(tracks) == 0:
+        if not tracks:
             raise ValueError("Нет треков для генерации билетов")
 
-        design = design or {}
-        font_family = design.get("font_family", "Helvetica")
-        title_size = int(design.get("title_size", 14))
-        artist_size = int(design.get("artist_size", 10))
-        text_color = design.get("text_color", "#111111")
-        accent_color = design.get("accent_color", "#2563eb")
-        bold = design.get("bold", True)
-        uppercase = design.get("uppercase", False)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder = os.path.join(self.output_dir, f"tickets_{timestamp}")
+        os.makedirs(folder, exist_ok=True)
 
-        # output
-        filename = f"tickets_{len(tracks)}_{count}.pdf"
-        output_path = os.path.join(self.output_dir, filename)
+        d = design or {}
+        f_family = d.get("font_family", "Helvetica")
+        t_size = int(d.get("title_size", 8))
+        a_size = int(d.get("artist_size", 6))
+        text_color = d.get("text_color", "#000000")
+        accent_color = d.get("accent_color", "#2563eb")
+        bold = d.get("bold", False)
+        upper = d.get("uppercase", False)
+        pad = int(d.get("vertical_padding", 5))
+        title_pos = int(d.get("title_position", 30)) / 100.0
+        artist_pos = int(d.get("artist_position", 70)) / 100.0
 
-        # prepare canvas
-        c = canvas.Canvas(output_path, pagesize=A4)
-        width, height = A4
+        title_font = self._get_safe_font(f_family, bold)
+        artist_font = self._get_safe_font(f_family, False)
 
-        # layout: 2 columns x 2 rows per page (4 tickets per page)
-        tickets_per_page = 4
-        pages = (count + tickets_per_page - 1) // tickets_per_page
+        ticket_sets = self._generate_random_ticket_sets(tracks, count, 36)
+        generated_files = []
 
-        logger.info(f"TicketGenerator: start generate {count} tickets across {pages} pages")
+        for i in range(count):
+            filename = f"ticket_{i+1:03d}.pdf"
+            path = os.path.join(folder, filename)
+            self._generate_single_ticket(
+                path, i + 1, ticket_sets[i],
+                title_font, artist_font,
+                t_size, a_size,
+                text_color, accent_color,
+                upper, pad, title_pos, artist_pos
+            )
+            generated_files.append(path)
 
-        # Создаем случайные наборы треков для каждого билета (6x6 = 36 треков на билет)
-        ticket_tracks_sets = self._generate_random_ticket_sets(tracks, count, slots_per_ticket=36)
+        self._merge_in_groups(folder, generated_files)
+        return folder
 
-        for page in range(pages):
-            if page > 0:
-                c.showPage()
+    def _generate_single_ticket(self, path, num, tracks, t_font, a_font,
+                               t_size, a_size, text_color, accent_color,
+                               upper, pad, title_pos, artist_pos):
+        c = canvas.Canvas(path, pagesize=A4)
+        w, h = A4
+        m = 5 * mm
+        t_h = 190 * mm
+        t_w = w - 2 * m
+        stripe_h = 12 * mm
+        x = m
+        y = h - m - t_h
 
-            # page header
-            c.setFont("Helvetica-Bold", 18)
-            try:
-                c.setFillColor(HexColor(accent_color))
-            except Exception:
-                c.setFillColor(HexColor("#2563eb"))
-            c.drawString(60, height - 50, "🎵 Музыкальное Лото")
+        # фон билета
+        c.setFillColor(HexColor("#f8fafc"))
+        c.rect(x, y, t_w, t_h, fill=1, stroke=0)
 
-            # tickets for this page
-            start_idx = page * tickets_per_page
-            end_idx = min(start_idx + tickets_per_page, count)
-            for i in range(start_idx, end_idx):
-                # compute placement
-                local_index = i - start_idx  # 0..3
-                col = local_index % 2
-                row = local_index // 2  # 0 or 1
+        # зелёная полоса
+        stripe_col = HexColor("#009956")
+        c.setFillColor(stripe_col)
+        c.rect(x, y + t_h - stripe_h, t_w, stripe_h, fill=1, stroke=0)
 
-                ticket_w = (width - 120) / 2  # margin left+right ~60
-                ticket_h = (height - 140) / 2
+        # разделительная линия под полосой
+        c.setStrokeColor(HexColor("#dfeee6"))
+        c.setLineWidth(0.6)
+        c.line(x + 1 * mm, y + t_h - stripe_h - 0.5 * mm, x + t_w - 1 * mm, y + t_h - stripe_h - 0.5 * mm)
 
-                x = 60 + col * (ticket_w + 20)
-                y_top = height - 80 - row * (ticket_h + 20)
-                
-                # Передаем уникальный набор треков для этого билета
-                ticket_tracks = ticket_tracks_sets[i]
-                self._draw_ticket(c, i + 1, ticket_tracks, x, y_top, ticket_w, ticket_h,
-                                  font_family, title_size, artist_size,
-                                  text_color, accent_color, bold, uppercase)
+        # надпись "Билет №N"
+        header_font = self._get_safe_font("Arial", True)
+        c.setFont(header_font, 16)
+        c.setFillColor(black)
+        c.drawCentredString(x + t_w / 2, y + t_h - stripe_h / 2 - 4, f"Билет №{num}")
+
+        # сетка
+        grid_y = y
+        grid_h = t_h - stripe_h - (4 * mm)
+        self._draw_ticket_grid(c, x, grid_y, t_w, grid_h, tracks, t_font, a_font,
+                               t_size, a_size, text_color, accent_color, upper, pad,
+                               title_pos, artist_pos)
+
+        # линия отреза
+        cut_y = y - 5 * mm
+        c.setStrokeColor(HexColor("#666666"))
+        c.setLineWidth(0.5)
+        c.setDash([2, 2])
+        c.line(x, cut_y, x + t_w, cut_y)
+        c.setDash()
+        c.setFont(a_font, 6)
+        c.setFillColor(HexColor("#666666"))
+        c.drawCentredString(x + t_w / 2, cut_y - 2 * mm, "Отрежьте по линии")
 
         c.save()
-        logger.info(f"TicketGenerator: saved {output_path}")
-        return output_path
 
-    def _generate_random_ticket_sets(self, tracks, count, slots_per_ticket=36):
-        """
-        Генерирует случайные наборы треков для каждого билета.
-        Каждый билет получает уникальный набор из 36 случайных треков (6x6).
-        """
-        if len(tracks) < slots_per_ticket:
-            # Если треков меньше, чем нужно для одного билета - дублируем
-            needed_multiplier = (slots_per_ticket // len(tracks)) + 1
-            pool = tracks * needed_multiplier
-            logger.warning(f"Треков ({len(tracks)}) меньше, чем слотов ({slots_per_ticket}). Дублируем треки.")
-        else:
-            pool = tracks[:]
-        
-        ticket_sets = []
-        
-        for i in range(count):
-            # Для каждого билета выбираем случайные треки
-            if len(pool) >= slots_per_ticket:
-                # Если треков достаточно - берем случайную выборку
-                chosen = random.sample(pool, slots_per_ticket)
-            else:
-                # Если все еще недостаточно - берем все что есть и дополняем случайными
-                chosen = pool[:]
-                while len(chosen) < slots_per_ticket:
-                    chosen.append(random.choice(tracks))
-            
-            ticket_sets.append(chosen)
-            logger.debug(f"Билет {i+1}: выбрано {len(chosen)} треков")
-        
-        logger.info(f"Сгенерировано {len(ticket_sets)} наборов треков для билетов")
-        return ticket_sets
+    def _draw_ticket_grid(self, c, x, y, w, h, tracks, t_font, a_font,
+                         t_size, a_size, t_col, a_col, upper, pad,
+                         title_pos, artist_pos):
+        rows, cols = 6, 6
+        cw, ch = w / cols, h / rows
+        pad_pt = pad * 0.75
+        max_w = cw - pad_pt * 2
 
-    def _draw_ticket(self, c, ticket_num, tracks, x, y_top, w, h,
-                     font_family, title_size, artist_size,
-                     text_color, accent_color, bold, uppercase):
-        """
-        Рисует один билет в прямоугольнике (x, y_top) верхняя-left.
-        На билет помещаем 36 элементов (6 строк по 6).
-        """
-        # border
-        try:
-            c.setStrokeColor(HexColor(accent_color))
-        except Exception:
-            c.setStrokeColor(HexColor("#2563eb"))
-        c.setLineWidth(1)
-        c.rect(x, y_top - h, w, h, stroke=1, fill=0)
-
-        # ticket header
-        c.setFont("Helvetica-Bold", 12)
-        try:
-            c.setFillColor(HexColor(accent_color))
-        except Exception:
-            c.setFillColor(HexColor("#2563eb"))
-        c.drawString(x + 8, y_top - 14, f"БИЛЕТ №{ticket_num}")
-
-        # layout: 6 rows x 6 columns = 36 items
-        rows = 6
-        cols = 6
-        left_padding = x + 8
-        top_start = y_top - 30
-        
-        # Calculate cell dimensions
-        cell_width = (w - 16) / cols
-        cell_height = (h - 40) / rows
-        
-        # Draw grid and content
-        for row in range(rows):
+        for r in range(rows):
             for col in range(cols):
-                idx = row * cols + col
+                cx = x + col * cw
+                cy = y + (rows - r - 1) * ch
+                c.setStrokeColor(black)
+                c.setLineWidth(0.4)
+                c.rect(cx, cy, cw, ch, stroke=1, fill=0)
+
+                idx = r * cols + col
                 if idx >= len(tracks):
                     continue
-                    
-                item = tracks[idx]
-                title = item.get("title") or ""
-                artist = item.get("artist") or ""
 
-                if uppercase:
-                    title = title.upper()
-                    artist = artist.upper()
+                t = tracks[idx]
+                title = (t.get("title") or "Без названия").strip()
+                artist = (t.get("artist") or "Неизвестный исполнитель").strip()
+                if upper:
+                    title, artist = title.upper(), artist.upper()
 
-                # Calculate cell position
-                cell_x = left_padding + col * cell_width
-                cell_y = top_start - row * cell_height
+                title_lines = self._wrap_text(title, t_font, t_size, max_w)
+                artist_lines = self._wrap_text(artist, a_font, a_size, max_w)
+                title_lines, artist_lines = title_lines[:2], artist_lines[:2]
 
-                # Draw cell border (optional)
-                c.setStrokeColor(HexColor("#eeeeee"))
-                c.setLineWidth(0.3)
-                c.rect(cell_x, cell_y - cell_height + 5, cell_width - 2, cell_height - 8, stroke=1, fill=0)
+                title_h = len(title_lines) * (t_size + 2)
+                artist_h = len(artist_lines) * (a_size + 2)
 
-                # title line
-                set_font = font_family + ("-Bold" if bold else "")
-                try:
-                    c.setFont(set_font, title_size)
-                except Exception:
-                    # fallback
-                    c.setFont("Helvetica-Bold" if bold else "Helvetica", title_size)
-                try:
-                    c.setFillColor(HexColor(text_color))
-                except Exception:
-                    c.setFillColor(HexColor("#111111"))
-                
-                # Trim long titles to fit cell
-                max_title_chars = 15
-                title_draw = (title[:max_title_chars-3] + "...") if len(title) > max_title_chars else title
-                c.drawString(cell_x + 2, cell_y - 8, title_draw)
+                # корректное направление (0% сверху, 100% снизу)
+                title_base_y = cy + ch * (1 - title_pos) - title_h / 2
+                artist_base_y = cy + ch * (1 - artist_pos) - artist_h / 2
 
-                # artist line (smaller, accent)
-                try:
-                    c.setFont(font_family, artist_size)
-                except Exception:
-                    c.setFont("Helvetica", artist_size)
-                try:
-                    c.setFillColor(HexColor(accent_color))
-                except Exception:
-                    c.setFillColor(HexColor("#2563eb"))
-                
-                max_artist_chars = 13
-                artist_draw = (artist[:max_artist_chars-3] + "...") if len(artist) > max_artist_chars else artist
-                c.drawString(cell_x + 2, cell_y - 20, artist_draw)
+                # трек
+                c.setFont(t_font, t_size)
+                c.setFillColor(HexColor(a_col))
+                for i, ln in enumerate(title_lines):
+                    line_y = title_base_y + (len(title_lines) - 1 - i) * (t_size + 2)
+                    line_x = self._get_centered_x(ln, t_font, t_size, cx, cw)
+                    c.drawString(line_x, line_y, ln)
 
-        # footer small note
-        c.setFont("Helvetica-Oblique", 7)
-        try:
-            c.setFillColor(HexColor("#888888"))
-        except Exception:
-            c.setFillColor(HexColor("#888888"))
-        c.drawString(x + 8, y_top - h + 8, "Музыкальное лото — отметьте сыгранные треки")
+                # артист
+                c.setFont(a_font, a_size)
+                c.setFillColor(HexColor(t_col))
+                for i, ln in enumerate(artist_lines):
+                    line_y = artist_base_y + (len(artist_lines) - 1 - i) * (a_size + 2)
+                    line_x = self._get_centered_x(ln, a_font, a_size, cx, cw)
+                    c.drawString(line_x, line_y, ln)
+
+    def _generate_random_ticket_sets(self, tracks, count, slots_per_ticket=36):
+        if not tracks:
+            return [[] for _ in range(count)]
+        if len(tracks) < slots_per_ticket:
+            pool = tracks * ((slots_per_ticket // len(tracks)) + 1)
+        else:
+            pool = tracks[:]
+        result = []
+        for _ in range(count):
+            s = random.sample(pool, slots_per_ticket) if len(pool) >= slots_per_ticket else pool[:]
+            while len(s) < slots_per_ticket:
+                s.append(random.choice(tracks))
+            result.append(s)
+        return result
+
+    def _merge_in_groups(self, folder, files):
+        if not files:
+            return
+        files = sorted(files, key=lambda f: os.path.basename(f))
+        group_size = 50
+        groups = []
+        for i in range(0, len(files), group_size):
+            g = files[i:i + group_size]
+            m = PdfMerger()
+            for f in g:
+                m.append(f)
+            name = os.path.join(folder, f"all_tickets_{i+1}_{i+len(g)}.pdf")
+            m.write(name)
+            m.close()
+            groups.append(name)
+        m_all = PdfMerger()
+        for g in groups:
+            m_all.append(g)
+        m_all.write(os.path.join(folder, "all_tickets.pdf"))
+        m_all.close()

@@ -185,12 +185,14 @@ except ImportError as e:
     logger.info("✅ Используется заглушка MediaLibrary")
 
 # Импорт современных генераторов
+# === ИМПОРТ ГЕНЕРАТОРОВ - ОБНОВЛЕННАЯ ВЕРСИЯ ===
+
 try:
-    from presentation import ModernPresentationGenerator, TicketGenerator
-    logger.info("✅ Современные генераторы импортированы")
+    from presentation import ModernPresentationGenerator
+    logger.info("✅ ModernPresentationGenerator imported successfully")
 except ImportError as e:
-    logger.warning(f"⚠️ Modern generators import error: {e}")
-    # Заглушки
+    logger.warning(f"⚠️ ModernPresentationGenerator import error: {e}")
+    # Заглушка ModernPresentationGenerator остается без изменений
     class ModernPresentationGenerator:
         def generate_presentation_by_template(self, tracks, output_path, **kwargs):
             logger.info(f"🎲 Генерация презентации по шаблону для {len(tracks)} треков (fallback). Design keys: {list(kwargs.keys())}")
@@ -221,10 +223,35 @@ except ImportError as e:
                 f.write("Modern PDF Placeholder")
             return output_path
 
+# ОТДЕЛЬНЫЙ ИМПОРТ TicketGenerator с поддержкой design
+try:
+    from tickets import TicketGenerator
+    logger.info("✅ TicketGenerator imported successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ TicketGenerator import error: {e}")
+    # Заглушка TicketGenerator с поддержкой design
     class TicketGenerator:
-        def generate_modern_tickets(self, tracks, count=24):
-            logger.info(f"🎫 Генерация современных билетов: {count} шт.")
-            return f"/tmp/modern_tickets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        def generate_modern_tickets(self, tracks, count=24, design=None):
+            logger.info(f"🎫 Генерация современных билетов: {count} шт. Design: {design}")
+            # Создаем папку для билетов
+            import os
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            tickets_folder = os.path.join("output", f"tickets_{timestamp}")
+            os.makedirs(tickets_folder, exist_ok=True)
+            
+            # Создаем заглушечные файлы
+            for i in range(count):
+                ticket_path = os.path.join(tickets_folder, f"ticket_{i+1:03d}.pdf")
+                with open(ticket_path, 'w', encoding='utf-8') as f:
+                    f.write(f"Ticket {i+1} - Design: {design}")
+            
+            # Создаем архивный файл
+            archive_path = os.path.join(tickets_folder, "all_tickets.pdf")
+            with open(archive_path, 'w', encoding='utf-8') as f:
+                f.write(f"All Tickets Archive - Design: {design}")
+                
+            return tickets_folder
 
 try:
     from audio_editor import audio_editor
@@ -262,7 +289,21 @@ except ImportError as e:
 
 # Инициализация приложения
 app = FastAPI(title="Music Loto Maker", version="3.0.0")
-
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    
+    # Логируем входящий запрос
+    logger.info(f"📍 ВХОДЯЩИЙ ЗАПРОС: {request.method} {request.url}")
+    logger.info(f"📍 Headers: {dict(request.headers)}")
+    
+    response = await call_next(request)
+    
+    # Логируем ответ
+    process_time = time.time() - start_time
+    logger.info(f"📍 ОТВЕТ: {request.method} {request.url} -> {response.status_code} ({process_time:.2f}s)")
+    
+    return response
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -361,20 +402,65 @@ def _count_tracks_with_fallback() -> int:
         logger.warning(f"⚠️ Ошибка подсчёта треков с fallback: {e}")
         return 0
 
+# =========================
+# INITIALIZATION
+# =========================
+
+
 # Инициализация модулей
 media_library = MediaLibrary()
 _load_tracks_from_json_into_library()
 modern_presentation_gen = ModernPresentationGenerator()
 ticket_gen = TicketGenerator()
+
+
+# =========================
+# TICKETS ROUTER CONNECTION - DEBUG
+# =========================
+
+logger.info("🔧 Проверяем доступность server_tickets_router...")
+
 try:
+    # Проверим существует ли файл
+    tickets_router_path = os.path.join(os.path.dirname(__file__), "server_tickets_router.py")
+    logger.info(f"📁 Путь к router: {tickets_router_path}")
+    logger.info(f"📁 Файл существует: {os.path.exists(tickets_router_path)}")
+    
+    # Пробуем импортировать
     from backend.server_tickets_router import router as tickets_router, set_dependencies
+    logger.info("✅ server_tickets_router импортирован успешно!")
+    
+    # Инициализируем зависимости
     set_dependencies(media_library, ticket_gen)
+    
+    # Подключаем router - ВАЖНО: без prefix, т.к. пути уже полные в router
     app.include_router(tickets_router)
-    logger.info("✅ Tickets router подключен успешно")
+    logger.info("✅ Tickets router подключен!")
+    
+except ImportError as e:
+    logger.error(f"❌ Ошибка импорта: {e}")
+    logger.error(f"❌ Sys.path: {sys.path}")
 except Exception as e:
-    logger.error(f"❌ Ошибка подключения tickets router: {e}")
+    logger.error(f"❌ Другая ошибка: {e}")
+
 logger.info("🎵 Music Loto Maker Server v3.0 initialized")
 
+@app.get("/api/debug/all-routes")
+async def debug_all_routes():
+    """Показать все зарегистрированные routes"""
+    routes = []
+    for route in app.routes:
+        if hasattr(route, 'methods') and hasattr(route, 'path'):
+            routes.append({
+                'path': route.path,
+                'methods': list(route.methods),
+                'name': getattr(route, 'name', '')
+            })
+    
+    return {
+        "total_routes": len(routes),
+        "routes": routes
+    }
 # =========================
 # DEBUG ENDPOINTS
 # =========================
@@ -1225,6 +1311,18 @@ async def get_available_templates():
         ],
     }
 
+@app.get("/api/tracks")
+async def get_tracks():
+    """Возвращает список треков из медиатеки"""
+    try:
+        if not media_library:
+            return {"tracks": []}
+        tracks = media_library.get_tracks()
+        return {"tracks": tracks}
+    except Exception as e:
+        logger.error(f"Ошибка получения треков: {e}")
+        return {"tracks": []}
+
 @app.post("/api/templates/save")
 async def save_template(template_data: dict):
     try:
@@ -1462,10 +1560,52 @@ async def upload_background(file: UploadFile = File(...)):
 # -------- Photo processing helpers --------
 
 async def download_and_save_photo(photo_url: str, track_id: int, artist_name: str):
+    """Скачивает и сохраняет фото с разделением логики: локальные - без удаления фона, интернет - с удалением"""
+    try:
+        # Сначала проверяем локальную папку artists
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        if os.path.exists(artists_dir):
+            local_photo = image_searcher._find_local_artist_photo(artist_name)
+            if local_photo:
+                logger.info(f"📁 Используем локальное фото (фон не удаляем): {local_photo}")
+                # Обрабатываем локальное фото БЕЗ удаления фона
+                return await process_local_photo(local_photo, track_id)
+        
+        # Если локального фото нет, загружаем из интернета С удалением фона
+        logger.info(f"🌐 Загружаем фото из интернета (фон будет удален): {photo_url}")
+        return await process_internet_photo(photo_url, track_id)
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки фото: {e}")
+        return await create_placeholder_image(artist_name, track_id)
+
+async def process_local_photo(local_path: str, track_id: int):
+    """Обрабатывает локальное фото БЕЗ удаления фона"""
+    try:
+        images_dir = os.path.join(BASE_DIR, "images")
+        os.makedirs(images_dir, exist_ok=True)
+        
+        ext = Path(local_path).suffix.lower()
+        image_path = os.path.join(images_dir, f"{track_id}_artist{ext}")
+        
+        # Просто копируем файл без обработки
+        import shutil
+        shutil.copy2(local_path, image_path)
+        
+        logger.info(f"✅ Локальное фото сохранено (фон не удален): {image_path}")
+        return image_path
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки локального фото: {e}")
+        return None
+
+async def process_internet_photo(photo_url: str, track_id: int):
+    """Обрабатывает интернет-фото С удалением фона"""
     try:
         images_dir = os.path.join(BASE_DIR, "images")
         os.makedirs(images_dir, exist_ok=True)
         image_path = os.path.join(images_dir, f"{track_id}_artist.png")
+        
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; x64) AppleWebKit/537.36',
             'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
@@ -1474,53 +1614,85 @@ async def download_and_save_photo(photo_url: str, track_id: int, artist_name: st
         response = requests.get(photo_url, headers=headers, timeout=30)
         if response.status_code != 200:
             raise Exception(f"HTTP error: {response.status_code}")
+        
+        # Сохраняем временный файл
         temp_path = image_path.replace('.png', '_temp.jpg')
         with open(temp_path, 'wb') as f:
             f.write(response.content)
-        success = await process_downloaded_image(temp_path, image_path)
+        
+        # Обрабатываем с удалением фона
+        success = await process_downloaded_image_with_bg_removal(temp_path, image_path)
+        
         if os.path.exists(temp_path):
             os.remove(temp_path)
+            
         if success:
             return image_path
         return None
+        
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки фото: {e}")
-        return await create_placeholder_image(artist_name, track_id)
+        logger.error(f"❌ Ошибка обработки интернет-фото: {e}")
+        return None
 
-async def process_downloaded_image(temp_path: str, output_path: str):
+async def process_downloaded_image_with_bg_removal(temp_path: str, output_path: str):
+    """Обрабатывает скачанное фото С удалением фона"""
     try:
         with Image.open(temp_path) as img:
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')
             max_size = (800, 800)
             img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            img.save(output_path, "PNG", optimize=True)
+            
+            # Сохраняем временно для rembg
+            temp_png = temp_path.replace('.jpg', '_for_rembg.png')
+            img.save(temp_png, "PNG")
+        
+        # Удаляем фон с помощью rembg
         try:
             from rembg import remove
-            with open(output_path, 'rb') as i:
+            with open(temp_png, 'rb') as i:
                 input_data = i.read()
             output_data = remove(input_data)
             with open(output_path, 'wb') as o:
                 o.write(output_data)
-            logger.info("🎨 Фон удален")
+            logger.info("🎨 Фон удален (интернет-фото)")
+            
+            # Удаляем временный файл
+            if os.path.exists(temp_png):
+                os.remove(temp_png)
+                
+            return True
         except ImportError:
-            logger.warning("⚠️ rembg не установлен, фон не удален")
+            logger.warning("⚠️ rembg не установлен, сохраняем без удаления фона")
+            img.save(output_path, "PNG", optimize=True)
+            return True
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка удаления фона: {e}")
-        return True
+            logger.warning(f"⚠️ Ошибка удаления фона: {e}, сохраняем без удаления")
+            img.save(output_path, "PNG", optimize=True)
+            return True
+            
     except Exception as e:
         logger.error(f"❌ Ошибка обработки изображения: {e}")
         return False
 
 async def process_uploaded_image(image_path: str, track_id: int):
+    """Обрабатывает загруженное пользователем фото - решаем по контексту"""
     try:
-        processed_path = image_path
+        # Определяем, нужно ли удалять фон
+        # Если фото загружено через интерфейс артиста - вероятно, это портрет, можно удалить фон
+        # Если это локальное фото из папки artists - не удаляем фон
+        
+        # Для простоты: все загруженные через интерфейс фото обрабатываем с удалением фона
+        processed_path = image_path.replace('.png', '_processed.png')
+        
         with Image.open(image_path) as img:
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')
             max_size = (800, 800)
             img.thumbnail(max_size, Image.Resampling.LANCZOS)
             img.save(processed_path, "PNG", optimize=True)
+        
+        # Удаляем фон для загруженных фото
         try:
             from rembg import remove
             with open(processed_path, 'rb') as i:
@@ -1528,9 +1700,10 @@ async def process_uploaded_image(image_path: str, track_id: int):
             output_data = remove(input_data)
             with open(processed_path, 'wb') as o:
                 o.write(output_data)
-            logger.info("🎨 Фон удален")
+            logger.info("🎨 Фон удален (загруженное фото)")
         except Exception as e:
             logger.warning(f"⚠️ Не удалось удалить фон: {e}")
+        
         return processed_path
     except Exception as e:
         logger.error(f"❌ Ошибка обработки загруженного изображения: {e}")
@@ -1770,6 +1943,7 @@ async def health_check():
             "youtube_track_download",
         ],
     }
+
 
 if __name__ == "__main__":
     import uvicorn
