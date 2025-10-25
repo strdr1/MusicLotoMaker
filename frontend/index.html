@@ -117,150 +117,39 @@ Another Artist - Another Song
 
         <!-- Вкладка Презентация -->
         <div id="presentation" class="tab-content">
-            <div class="generator-card">
+            <div class="generator-card simple">
                 <h2>🎬 Генератор презентации</h2>
-                <p>Создайте PowerPoint презентацию со всеми треками из медиатеки</p>
+                <p>Создайте презентацию для музыкального лото с вашими треками</p>
 
-                <div class="info-box">
-                    <strong>Треков в медиатеке: <span id="tracksCount">0</span></strong>
+                <div class="info-box" style="background: var(--info-bg); padding: 12px; border-radius: 8px; margin-bottom: 20px;">
+                    <strong>📊 Статус:</strong>
+                    <span id="tracksCount">0</span> треков в медиатеке |
+                    <span id="presentationReadyStatus">❌ Недостаточно треков</span>
                 </div>
 
-                <button class="btn btn-large btn-primary" onclick="generatePresentation()">
+                <div class="form-group">
+                    <label for="presentation-title">Название презентации:</label>
+                    <input type="text" id="presentation-title" class="form-input" placeholder="Например: Дискотека 80-х, Хиты 90-х, Современные хиты..." value="Музыкальное Лото">
+                </div>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                    <input type="checkbox" id="make-bw" />
+                    <span>Преобразовать фото в чёрно-белые</span>
+                </label>
+                <button class="btn btn-large btn-primary" onclick="generatePresentation()" id="generatePresentationBtn">
                     🎬 Сгенерировать презентацию
                 </button>
 
-                <div id="presentationStatus" class="status"></div>
+                <div id="presentation-status" class="status" style="margin-top: 15px;"></div>
 
-                <!-- Мини-конструктор дизайна -->
-                <div class="settings-card">
-                    <h3 style="text-align:left;margin-bottom:12px;">🎨 Дизайн презентации</h3>
-
-                    <div class="settings-grid">
-                        <!-- Левая колонка: настройки -->
-                        <div class="settings-controls">
-                            <div class="group">
-                                <h4>Шрифты</h4>
-                                <label>
-                                    Семейство
-                                    <select id="d_font_family" class="form-input">
-                                        <option>Inter</option>
-                                        <option>Arial</option>
-                                        <option>Calibri</option>
-                                        <option>Segoe UI</option>
-                                        <option>Montserrat</option>
-                                        <option>Roboto</option>
-                                    </select>
-                                </label>
-                                <div class="row">
-                                    <label style="flex:1;">
-                                        Размер заголовка
-                                        <input id="d_title_size" type="number" class="form-input" value="44" min="16" max="96">
-                                    </label>
-                                    <label style="flex:1;">
-                                        Размер текста
-                                        <input id="d_text_size" type="number" class="form-input" value="24" min="12" max="72">
-                                    </label>
-                                </div>
-                                <div class="row">
-                                    <label><input id="d_bold_titles" type="checkbox" checked> Жирные заголовки</label>
-                                    <label><input id="d_upper_titles" type="checkbox"> ВЕРХНИЙ РЕГИСТР</label>
-                                </div>
-                                <div class="row">
-                                    <label style="flex:1;">
-                                        Цвет текста
-                                        <input id="d_text_color" type="color" class="form-input" value="#E8EEFC">
-                                    </label>
-                                    <label style="flex:1;">
-                                        Акцент
-                                        <input id="d_accent_color" type="color" class="form-input" value="#4E7CFF">
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="group">
-                                <h4>Расположение карточки песни</h4>
-                                <div class="row">
-                                    <label style="flex:1;">
-                                        Пресет
-                                        <select id="d_layout" class="form-input">
-                                            <option value="photo_left">Фото слева, текст справа</option>
-                                            <option value="photo_right">Фото справа, текст слева</option>
-                                            <option value="photo_top">Фото сверху, текст снизу</option>
-                                            <option value="photo_only">Только фото (крупно)</option>
-                                        </select>
-                                    </label>
-                                    <label style="flex:1;">
-                                        Радиус фото
-                                        <input id="d_photo_radius" type="number" class="form-input" value="16" min="0" max="60">
-                                    </label>
-                                </div>
-                            </div>
-
-                            <div class="group">
-                                <h4>Кнопки меню раунда</h4>
-                                <div class="row">
-                                    <label><input id="d_show_numbers" type="checkbox" checked> Показывать нумерацию</label>
-                                </div>
-                                <div class="row">
-                                    <label style="flex:1;">
-                                        Загрузить свою кнопку (PNG)
-                                        <input id="d_btn_upload" type="file" accept="image/png" class="form-input">
-                                    </label>
-                                    <button class="btn btn-secondary" id="d_btn_reset" style="align-self:flex-end;">Сбросить</button>
-                                </div>
-                                <small class="text-muted">Если кастомная кнопка не загружена, будут стандартные блоки.</small>
-                                <div style="margin-top:10px" id="d_btn_preview_wrap">
-                                    <img id="d_btn_preview" alt="" style="display:none;max-width:160px;border-radius:8px;border:1px solid var(--border)">
-                                </div>
-                            </div>
-
-                            <div class="group">
-                                <h4>Фон слайдов</h4>
-                                <div class="row">
-                                    <label><input type="radio" name="bgMode" value="solid" checked> Сплошной цвет</label>
-                                    <label><input type="radio" name="bgMode" value="gradient"> Градиент</label>
-                                    <label><input type="radio" name="bgMode" value="image"> Картинка</label>
-                                </div>
-                                <div class="row" id="bgSolidRow">
-                                    <label style="flex:1;">
-                                        Цвет
-                                        <input id="d_bg_color" type="color" class="form-input" value="#121B2F">
-                                    </label>
-                                </div>
-                                <div class="row" id="bgGradientRow" style="display:none;">
-                                    <label style="flex:1;">
-                                        Градиент от
-                                        <input id="d_grad_from" type="color" class="form-input" value="#1A2340">
-                                    </label>
-                                    <label style="flex:1;">
-                                        до
-                                        <input id="d_grad_to" type="color" class="form-input" value="#0F1623">
-                                    </label>
-                                </div>
-                                <div class="row" id="bgImageRow" style="display:none;">
-                                    <label style="flex:1;">
-                                        Картинка-фон (JPG/PNG)
-                                        <input id="d_bg_upload" type="file" accept="image/*" class="form-input">
-                                    </label>
-                                    <button class="btn btn-secondary" id="d_bg_reset" style="align-self:flex-end;">Сбросить</button>
-                                </div>
-                                <div id="d_bg_preview_wrap" style="margin-top:10px">
-                                    <img id="d_bg_preview" alt="" style="display:none;max-width:220px;border-radius:8px;border:1px solid var(--border)">
-                                </div>
-                            </div>
-
-                            <div class="group">
-                                <button class="btn btn-primary" id="d_save_btn">💾 Сохранить дизайн по умолчанию</button>
-                                <span id="d_save_status" class="status" style="display:none"></span>
-                            </div>
-                        </div>
-
-                        <!-- Правая колонка: живой превью -->
-                        <div class="settings-preview">
-                            <canvas id="designPreview" width="840" height="472"></canvas>
-                            <div class="muted">Предпросмотр для быстрой проверки стиля</div>
-                        </div>
-                    </div>
+                <div class="presentation-info" style="margin-top: 20px; padding: 15px; background: var(--bg-dark); border-radius: 8px;">
+                    <h4>ℹ️ Информация о генерации:</h4>
+                    <ul style="margin: 10px 0; padding-left: 20px;">
+                        <li>Презентация создается в формате PowerPoint (.pptx)</li>
+                        <li>Автоматически добавляются фото артистов</li>
+                        <li>Создаются нарезанные аудио-отрезки для каждого трека</li>
+                        <li>Все файлы упаковываются в ZIP архив</li>
+                        <li>Для работы необходимо минимум 1 трек в медиатеке</li>
+                    </ul>
                 </div>
             </div>
         </div>

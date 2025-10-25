@@ -410,7 +410,8 @@ def _count_tracks_with_fallback() -> int:
 # Инициализация модулей
 media_library = MediaLibrary()
 _load_tracks_from_json_into_library()
-modern_presentation_gen = ModernPresentationGenerator()
+base_pptx_path = os.path.join(BASE_DIR, "base.pptx")
+modern_presentation_gen = ModernPresentationGenerator(base_path=base_pptx_path)
 ticket_gen = TicketGenerator()
 
 
@@ -588,82 +589,114 @@ def parse_track_line(line: str) -> tuple:
 
 
 async def search_youtube_music(query: str, track_info: dict) -> dict:
-    """Асинхронная-совместимая обёртка поиска/скачивания через yt_dlp с обходом блокировок."""
+    """Асинхронная функция поиска и скачивания трека с YouTube в формате MP3 (≤ 40 МБ)."""
     try:
         def _yt_search_and_download(q, track_info_local):
             try:
+                MAX_FILE_SIZE_MB = 40
+                MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
+                temp_dir = os.path.join(tempfile.gettempdir(), 'youtube_dl')
+                os.makedirs(temp_dir, exist_ok=True)
+
                 ydl_opts = {
-                    'format': 'bestaudio/best',
-                    'outtmpl': os.path.join(tempfile.gettempdir(), 'youtube_dl', '%(title)s.%(ext)s'),
+                    'format': 'bestaudio[ext=m4a]/bestaudio/best',
+                    'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
                     'quiet': True,
                     'no_warnings': True,
-                    'extractaudio': True,
-                    'audioformat': 'mp3',
                     'noplaylist': True,
-                    # Добавляем заголовки для обхода блокировок
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }],
                     'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'en-us,en;q=0.5',
-                        'Accept-Encoding': 'gzip,deflate',
-                        'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
-                        'Connection': 'keep-alive',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
                     },
-                    # Альтернативные экстракторы
                     'extractor_args': {
-                        'youtube': {
-                            'player_client': ['android', 'web'],
-                        }
+                        'youtube': {'player_client': ['android', 'web']},
                     },
                 }
-                
-                os.makedirs(os.path.join(tempfile.gettempdir(), 'youtube_dl'), exist_ok=True)
-                
+
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    # Пробуем разные форматы поиска
                     search_query = f"{q} official audio"
                     logger.info(f"🔍 Поиск на YouTube: {search_query}")
-                    
-                    # Пробуем прямой поиск
+
+                    # --- поиск ---
                     try:
                         info = ydl.extract_info(f"ytsearch:{search_query}", download=False)
                     except Exception as search_error:
-                        logger.warning(f"⚠️ Ошибка поиска, пробуем альтернативный метод: {search_error}")
-                        # Альтернативный метод поиска
-                        search_query_alt = f"{q} audio"
-                        info = ydl.extract_info(f"ytsearch:{search_query_alt}", download=False)
-                    
-                    if info and 'entries' in info and info['entries']:
-                        video_info = info['entries'][0]
-                        video_url = video_info['webpage_url']
-                        video_title = video_info.get('title') or video_info.get('id')
-                        logger.info(f"🎵 Найден на YouTube: {video_title}")
-                        
-                        # Скачиваем с дополнительными опциями
-                        download_info = ydl.extract_info(video_url, download=True)
-                        downloaded_file = ydl.prepare_filename(download_info)
-                        
-                        return {
-                            'success': True, 
-                            'file_path': downloaded_file, 
-                            'video_title': video_title,
-                            'duration': download_info.get('duration', 0)
-                        }
-                    return {'success': False, 'error': 'Трек не найден на YouTube'}
-                    
-            except yt_dlp.DownloadError as e:
-                logger.error(f"❌ Ошибка скачивания yt-dlp: {e}")
-                return {'success': False, 'error': f'Ошибка YouTube: {str(e)}'}
-            except Exception as e:
-                logger.error(f"❌ Неожиданная ошибка: {e}")
-                return {'success': False, 'error': f'Неожиданная ошибка: {str(e)}'}
+                        logger.warning(f"⚠️ Ошибка поиска, пробуем без 'official audio': {search_error}")
+                        info = ydl.extract_info(f"ytsearch:{q} audio", download=False)
 
-        result = await asyncio.to_thread(_yt_search_and_download, query, track_info)
+                    if not info or 'entries' not in info or not info['entries']:
+                        return {'success': False, 'error': 'Трек не найден на YouTube'}
+
+                    video_info = info['entries'][0]
+                    video_url = video_info.get('webpage_url') or video_info.get('url')
+                    video_title = video_info.get('title') or video_info.get('id')
+                    logger.info(f"🎵 Найден: {video_title}")
+
+                    # --- оценка размера ---
+                    estimated_bytes = None
+                    try:
+                        meta = ydl.extract_info(video_url, download=False)
+                        if meta:
+                            estimated_bytes = meta.get('filesize') or meta.get('filesize_approx')
+                            if not estimated_bytes and 'formats' in meta:
+                                for fmt in sorted(meta['formats'], key=lambda f: f.get('tbr', 0), reverse=True):
+                                    estimated_bytes = fmt.get('filesize') or fmt.get('filesize_approx')
+                                    if estimated_bytes:
+                                        break
+                    except Exception as e_meta:
+                        logger.warning(f"⚠️ Не удалось получить metadata: {e_meta}")
+
+                    if (estimated_bytes or 0) > MAX_FILE_SIZE_BYTES:
+                        mb = estimated_bytes / (1024 * 1024)
+                        logger.warning(f"🚫 {video_title} превышает {MAX_FILE_SIZE_MB} МБ ({mb:.1f} МБ)")
+                        return {'success': False, 'error': f'Размер > {MAX_FILE_SIZE_MB} МБ — пропуск'}
+
+                    # --- скачивание ---
+                    logger.info("⬇️ Скачивание аудио...")
+                    download_info = ydl.extract_info(video_url, download=True)
+                    downloaded_file = ydl.prepare_filename(download_info)
+
+                    # --- корректируем путь на финальный .mp3 ---
+                    base, _ = os.path.splitext(downloaded_file)
+                    mp3_path = base + ".mp3"
+                    if os.path.exists(mp3_path):
+                        downloaded_file = mp3_path
+                    elif os.path.exists(downloaded_file):
+                        logger.warning("⚠️ mp3 не найден, используем исходный файл")
+                    else:
+                        logger.error("❌ Файл не найден после скачивания")
+                        return {'success': False, 'error': 'Файл не найден после скачивания'}
+
+                    # --- проверка размера ---
+                    actual_size = os.path.getsize(downloaded_file)
+                    if actual_size > MAX_FILE_SIZE_BYTES:
+                        os.remove(downloaded_file)
+                        mb = actual_size / (1024 * 1024)
+                        logger.warning(f"🚫 {video_title} превысил лимит ({mb:.1f} МБ)")
+                        return {'success': False, 'error': f'Файл > {MAX_FILE_SIZE_MB} МБ — удалён'}
+
+                    logger.info(f"✅ Готов файл: {downloaded_file}")
+                    return {'success': True, 'file_path': downloaded_file, 'title': video_title}
+
+            except Exception as e:
+                logger.exception(f"❌ Ошибка в _yt_search_and_download: {e}")
+                return {'success': False, 'error': f'Ошибка YouTube: {e}'}
+
+        # --- выполняем в потоке ---
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _yt_search_and_download, query, track_info)
         return result
 
     except Exception as e:
-        logger.error(f"❌ Ошибка поиска на YouTube: {e}")
-        return {'success': False, 'error': f'Ошибка YouTube: {str(e)}'}
+        logger.exception(f"❌ Критическая ошибка search_youtube_music: {e}")
+        return {'success': False, 'error': f'Ошибка search_youtube_music: {e}'}
+
 
 
 async def download_tracks_batch(tracks: list, max_parallel: int = 4) -> list:
@@ -896,6 +929,7 @@ async def get_tracks_count():
 async def upload_tracks(files: list[UploadFile] = File(...)):
     saved_tracks, errors = [], []
     logger.info(f"📤 Начало загрузки {len(files)} файлов")
+
     for file in files:
         try:
             logger.info(f"🔍 Обработка файла: {file.filename}")
@@ -907,12 +941,15 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                 logger.warning(f"⚠️ {msg}")
                 continue
 
-            uploads_dir = os.path.join(BASE_DIR, "uploads")
-            os.makedirs(uploads_dir, exist_ok=True)
+            # === Сохраняем в downloads вместо uploads ===
+            downloads_dir = os.path.join(BASE_DIR, "downloads")
+            os.makedirs(downloads_dir, exist_ok=True)
+
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_filename = f"{timestamp}_{Path(file.filename).stem}{file_extension}"
-            file_path = os.path.join(uploads_dir, safe_filename)
+            file_path = os.path.join(downloads_dir, safe_filename)
 
+            # --- Сохраняем файл ---
             with open(file_path, "wb") as buffer:
                 content = await file.read()
                 buffer.write(content)
@@ -923,6 +960,7 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                 logger.error(f"❌ {msg}")
                 continue
 
+            # --- Метаданные и добавление в медиатеку ---
             metadata = metadata_processor.process(file.filename)
             track = media_library.add_track(file_path, file.filename)
             if track:
@@ -932,11 +970,14 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                     'metadata': metadata
                 }
                 media_library.update_track(track['id'], update_data)
+
+                # --- Автоматически назначаем лучший отрезок ---
                 try:
                     best_start = audio_editor.suggest_best_segment(file_path)
                     media_library.update_track_segment(track['id'], best_start, 30)
                 except Exception as e:
                     logger.warning(f"⚠️ Не удалось установить умный отрезок: {e}")
+
                 track.update(update_data)
                 saved_tracks.append(track)
             else:
@@ -953,6 +994,7 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
     if errors:
         response_message += f". Ошибки: {', '.join(errors)}"
     logger.info(f"📊 Итог загрузки: {response_message}")
+
     return {"message": response_message, "tracks": saved_tracks, "errors": errors}
 
 @app.put("/api/tracks/{track_id}")
@@ -1031,31 +1073,58 @@ async def save_artist_photo(track_id: int, request_data: dict):
 
 @app.post("/api/tracks/{track_id}/upload-artist-photo")
 async def upload_artist_photo(track_id: int, photo: UploadFile = File(...)):
+    """
+    Загружает локальное фото артиста.
+    Старые фото (основное и обработанное) удаляются.
+    Новое сохраняется под тем же именем без какой-либо обработки.
+    """
     try:
         track = media_library.get_track(track_id)
         if not track:
             raise HTTPException(status_code=404, detail="Трек не найден")
+
         if not photo.content_type.startswith('image/'):
             raise HTTPException(status_code=400, detail="Файл должен быть изображением")
 
         images_dir = os.path.join(BASE_DIR, "images")
         os.makedirs(images_dir, exist_ok=True)
-        image_filename = f"{track_id}_artist.png"
-        image_path = os.path.join(images_dir, image_filename)
 
-        with open(image_path, "wb") as buffer:
+        # Пути
+        final_image_path = os.path.join(images_dir, f"{track_id}_artist.png")
+        processed_image_path = os.path.join(images_dir, f"{track_id}_artist_processed.png")
+
+        # --- Удаляем старые версии ---
+        for path in [final_image_path, processed_image_path]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logger.info(f"🗑️ Удалено старое фото: {path}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось удалить {path}: {e}")
+
+        # --- Сохраняем новое фото ---
+        with open(final_image_path, "wb") as buffer:
             content = await photo.read()
             buffer.write(content)
+        logger.info(f"🖼️ Загружено новое фото артиста: {final_image_path}")
 
-        processed_image_path = await process_uploaded_image(image_path, track_id)
-        if processed_image_path and os.path.exists(processed_image_path):
-            media_library.update_track(track_id, {'image_path': processed_image_path})
-            return {"success": True, "message": "Фото артиста загружено",
-                    "image_path": processed_image_path}
-        raise HTTPException(status_code=500, detail="Не удалось обработать фото")
+        # --- Сохраняем путь в медиатеку ---
+        media_library.update_track(track_id, {'image_path': final_image_path})
+
+        return {
+            "success": True,
+            "message": "Фото артиста загружено (без обработки)",
+            "image_path": final_image_path
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки фото: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка загрузки фото: {str(e)}")
+
+
+
 
 @app.delete("/api/tracks/{track_id}/artist-photo")
 async def delete_artist_photo(track_id: int):
@@ -1201,29 +1270,27 @@ def _safe_call_generator(func, *args, **kwargs):
 
 @app.post("/api/presentation/build")
 async def build_presentation(request_data: dict):
-    """Генерация презентации по шаблону + настройки дизайна."""
-    tracks = media_library.get_tracks()
-    template_id = request_data.get('template_id', 'presentation_default')
-    output_format = request_data.get('output', 'pptx')
-    design = request_data.get('design')
-    
-    logger.info('🎨 DESIGN DATA RECEIVED:')
-    logger.info(f"   Keys: {list(design.keys()) if design else 'None'}")
-    if design and 'background' in design:
-        logger.info(f"   Background: {design['background']}")
-    else:
-        logger.info('   No background in design data')
+    """Генерация презентации по шаблону с заменой фото и аудио + упаковка в ZIP."""
+    from presentation import ModernPresentationGenerator
 
+    # 1. Получаем треки из медиатеки
+    tracks = media_library.get_tracks()
     if not tracks:
         raise HTTPException(status_code=400, detail="Нет треков для генерации презентации")
 
+    # 2. Формируем список из 120 треков
     tracks_for_gen = _extend_to_120(tracks)
 
+    # 3. Подготовка директорий
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"musical_loto_{timestamp}.{output_format}"
-    output_path = os.path.join(BASE_DIR, "output", output_filename)
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.join(BASE_DIR, "output")
+    os.makedirs(output_dir, exist_ok=True)
 
+    # 4. Читаем данные о дизайне
+    design = request_data.get("design")
+    game_title = design.get("game_title", "Музыкальное Лото") if design else "Музыкальное Лото"
+
+    # 5. Сохраняем последний дизайн (если есть)
     if design:
         try:
             os.makedirs(os.path.join(BASE_DIR, "config"), exist_ok=True)
@@ -1233,50 +1300,29 @@ async def build_presentation(request_data: dict):
             logger.warning(f"⚠️ Не удалось сохранить snapshot дизайна: {e}")
 
     try:
-        if template_id == "presentation_default":
-            result_path, track_slide_map = _safe_call_generator(
-                modern_presentation_gen.generate_presentation_by_template,
-                tracks_for_gen, output_path, design=design or {}
-            )
-        else:
-            if hasattr(modern_presentation_gen, "generate_presentation_from_template"):
-                result_path, track_slide_map = _safe_call_generator(
-                    modern_presentation_gen.generate_presentation_from_template,
-                    template_id, tracks_for_gen, output_path, design=design or {}
-                )
-            else:
-                raise HTTPException(status_code=400, detail="Шаблон не поддерживается этим генератором")
+        # 6. Инициализация нового генератора
+        generator = ModernPresentationGenerator(base_path=os.path.join(BASE_DIR, "base.pptx"))
 
-        logger.info(f"🔎 result_path type={type(result_path)}, value={repr(result_path)}")
-        logger.info(f"🔎 track_slide_map type={type(track_slide_map)}, "
-                    f"len={len(track_slide_map) if track_slide_map is not None else 'None'}")
+        # 7. Генерация PPTX и ZIP с нарезанными треками
+        make_bw = request_data.get("design", {}).get("make_bw", False)
+        zip_path = generator.generate(
+            game_title=game_title,
+            make_bw=make_bw,
+            tracks=tracks_for_gen,
+            output_dir=output_dir
+        )
 
-        if result_path is None:
-            raise HTTPException(status_code=500, detail="Генератор вернул пустой путь")
-        result_path_str = str(result_path).strip()
-        if not result_path_str:
-            raise HTTPException(status_code=500, detail="Генератор вернул пустой путь")
+        logger.info(f"✅ Архив успешно создан: {zip_path}")
 
-        if not os.path.isfile(result_path_str):
-            try:
-                parent = os.path.dirname(result_path_str) or "."
-                logger.error(f"❌ Файл не найден: {result_path_str}. "
-                             f"Содержимое {parent}: {os.listdir(parent)}")
-            except Exception:
-                logger.error(f"❌ Файл не найден и не удалось прочитать каталог: {result_path_str}")
-            raise HTTPException(status_code=500, detail="Не удалось создать презентацию")
-
-        logger.info(f"✅ Презентация создана: {result_path_str}")
+        # 8. Возврат клиенту
         return {
             "success": True,
-            "message": "Презентация создана успешно",
-            "file": os.path.basename(result_path_str),
-            "file_path": result_path_str,
+            "message": "Презентация и аудиотреки успешно сгенерированы",
+            "archive": os.path.basename(zip_path),
+            "archive_path": zip_path,
             "tracks_count": len(tracks_for_gen),
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
         logger.exception("❌ Ошибка генерации презентации")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
@@ -1743,18 +1789,50 @@ async def create_placeholder_image(artist_name: str, track_id: int):
 # -------- Legacy --------
 
 @app.post("/api/generate/presentation")
-async def generate_presentation():
+async def generate_presentation(request_data: dict):
+    """Генерация презентации с заменой фото, аудио и созданием ZIP."""
     try:
-        tracks = media_library.get_tracks()
-        output_path = os.path.join(BASE_DIR, "output",
-                                   f"presentation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pptx")
-        result_path, _track_map = modern_presentation_gen.generate_presentation_by_template(tracks, output_path)
-        if result_path and isinstance(result_path, str) and os.path.exists(result_path):
-            return {"success": True, "message": "Презентация создана",
-                    "file": os.path.basename(result_path), "file_path": result_path}
-        raise HTTPException(status_code=500, detail="Ошибка генерации")
+        game_title = request_data.get("title") or "Музыкальное Лото"
+        logger.info(f"🚀 Генерация презентации: {game_title}")
+
+        # Пытаемся получить треки из медиатеки, если нет — пусть генератор возьмёт JSON
+        tracks = media_library.get_tracks() or None
+        if tracks:
+            logger.info(f"📊 Получено {len(tracks)} треков из медиатеки")
+        else:
+            logger.warning("⚠️ В медиатеке нет треков, генератор сам подхватит tracks.json")
+
+        base_path = os.path.join(BASE_DIR, "base.pptx")
+        if not os.path.exists(base_path):
+            raise HTTPException(status_code=500, detail="Файл base.pptx не найден")
+
+        generator = ModernPresentationGenerator(base_path=base_path)
+
+        make_bw = request_data.get("design", {}).get("make_bw", False)
+        zip_path = generator.generate(
+            game_title=game_title,
+            tracks=tracks,  # может быть None — генератор подхватит JSON
+            make_bw=make_bw
+        )
+
+        if not zip_path or not os.path.exists(zip_path):
+            raise HTTPException(status_code=500, detail="Ошибка генерации: файл не создан")
+
+        logger.info(f"✅ Презентация успешно создана: {zip_path}")
+        return {
+            "success": True,
+            "message": f"Презентация '{game_title}' создана успешно",
+            "archive": os.path.basename(zip_path),
+            "archive_path": zip_path,
+            "download_url": f"/api/download/{os.path.basename(zip_path)}"
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception(f"❌ Ошибка генерации презентации: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
+
 
 @app.post("/api/generate/tickets")
 async def generate_tickets_legacy(count: int = 24):

@@ -690,76 +690,81 @@ function addTimingsButton() {
 // =========================
 
 async function generatePresentation() {
-    const statusId = 'presentationStatus';
-    showStatus(statusId, '🔄 Генерируем презентацию по шаблону PDF...', 'loading');
+    const status = document.getElementById("presentationStatus") || document.getElementById("presentation-status");
+    const titleInput = document.getElementById("presentation-title");
+    const title = titleInput ? titleInput.value.trim() : "";
+
+    // читаем чекбокс (id = "make-bw")
+    const makeBWCheckbox = document.getElementById("make-bw");
+    const makeBW = !!(makeBWCheckbox && makeBWCheckbox.checked);
+
+    if (!title) {
+        if (status) {
+            status.textContent = "⚠️ Пожалуйста, введите название презентации.";
+            status.style.color = "#f87171";
+        }
+        return;
+    }
+
+    if (status) {
+        status.textContent = "⏳ Генерация презентации...";
+        status.style.color = "#9ca3af";
+    }
 
     try {
-        const pptType = 'pptx';
-        const templateId = 'presentation_default';
-
-        const countNow = await fetch(`${API_BASE}/tracks/count`).then(r => r.ok ? r.json() : { count: currentTracks.length }).then(d => d.count ?? currentTracks.length);
-        if (countNow < 40) {
-            showStatus(statusId, `❌ Для генерации презентации нужно минимум 120 треков (сейчас: ${countNow})`, 'error');
-            showNotification(`Нужно больше треков: ${countNow}/40`, 'warning');
-            updateGenerateButtonState(countNow);
-            return;
-        }
-
-        const designConfig = readDesignFromUI();
-        console.log('🚀 GENERATING PRESENTATION WITH DESIGN:', designConfig);
-
-        const requestBody = {
-            template_id: templateId,
-            output: pptType,
-            design: designConfig,
-            rounds: [
-                { name: "Раунд 1", numbers: Array.from({ length: 40 }, (_, i) => i + 1) },
-                { name: "Раунд 2", numbers: Array.from({ length: 40 }, (_, i) => i + 1) },
-                { name: "Раунд 3", numbers: Array.from({ length: 40 }, (_, i) => i + 1) }
-            ]
+        const payload = {
+            title,
+            design: { make_bw: makeBW }
         };
 
-        console.log('📤 API REQUEST BODY:', requestBody);
-
-        const response = await fetch(`${API_BASE}/presentation/build`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody)
+        // ИСПРАВЛЕНИЕ: используем правильную константу API_BASE вместо API_BASE_URL
+        const response = await fetch(`${API_BASE}/generate/presentation`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
         });
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            console.error('❌ API ERROR:', errorData);
-            throw new Error(errorData.detail || 'Ошибка генерации презентации');
-        }
+        const data = await response.json();
 
-        const result = await response.json();
-        console.log('✅ PRESENTATION GENERATION RESULT:', result);
+        if (response.ok && data.success) {
+            if (status) {
+                status.textContent = "✅ Презентация успешно создана!";
+                status.style.color = "#34d399";
 
-        if (result.success) {
-            const downloadHref = `${API_BASE}/download/${result.file}`;
-            showStatus(
-                statusId,
-                `✅ Презентация по шаблону PDF готова!<br>
-                 <strong>Треков использовано:</strong> ${result.tracks_count}<br>
-                 <strong>Формат:</strong> ${pptType.toUpperCase()}<br>
-                 <a href="${downloadHref}" class="download-link" download>
-                    📥 Скачать презентацию
-                 </a>`,
-                'success'
-            );
-            showNotification('Презентация успешно создана по шаблону PDF!', 'success');
+                // Если есть ссылка для скачивания, показываем её
+                if (data.download_url) {
+                    status.innerHTML += `<br><a href="${data.download_url}" class="download-link" download>📥 Скачать презентацию</a>`;
+                }
+            }
         } else {
-            throw new Error(result.message || 'Ошибка генерации');
+            if (status) {
+                status.textContent = "❌ Ошибка: " + (data.message || data.detail || "Не удалось создать презентацию.");
+                status.style.color = "#f87171";
+            }
         }
-
     } catch (error) {
-        console.error('❌ Ошибка генерации презентации:', error);
-        showStatus(statusId, `❌ Ошибка: ${error.message}`, 'error');
-        showNotification('Ошибка создания презентации', 'error');
-    } finally {
-        updateTracksCount();
+        console.error("Ошибка при генерации презентации:", error);
+        if (status) {
+            status.textContent = "❌ Ошибка соединения с сервером.";
+            status.style.color = "#f87171";
+        }
     }
+}
+
+
+
+// Вспомогательная функция для получения количества треков
+async function getTracksCount() {
+    try {
+        const response = await fetch(`${API_BASE}/tracks/count`);
+        if (response.ok) {
+            const data = await response.json();
+            return data.count || 0;
+        }
+    } catch (error) {
+        console.error("Ошибка получения количества треков:", error);
+    }
+    return 0;
 }
 
 async function generateTickets() {
@@ -1527,33 +1532,31 @@ async function updateTracksCount() {
         const data = await res.json();
         const count = Number(data.count ?? 0);
 
+        // Обновляем счетчик в презентации
         const countElement = document.getElementById('tracksCount');
         if (countElement) countElement.textContent = count;
 
-        const infoBox = document.querySelector('.info-box');
-        if (infoBox) {
-            if (count >= 40) {
-                infoBox.innerHTML = `<strong>✅ Готово к генерации! Треков: ${count}</strong>`;
+        const readyStatus = document.getElementById('presentationReadyStatus');
+        if (readyStatus) {
+            if (count >= 1) {
+                readyStatus.textContent = '✅ Готово к генерации';
+                readyStatus.style.color = 'var(--success)';
             } else {
-                infoBox.innerHTML = `<strong>⚠️ Нужно ещё ${120 - count} треков. Сейчас: ${count}</strong>`;
+                readyStatus.textContent = '❌ Недостаточно треков';
+                readyStatus.style.color = 'var(--error)';
             }
         }
 
-        const banner = document.querySelector('[data-id="tracks-needed"]') || document.querySelector('.notice');
-        if (banner) {
-            banner.textContent = (count >= 40)
-                ? `Готово к генерации. Треков: ${count}`
-                : `Нужно ещё ${Math.max(40 - count, 0)} треков. Сейчас: ${count}`;
+        const generateBtn = document.getElementById('generatePresentationBtn');
+        if (generateBtn) {
+            generateBtn.disabled = count < 1;
+            generateBtn.title = count < 1 ?
+                'Добавьте хотя бы 1 трек в медиатеку' :
+                'Сгенерировать презентацию';
         }
-
-        const badge = document.querySelector('[data-id="tracks-badge"]');
-        if (badge) badge.textContent = `${Math.min(count, 40)}/40`;
-
-        updateGenerateButtonState(count);
 
     } catch (e) {
         console.warn('Не удалось обновить счётчик треков:', e);
-        updateGenerateButtonState(0);
     }
 }
 

@@ -362,3 +362,5 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /artists
+/base.pptx
+/assets/backgrounds/background_1761051118732.png

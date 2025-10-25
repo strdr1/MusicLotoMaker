@@ -32,12 +32,14 @@
     <Compile Include="backend\server_tickets_router.py" />
     <Compile Include="backend\tickets.py" />
     <Compile Include="backend\__init__.py" />
+    <Compile Include="dmg_settings.py" />
     <Compile Include="main.py" />
     <Compile Include="app.py" />
     <Compile Include="test_audio.py" />
     <Compile Include="test_metadata.py" />
   </ItemGroup>
   <ItemGroup>
+    <Folder Include=".github\workflows\" />
     <Folder Include="backend\" />
     <Folder Include="images\" />
     <Folder Include="frontend\" />
@@ -45,10 +47,12 @@
     <Folder Include="frontend\css\" />
     <Folder Include="frontend\js\" />
     <Folder Include="backend\processors\" />
+    <Folder Include=".github\" />
     <Folder Include="templates\" />
   </ItemGroup>
   <ItemGroup>
     <Content Include=".env" />
+    <Content Include=".github\workflows\build-macos.yml" />
     <Content Include="assets\default_cover.png" />
     <Content Include="backend\track_data.json" />
     <Content Include="clear.bat" />

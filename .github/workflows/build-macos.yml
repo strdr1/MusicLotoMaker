@@ -1,0 +1,40 @@
+name: Build macOS DMG
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller dmgbuild
+
+      - name: Build app
+        run: |
+          pyinstaller --noconfirm --windowed --onefile app.py
+          mkdir dist_app
+          mv dist/app dist_app/MyApp.app
+
+      - name: Create DMG
+        run: |
+          dmgbuild -s dmg_settings.py "MyApp" "MyApp.dmg"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyApp-dmg
+          path: MyApp.dmg
