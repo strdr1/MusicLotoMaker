@@ -1112,7 +1112,9 @@ async def upload_artist_photo(track_id: int, photo: UploadFile = File(...)):
     """
     Загружает локальное фото артиста.
     Старые фото (основное и обработанное) удаляются.
-    Новое сохраняется под тем же именем без какой-либо обработки.
+    Новое сохраняется под временным именем, затем обрабатывается через image_searcher._process_local_photo:
+      - PNG с прозрачностью сохраняется без изменений
+      - JPG / PNG без альфа и др. форматы пытаются пройти через rembg
     """
     try:
         track = media_library.get_track(track_id)
@@ -1125,7 +1127,7 @@ async def upload_artist_photo(track_id: int, photo: UploadFile = File(...)):
         images_dir = os.path.join(BASE_DIR, "images")
         os.makedirs(images_dir, exist_ok=True)
 
-        # Пути
+        # Финальные пути (чистим их перед загрузкой)
         final_image_path = os.path.join(images_dir, f"{track_id}_artist.png")
         processed_image_path = os.path.join(images_dir, f"{track_id}_artist_processed.png")
 
@@ -1138,26 +1140,71 @@ async def upload_artist_photo(track_id: int, photo: UploadFile = File(...)):
                 except Exception as e:
                     logger.warning(f"⚠️ Не удалось удалить {path}: {e}")
 
-        # --- Сохраняем новое фото ---
-        with open(final_image_path, "wb") as buffer:
+        # --- Сохраняем новое фото во временный файл ---
+        orig_ext = Path(photo.filename).suffix.lower() or ".png"
+        temp_path = os.path.join(images_dir, f"{track_id}_artist_upload{orig_ext}")
+
+        with open(temp_path, "wb") as buffer:
             content = await photo.read()
             buffer.write(content)
-        logger.info(f"🖼️ Загружено новое фото артиста: {final_image_path}")
+        logger.info(f"🖼️ Загружено новое фото артиста (temp): {temp_path}")
+
+        # --- Обрабатываем файл через image_searcher._process_local_photo ---
+        final_path = None
+        try:
+            loop = asyncio.get_event_loop()
+            # вызываем синхронную обработку в thread pool
+            final_path = await loop.run_in_executor(None, image_searcher._process_local_photo, temp_path, track_id)
+
+            if final_path:
+                logger.info(f"🛠️ Обработанное фото возвращено: {final_path}")
+                # если обработанный путь отличается от temp — удаляем temp
+                try:
+                    if os.path.abspath(final_path) != os.path.abspath(temp_path) and os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except Exception as e:
+                    logger.debug(f"Не удалось удалить временный файл {temp_path}: {e}")
+
+            else:
+                # если обработка вернула None — используем оригинал: переименовываем temp в final
+                final_path = final_image_path
+                try:
+                    # если final уже существует — удалим или добавим суффикс
+                    if os.path.exists(final_path):
+                        try:
+                            os.remove(final_path)
+                        except Exception:
+                            pass
+                    shutil.move(temp_path, final_path)
+                    logger.info(f"ℹ️ Используется оригинал как финал: {final_path}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось переместить оригинал в финал: {e}")
+                    # fallback: оставляем temp и используем его
+                    final_path = temp_path
+
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка обработки загруженного фото: {e}")
+            # fallback — используем temp_path
+            final_path = temp_path
 
         # --- Сохраняем путь в медиатеку ---
-        media_library.update_track(track_id, {'image_path': final_image_path})
+        if final_path and os.path.exists(final_path):
+            media_library.update_track(track_id, {'image_path': final_path})
+            return {
+                "success": True,
+                "message": "Фото артиста загружено и обработано",
+                "image_path": final_path
+            }
 
-        return {
-            "success": True,
-            "message": "Фото артиста загружено (без обработки)",
-            "image_path": final_image_path
-        }
+        # Если ничего не получилось
+        raise HTTPException(status_code=500, detail="Не удалось сохранить/обработать фото")
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки фото: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка загрузки фото: {str(e)}")
+
 
 
 

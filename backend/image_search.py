@@ -180,36 +180,46 @@ class SimpleArtistImageSearch:
         return None
 
     def _process_local_photo(self, local_path: str, track_id: int) -> Optional[str]:
-        """Обрабатывает локальное фото из папки artists БЕЗ удаления фона"""
+        """
+        Обрабатывает локальное изображение:
+        - если PNG с прозрачностью — сохраняет как есть;
+        - если фон непрозрачный (JPG/PNG без альфа) — удаляет фон через rembg.
+        """
         try:
-            with Image.open(local_path) as img:
-                w, h = img.size
+            from PIL import Image
+            import io
+            from rembg import remove
 
-                # Базовые валидации
-                if w < MIN_W or h < MIN_H:
-                    logger.warning(f"⚠️ Локальное фото слишком маленькое: {w}x{h}")
-                    return None
-                if not ok_aspect(w, h):
-                    logger.warning(f"⚠️ Локальное фото неподходящего соотношения: {w}x{h}")
-                    return None
+            img = Image.open(local_path)
 
-                img = normalize_img(img, min_side=1024)
-                
-                # Сохраняем в images директорию БЕЗ удаления фона
-                ext = Path(local_path).suffix.lower()
-                output_path = Path(self.images_dir) / f"{track_id}_artist{ext}"
-                
-                if ext == '.png':
-                    img.save(output_path, "PNG", optimize=True)
-                else:
-                    img.save(output_path, "JPEG", quality=88, optimize=True, progressive=True)
-                
-                logger.info(f"✅ Локальное фото сохранено (фон не удален): {output_path}")
-                return str(output_path)
+            # Проверяем формат и наличие альфа-канала
+            has_alpha = img.mode == "RGBA" and "A" in img.getbands()
+
+            # Если прозрачный PNG — просто сохранить
+            if local_path.lower().endswith(".png") and has_alpha:
+                logger.info(f"🖼️ PNG с прозрачностью — фон не обрабатываем: {local_path}")
+            else:
+                logger.info(f"✂️ Удаляем фон для изображения: {local_path}")
+                # Удаляем фон (результат всегда RGBA)
+                with open(local_path, "rb") as f:
+                    raw = f.read()
+                try:
+                    img = Image.open(io.BytesIO(remove(raw)))
+                except Exception as e:
+                    logger.warning(f"⚠️ rembg не справился, используем оригинал: {e}")
+
+            if img.mode != "RGBA":
+                img = img.convert("RGBA")
+
+            out_path = Path(self.images_dir) / f"{track_id}_artist.png"
+            img.save(out_path, "PNG")
+            logger.info(f"✅ Фото артиста сохранено: {out_path}")
+            return str(out_path)
 
         except Exception as e:
-            logger.error(f"❌ Ошибка обработки локального фото: {e}")
+            logger.error(f"❌ Ошибка _process_local_photo: {e}")
             return None
+
 
     def _process_internet_photo(self, image_data: bytes, track_id: int, use_rembg: bool = True) -> Optional[str]:
         """Обрабатывает фото из интернета С удалением фона"""
