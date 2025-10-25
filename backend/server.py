@@ -927,26 +927,41 @@ async def get_tracks_count():
 
 @app.post("/api/tracks/upload")
 async def upload_tracks(files: list[UploadFile] = File(...)):
+    MAX_SIZE_MB = 40
+    MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024
+    ALLOWED_EXTENSIONS = {'.mp3', '.wav', '.flac', '.m4a', '.aac'}
+
     saved_tracks, errors = [], []
     logger.info(f"📤 Начало загрузки {len(files)} файлов")
 
     for file in files:
         try:
             logger.info(f"🔍 Обработка файла: {file.filename}")
-            allowed_extensions = {'.mp3', '.wav', '.flac', '.m4a', '.aac'}
             file_extension = Path(file.filename).suffix.lower()
-            if file_extension not in allowed_extensions:
+
+            # --- Проверка расширения ---
+            if file_extension not in ALLOWED_EXTENSIONS:
                 msg = f"Неподдерживаемый формат: {file_extension}"
                 errors.append(msg)
                 logger.warning(f"⚠️ {msg}")
                 continue
 
-            # === Сохраняем в downloads вместо uploads ===
+            # --- Проверка размера ---
+            file.file.seek(0, os.SEEK_END)
+            file_size = file.file.tell()
+            file.file.seek(0)
+            if file_size > MAX_SIZE_BYTES:
+                msg = f"Файл {file.filename} превышает лимит {MAX_SIZE_MB} МБ"
+                errors.append(msg)
+                logger.warning(f"⚠️ {msg}")
+                continue
+
+            # --- Папка downloads ---
             downloads_dir = os.path.join(BASE_DIR, "downloads")
             os.makedirs(downloads_dir, exist_ok=True)
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_filename = f"{timestamp}_{Path(file.filename).stem}{file_extension}"
+            safe_filename = f"{timestamp}_{Path(file.filename).stem.replace(' ', '_')}{file_extension}"
             file_path = os.path.join(downloads_dir, safe_filename)
 
             # --- Сохраняем файл ---
@@ -955,35 +970,53 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                 buffer.write(content)
 
             if not os.path.exists(file_path):
-                msg = f"Файл не сохранен: {file_path}"
+                msg = f"Файл не сохранён: {file_path}"
                 errors.append(msg)
                 logger.error(f"❌ {msg}")
                 continue
 
-            # --- Метаданные и добавление в медиатеку ---
-            metadata = metadata_processor.process(file.filename)
+            # --- Читаем метаданные ---
+            metadata = metadata_processor.process(file_path)
+            logger.debug(f"📄 Метаданные для {file.filename}: {metadata}")
+
+            # --- Добавляем в медиатеку ---
             track = media_library.add_track(file_path, file.filename)
-            if track:
-                update_data = {
-                    'artist': metadata.get('artist', 'Неизвестный исполнитель'),
-                    'title': metadata.get('title', 'Без названия'),
-                    'metadata': metadata
-                }
-                media_library.update_track(track['id'], update_data)
-
-                # --- Автоматически назначаем лучший отрезок ---
-                try:
-                    best_start = audio_editor.suggest_best_segment(file_path)
-                    media_library.update_track_segment(track['id'], best_start, 30)
-                except Exception as e:
-                    logger.warning(f"⚠️ Не удалось установить умный отрезок: {e}")
-
-                track.update(update_data)
-                saved_tracks.append(track)
-            else:
+            if not track:
                 msg = f"Не удалось добавить трек в медиатеку: {file.filename}"
                 errors.append(msg)
                 logger.error(f"❌ {msg}")
+                continue
+
+            artist_name = metadata.get('artist', 'Неизвестный исполнитель')
+            title = metadata.get('title', 'Без названия')
+            update_data = {'artist': artist_name, 'title': title, 'metadata': metadata}
+            media_library.update_track(track['id'], update_data)
+
+            # --- Автоматический отрезок ---
+            try:
+                best_start = audio_editor.suggest_best_segment(file_path)
+                media_library.update_track_segment(track['id'], best_start, 30)
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось установить умный отрезок: {e}")
+
+            # --- Автоматический поиск фото артиста (без конвертации) ---
+            try:
+                logger.info(f"🖼️ Поиск фото для артиста: {artist_name}")
+                photo_path = image_searcher.fetch_artist_png(artist_name, track['id'])
+
+                if photo_path and os.path.exists(photo_path):
+                    # Просто используем найденный PNG как есть
+                    logger.info(f"✅ Фото артиста сохранено без изменений: {photo_path}")
+                    media_library.update_track(track['id'], {'image_path': photo_path})
+                    update_data['image_path'] = photo_path
+                else:
+                    logger.warning(f"⚠️ Фото для {artist_name} не найдено")
+
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при поиске фото артиста {artist_name}: {e}")
+
+            track.update(update_data)
+            saved_tracks.append(track)
 
         except Exception as e:
             msg = f"Ошибка загрузки {file.filename}: {str(e)}"
@@ -996,6 +1029,9 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
     logger.info(f"📊 Итог загрузки: {response_message}")
 
     return {"message": response_message, "tracks": saved_tracks, "errors": errors}
+
+
+
 
 @app.put("/api/tracks/{track_id}")
 async def update_track(track_id: int, track_data: dict):

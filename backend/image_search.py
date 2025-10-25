@@ -50,7 +50,7 @@ def is_trusted(u: str) -> bool:
     return any(dom in u for dom in TRUSTED)
 
 def normalize_img(img: Image.Image, min_side: int = 900) -> Image.Image:
-    img = ImageOps.exif_transpose(img.convert("RGB"))
+    img = ImageOps.exif_transpose(img.convert("RGBA"))
     w, h = img.size
     scale = max(1.0, min_side / float(min(w, h)))
     if scale > 1.01:
