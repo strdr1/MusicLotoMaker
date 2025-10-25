@@ -1,0 +1,73 @@
+{
+  "templateVersion": "2.0",
+  "slideSize": "16:9",
+  "theme": {
+    "bgA": "#0f1623",
+    "bgB": "#1b2640",
+    "text": "#e8eefc",
+    "muted": "#b9c3da",
+    "accent": "#4e7cff"
+  },
+  "slides": {
+    "intro": {
+      "title": "Большое МузЛото",
+      "subtitle": "Музыкальная викторина"
+    },
+    "menu": {
+      "grid": {
+        "cols": 8,
+        "rows": 5,
+        "gap": 12
+      },
+      "button": {
+        "base": {
+          "fill": "#1b2640",
+          "text": "#E8EEFC"
+        },
+        "disabled": {
+          "fill": "#2e3b61",
+          "text": "#8ea0c8"
+        }
+      }
+    },
+    "song": {
+      "artistName": {
+        "x": 900,
+        "y": 240,
+        "size": 56,
+        "weight": 600,
+        "color": "#E8EEFC"
+      },
+      "trackTitle": {
+        "x": 900,
+        "y": 320,
+        "size": 34,
+        "weight": 500,
+        "color": "#B9C3DA"
+      },
+      "photo": {
+        "x": 180,
+        "y": 180,
+        "w": 640,
+        "h": 640,
+        "radius": 24,
+        "shadow": true
+      },
+      "timer": {
+        "text": "00:30",
+        "x": 900,
+        "y": 390,
+        "size": 24,
+        "color": "#4e7cff"
+      }
+    },
+    "pause": {
+      "title": {
+        "text": "ПАУЗА",
+        "size": 140,
+        "weight": 800,
+        "color": "#E8EEFC"
+      }
+    }
+  }
+}

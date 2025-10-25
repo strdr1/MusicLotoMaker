@@ -364,3 +364,8 @@ FodyWeavers.xsd
 /artists
 /base.pptx
 /assets/backgrounds/background_1761051118732.png
+/downloads
+/images
+/output
+/temp
+*.zip
