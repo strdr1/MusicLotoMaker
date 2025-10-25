@@ -1,4 +1,4 @@
-name: Build macOS DMG
+﻿name: Build macOS DMG
 
 on:
   push:
@@ -10,7 +10,7 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -23,13 +23,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller dmgbuild
 
-      - name: Build app
+      - name: Build .app with PyInstaller
         run: |
           pyinstaller --noconfirm --windowed --onefile app.py
           mkdir dist_app
           mv dist/app dist_app/MyApp.app
 
-      - name: Create DMG
+      - name: Create dmg_settings.py on the fly
+        run: |
+          echo "application = 'dist_app/MyApp.app'" > dmg_settings.py
+          echo "format = 'UDBZ'" >> dmg_settings.py
+          echo "files = [application]" >> dmg_settings.py
+          echo "symlinks = {'Applications': '/Applications'}" >> dmg_settings.py
+          echo "window_rect = ((100, 100), (500, 300))" >> dmg_settings.py
+          echo "icon_size = 128" >> dmg_settings.py
+
+      - name: Create DMG using dmgbuild
         run: |
           dmgbuild -s dmg_settings.py "MyApp" "MyApp.dmg"
 
