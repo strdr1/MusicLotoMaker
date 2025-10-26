@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -25,17 +27,26 @@ jobs:
 
       - name: Prepare project folder
         run: |
+          # Создаем папку для дистрибутива
           mkdir dist_project
-          cp -R * dist_project || true
-          echo "✅ Copied project files into dist_project"
-
-          # Создаём запускающий скрипт
+          
+          # Копируем все файлы и папки явно
+          cp -R ./* ./.* dist_project/ 2>/dev/null || true
+          
+          # Особое внимание на фронтенд
+          echo "🔍 Проверяем содержимое frontend:"
+          ls -la frontend/
+          echo "🔍 Проверяем содержимое frontend после копирования:"
+          ls -la dist_project/frontend/
+          
+          # Создаём запускающий скрипт для macOS
           echo '#!/bin/bash' > dist_project/start.command
           echo 'cd "$(dirname "$0")"' >> dist_project/start.command
           echo 'echo "🚀 Запуск MusicLotoMaker..."' >> dist_project/start.command
           echo 'python3 app.py' >> dist_project/start.command
-
           chmod +x dist_project/start.command
+          
+          echo "✅ Подготовка проекта завершена"
 
       - name: Create dmg_settings.py dynamically
         run: |

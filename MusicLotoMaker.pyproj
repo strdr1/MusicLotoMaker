@@ -52,7 +52,6 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include=".env" />
-    <Content Include=".github\workflows\build-macos.yml" />
     <Content Include="assets\default_cover.png" />
     <Content Include="backend\track_data.json" />
     <Content Include="clear.bat" />
