@@ -1,4 +1,4 @@
-﻿name: Build macOS DMG
+﻿name: Build macOS DMG (Full Project + Launcher)
 
 on:
   push:
@@ -18,32 +18,39 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install dmgbuild
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller dmgbuild
+          pip install dmgbuild
 
-      - name: Build .app with PyInstaller
+      - name: Prepare project folder
         run: |
-          pyinstaller --noconfirm --windowed --onefile app.py
-          mkdir dist_app
-          mv dist/app dist_app/MyApp.app
+          mkdir dist_project
+          cp -R * dist_project || true
+          echo "✅ Copied project files into dist_project"
 
-      - name: Create dmg_settings.py on the fly
+          # Создаём запускающий скрипт
+          echo '#!/bin/bash' > dist_project/start.command
+          echo 'cd "$(dirname "$0")"' >> dist_project/start.command
+          echo 'echo "🚀 Запуск MusicLotoMaker..."' >> dist_project/start.command
+          echo 'python3 app.py' >> dist_project/start.command
+
+          chmod +x dist_project/start.command
+
+      - name: Create dmg_settings.py dynamically
         run: |
-          echo "application = 'dist_app/MyApp.app'" > dmg_settings.py
+          echo "files = ['dist_project']" > dmg_settings.py
           echo "format = 'UDBZ'" >> dmg_settings.py
-          echo "files = [application]" >> dmg_settings.py
           echo "symlinks = {'Applications': '/Applications'}" >> dmg_settings.py
-          echo "window_rect = ((100, 100), (500, 300))" >> dmg_settings.py
+          echo "window_rect = ((100, 100), (640, 480))" >> dmg_settings.py
           echo "icon_size = 128" >> dmg_settings.py
 
       - name: Create DMG using dmgbuild
         run: |
-          dmgbuild -s dmg_settings.py "MyApp" "MyApp.dmg"
+          dmgbuild -s dmg_settings.py "MusicLotoMaker" "MusicLotoMaker.dmg"
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MyApp-dmg
-          path: MyApp.dmg
+          name: MusicLotoMaker-dmg
+          path: MusicLotoMaker.dmg
