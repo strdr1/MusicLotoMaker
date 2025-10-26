@@ -52,6 +52,13 @@ jobs:
           echo 'python3 app.py' >> dist_project/start.command
           chmod +x dist_project/start.command
           
+          # Создаём запускающий скрипт для Windows
+          echo '@echo off' > dist_project/start.bat
+          echo 'chcp 65001 > nul' >> dist_project/start.bat
+          echo 'echo 🚀 Запуск MusicLotoMaker...' >> dist_project/start.bat
+          echo 'python app.py' >> dist_project/start.bat
+          echo 'pause' >> dist_project/start.bat
+          
           echo "✅ Подготовка проекта завершена"
 
       - name: Create dmg_settings.py dynamically
