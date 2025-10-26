@@ -33,6 +33,12 @@ jobs:
           # Копируем все файлы и папки явно
           cp -R ./* ./.* dist_project/ 2>/dev/null || true
           
+          # Удаляем track_data.json из корня проекта
+          if [ -f "dist_project/track_data.json" ]; then
+            rm dist_project/track_data.json
+            echo "✅ Удален track_data.json из корня проекта"
+          fi
+          
           # Особое внимание на фронтенд
           echo "🔍 Проверяем содержимое frontend:"
           ls -la frontend/
