@@ -289,28 +289,7 @@ except ImportError as e:
 
 # Инициализация приложения
 app = FastAPI(title="Music Loto Maker", version="3.0.0")
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start_time = time.time()
-    
-    # Логируем входящий запрос
-    logger.info(f"📍 ВХОДЯЩИЙ ЗАПРОС: {request.method} {request.url}")
-    logger.info(f"📍 Headers: {dict(request.headers)}")
-    
-    response = await call_next(request)
-    
-    # Логируем ответ
-    process_time = time.time() - start_time
-    logger.info(f"📍 ОТВЕТ: {request.method} {request.url} -> {response.status_code} ({process_time:.2f}s)")
-    
-    return response
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
 
 # Директории
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -699,102 +678,107 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
 
 
 
-async def download_tracks_batch(tracks: list, max_parallel: int = 4) -> list:
-    """Параллельное пакетное скачивание треков с YouTube с ограничением параллелизма.
-    По умолчанию параллельно скачивается 4 трека; можно изменить через параметр max_parallel."""
+async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
+    """
+    Скачивание треков с YouTube по порядку с ограничением размера,
+    анализом сегмента и поиском фото.
+    """
+    import asyncio, os, shutil, tempfile
+    from pathlib import Path
+    import yt_dlp
+
+    MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
     results = []
-    sem = asyncio.Semaphore(max_parallel)
     total = len(tracks)
 
-    async def _process_single(i, track_info):
-        async with sem:
-            try:
-                logger.info(f"🔍 Поиск трека {i+1}/{total}: {track_info['search_query']}")
-                # use the async-compatible search which runs blocking yt_dlp in thread
-                download_result = await search_youtube_music(track_info['search_query'], track_info)
-                if download_result and download_result.get('success'):
-                    downloaded_file = download_result['file_path']
-                    # move/rename to final path if needed
-                    safe_artist = "".join(c for c in track_info.get('artist', 'Unknown') if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                    safe_title = "".join(c for c in track_info.get('title', 'Unknown') if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                    ext = Path(downloaded_file).suffix or '.mp3'
-                    final_filename = f"{safe_artist} - {safe_title}{ext}"
-                    final_path = os.path.join(BASE_DIR, "downloads", final_filename)
-                    os.makedirs(os.path.dirname(final_path), exist_ok=True)
-                    try:
-                        # If yt_dlp output already matches final_path, skip move
-                        if os.path.abspath(downloaded_file) != os.path.abspath(final_path):
-                            if os.path.exists(final_path):
-                                base, e = os.path.splitext(final_filename)
-                                final_filename = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{e}"
-                                final_path = os.path.join(BASE_DIR, "downloads", final_filename)
-                            shutil.move(downloaded_file, final_path)
-                        else:
-                            final_path = downloaded_file
-                    except Exception as e:
-                        logger.warning(f"⚠️ Не удалось переместить файл: {e}")
-                        final_path = downloaded_file
+    for i, track_info in enumerate(tracks):
+        try:
+            query = f"{track_info.get('artist', '')} {track_info.get('title', '')}".strip() or track_info.get("original_line", "")
+            logger.info(f"🔍 [{i+1}/{total}] {query}")
 
-                    original_filename = f"{track_info.get('artist', 'Unknown')} - {track_info.get('title', 'Unknown')}.mp3"
-                    track = media_library.add_track(final_path, original_filename)
+            temp_dir = os.path.join(tempfile.gettempdir(), "youtube_dl_fast")
+            os.makedirs(temp_dir, exist_ok=True)
 
-                    if track:
-                        update_data = {
-                            'artist': track_info.get('artist', 'Неизвестный исполнитель'),
-                            'title': track_info.get('title', 'Без названия'),
-                            'metadata': {
-                                'source': 'internet_download',
-                                'original_query': track_info['search_query'],
-                                'download_source': 'youtube'
-                            }
-                        }
-                        media_library.update_track(track['id'], update_data)
+            ydl_opts = {
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "outtmpl": os.path.join(temp_dir, f"{i:03d}_%(title)s.%(ext)s"),
+                "quiet": True,
+                "noplaylist": True,
+                "no_warnings": True,
+                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            }
 
-                        try:
-                            best_start = audio_editor.suggest_best_segment(final_path)
-                            media_library.update_track_segment(track['id'], best_start, 30)
-                            logger.info(f"✅ Установлен умный отрезок для трека {track['id']}")
-                        except Exception as e:
-                            logger.warning(f"⚠️ Не удалось установить умный отрезок: {e}")
+            def _download():
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(f"ytsearch1:{query} audio", download=True)
+                    if not info or "entries" not in info or not info["entries"]:
+                        return None
+                    entry = info["entries"][0]
+                    filename = ydl.prepare_filename(entry)
+                    mp3_path = os.path.splitext(filename)[0] + ".mp3"
+                    return mp3_path if os.path.exists(mp3_path) else filename
 
-                        return {
-                            'success': True,
-                            'original_line': track_info['original_line'],
-                            'artist': track_info.get('artist', ''),
-                            'title': track_info.get('title', ''),
-                            'file_path': final_path,
-                            'track_id': track['id'],
-                            'source': 'YouTube'
-                        }
-                    else:
-                        return {
-                            'success': False,
-                            'original_line': track_info['original_line'],
-                            'error': 'Ошибка добавления в медиатеку'
-                        }
-                else:
-                    return {
-                        'success': False,
-                        'original_line': track_info['original_line'],
-                        'error': download_result.get('error', 'Трек не найден на YouTube')
-                    }
-            except Exception as e:
-                logger.error(f"❌ Ошибка обработки трека {track_info.get('original_line')}: {e}")
-                return {
-                    'success': False,
-                    'original_line': track_info.get('original_line'),
-                    'error': str(e)
-                }
+            loop = asyncio.get_event_loop()
+            downloaded_file = await loop.run_in_executor(None, _download)
+            if not downloaded_file:
+                results.append({"success": False, "error": f"Не удалось скачать: {query}"})
+                continue
 
-    # create tasks and gather as they finish to report progress
-    tasks = [asyncio.create_task(_process_single(i, t)) for i, t in enumerate(tracks)]
-    for coro in asyncio.as_completed(tasks):
-        res = await coro
-        results.append(res)
-        done = len(results)
-        logger.info(f"📦 Прогресс загрузки: {done}/{total} ({(done/total)*100:.1f}%)")
+            # проверка размера
+            if os.path.getsize(downloaded_file) > MAX_SIZE_BYTES:
+                logger.warning(f"⚠️ {query} слишком большой (> {max_size_mb} МБ), пропуск")
+                results.append({"success": False, "error": f"Файл слишком большой: {query}"})
+                continue
+
+            safe_artist = "".join(c for c in track_info.get("artist", "Unknown") if c.isalnum() or c in (" ", "-", "_")).rstrip()
+            safe_title = "".join(c for c in track_info.get("title", "Unknown") if c.isalnum() or c in (" ", "-", "_")).rstrip()
+            final_filename = f"{safe_artist} - {safe_title}.mp3"
+            downloads_dir = os.path.join(BASE_DIR, "downloads")
+            os.makedirs(downloads_dir, exist_ok=True)
+            final_path = os.path.join(downloads_dir, final_filename)
+            await loop.run_in_executor(None, shutil.move, downloaded_file, final_path)
+
+            track = media_library.add_track(final_path, final_filename)
+            if not track:
+                results.append({"success": False, "error": f"Ошибка добавления {final_filename}"})
+                continue
+
+            media_library.update_track(track["id"], {
+                "artist": safe_artist,
+                "title": safe_title,
+                "metadata": {"source": "internet_download", "query": query}
+            })
+
+            # анализ сегмента
+            best_start = await asyncio.to_thread(audio_editor.suggest_best_segment, final_path)
+            media_library.update_track_segment(track["id"], best_start, 30)
+
+            # фото
+            local_photo = Path(BASE_DIR) / "artists" / f"{safe_artist}.jpg"
+            if local_photo.exists():
+                image_path = await asyncio.to_thread(process_local_photo, local_photo, track["id"])
+                media_library.update_track(track["id"], {"image_path": image_path})
+                logger.info(f"🖼️ Использовано локальное фото {safe_artist}")
+            else:
+                photo_urls = await asyncio.to_thread(image_searcher.fetch_multiple_artist_photos, safe_artist, 3)
+                if photo_urls:
+                    image_path = await download_and_save_photo(photo_urls[0], track["id"], safe_artist)
+                    if image_path:
+                        media_library.update_track(track["id"], {"image_path": image_path})
+                        logger.info(f"✅ Фото артиста {safe_artist} добавлено")
+
+            results.append({"success": True, "file_path": final_path, "track_id": track["id"], "artist": safe_artist})
+            logger.info(f"✅ Готово: {final_filename}")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка {track_info.get('original_line', '')}: {e}")
+            results.append({"success": False, "error": str(e)})
+
+        logger.info(f"📦 Прогресс: {i+1}/{total} ({(i+1)/total*100:.1f}%)")
 
     return results
+
 
 
 async def auto_search_photos_for_downloaded_tracks(results: list):

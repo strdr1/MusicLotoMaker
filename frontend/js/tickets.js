@@ -101,55 +101,63 @@ function regeneratePreviewTracks() {
     }
 }
 
-/** Загрузка треков */
+/** Загрузка треков для билетов (универсальная версия) */
 async function loadTracksForTickets() {
     let lastErr = null;
     for (const url of TRACKS_ENDPOINTS) {
         try {
-            console.log('[tickets] try fetch', url);
+            console.log('[tickets] попытка fetch', url);
             const resp = await fetch(url, { cache: 'no-store' });
             if (!resp.ok) {
-                lastErr = `HTTP ${resp.status} from ${url}`;
+                lastErr = `HTTP ${resp.status} от ${url}`;
                 console.warn('[tickets] non-ok response', lastErr);
                 continue;
             }
-            const data = await resp.json();
 
-            if (Array.isArray(data)) {
-                allTracks = data;
-            } else if (Array.isArray(data.tracks)) {
-                allTracks = data.tracks;
-            } else if (Array.isArray(data.data)) {
-                allTracks = data.data;
-            } else {
-                const arr = Object.values(data).find(v => Array.isArray(v));
-                if (arr) {
-                    allTracks = arr;
-                } else {
-                    lastErr = `Неизвестный JSON формат от ${url}`;
-                    continue;
+            const data = await resp.json();
+            console.log('[tickets] raw tracks data:', data);
+
+            // Универсальное извлечение массива треков
+            const arr = (() => {
+                if (Array.isArray(data)) return data;
+                if (Array.isArray(data.tracks)) return data.tracks;
+                if (Array.isArray(data.data)) return data.data;
+                // ищем первый массив в объекте
+                for (const key in data) {
+                    if (Array.isArray(data[key])) return data[key];
                 }
+                return null;
+            })();
+
+            if (!arr) {
+                lastErr = `Неизвестный формат JSON от ${url}`;
+                console.warn('[tickets] unknown format', data);
+                continue;
             }
 
-            console.log('[tickets] loaded tracks count=', allTracks.length, 'from', url);
+            allTracks = arr;
+            console.log('[tickets] загружено треков:', allTracks.length, 'из', url);
+
             previewTracks = [];
-            updateTicketPreview();
             updatePreviewStats();
-            return;
+            updateTicketPreview();
+            return; // успешно загрузили, выходим
         } catch (err) {
             lastErr = err.message || String(err);
-            console.warn('[tickets] fetch error', url, lastErr);
+            console.warn('[tickets] ошибка fetch', url, lastErr);
             continue;
         }
     }
 
+    // если не удалось
     allTracks = [];
     previewTracks = [];
     const msg = `Не удалось получить треки.\nПоследняя ошибка: ${lastErr}\nПроверь /api/tracks на сервере (см. консоль).`;
-    console.error('[tickets] all attempts failed', lastErr);
+    console.error('[tickets] все попытки неудачны', lastErr);
     setPreviewDebug(msg);
     updatePreviewStats();
 }
+
 
 /** Чтение настроек UI с новыми названиями */
 function readTicketDesignFromUI() {
