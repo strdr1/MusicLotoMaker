@@ -369,3 +369,4 @@ FodyWeavers.xsd
 /output
 /temp
 *.zip
+/track_data.json
