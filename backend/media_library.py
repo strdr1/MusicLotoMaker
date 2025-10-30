@@ -1,7 +1,6 @@
 ﻿import os
 import json
 import datetime
-from backend.audio_editor import audio_editor
 
 class MediaLibrary:
     def __init__(self):
@@ -19,10 +18,15 @@ class MediaLibrary:
         else:
             next_id = 1
             
-        duration = audio_editor.get_audio_duration(file_path)
-        
-        # Автоматически определяем лучший отрезок
-        suggested_start = audio_editor.suggest_best_segment(file_path)
+        # Импортируем audio_editor локально чтобы избежать циклических импортов
+        try:
+            from backend.audio_editor import audio_editor
+            duration = audio_editor.get_audio_duration(file_path)
+            suggested_start = audio_editor.suggest_best_segment(file_path)
+        except Exception as e:
+            print(f"⚠️ Ошибка audio_editor: {e}")
+            duration = 180  # fallback
+            suggested_start = 30  # fallback
 
         # Используем metadata_processor для канонизации артиста и названия
         try:
@@ -53,7 +57,9 @@ class MediaLibrary:
             'created_at': datetime.datetime.now().isoformat()
         }
         
+        # Генерация waveform (опционально)
         try:
+            from backend.audio_editor import audio_editor
             track['waveform_data'] = audio_editor.generate_waveform(file_path)
         except Exception as e:
             print(f"Ошибка генерации waveform: {e}")
@@ -180,22 +186,5 @@ class MediaLibrary:
         """Получить следующий доступный ID"""
         if not self.tracks:
             return 1
-        
-        # Находим максимальный ID среди существующих треков
         max_id = max(track['id'] for track in self.tracks)
         return max_id + 1
-
-    def reorganize_ids(self):
-        """Переупорядочить ID треков (опционально)"""
-        if not self.tracks:
-            return
-        
-        # Сортируем треки по дате создания или другому критерию
-        sorted_tracks = sorted(self.tracks, key=lambda x: x.get('created_at', ''))
-        
-        # Присваиваем новые последовательные ID
-        for new_id, track in enumerate(sorted_tracks, 1):
-            track['id'] = new_id
-        
-        self.save_to_file()
-        print(f"🔄 ID треков переупорядочены. Новый диапазон: 1-{len(self.tracks)}")

@@ -1,5 +1,5 @@
 ﻿# -*- coding: utf-8 -*-
-import os, io, re, json, hashlib, logging, requests
+import os, io, re, json, hashlib, logging, requests, time
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional
@@ -204,113 +204,242 @@ class SimpleArtistImageSearch:
             logger.debug(f"_process_internet_photo fail: {e}")
             return None
 
-    # ---------- публичные методы ----------
-    def fetch_artist_png(self, artist_name: str, track_id: int, use_rembg: bool = True):
-        cache_key = f"{artist_name}_{track_id}"
-        if cache_key in self.artist_cache:
-            return self.artist_cache[cache_key]
+    # ---------- улучшенный поиск в Wikipedia ----------
+    def _wikipedia_enhanced_search(self, artist_name: str) -> Optional[str]:
+        """Улучшенный поиск в Wikipedia с разными языками и стратегиями"""
         try:
-            logger.info(f"🎭 Поиск фото для: {artist_name}")
-            local_photo = self._find_local_artist_photo(artist_name)
-            if local_photo:
-                try:
-                    processed_path = self._process_local_photo(local_photo, track_id)
-                    if processed_path:
-                        self.artist_cache[cache_key] = processed_path
-                        self._cache_push(artist_name.strip().lower(), f"local://{local_photo}")
-                        return processed_path
-                except Exception as e:
-                    logger.warning(f"⚠️ Ошибка обработки локального фото: {e}")
-
-            artist_key = artist_name.strip().lower()
-            if artist_key in self.photo_cache:
-                for url in self.photo_cache[artist_key]:
-                    if url.startswith("local://"):
-                        continue
-                    p = self._download_process_and_store(url, track_id, use_rembg)
-                    if p: 
-                        self.artist_cache[cache_key] = p
-                        return p
-
-            url = self._wikimedia_best(artist_name)
-            if url:
-                p = self._download_process_and_store(url, track_id, use_rembg)
-                if p:
-                    self._cache_push(artist_key, url)
-                    self.artist_cache[cache_key] = p
-                    return p
-
-            urls = self._search_google_faces(artist_name, count=8)
-            for u in urls:
-                p = self._download_process_and_store(u, track_id, use_rembg)
-                if p:
-                    self._cache_push(artist_key, u)
-                    self.artist_cache[cache_key] = p
-                    return p
-
-            urls = self._search_yandex_simple(artist_name)
-            for u in urls:
-                p = self._download_process_and_store(u, track_id, use_rembg)
-                if p:
-                    self._cache_push(artist_key, u)
-                    self.artist_cache[cache_key] = p
-                    return p
-
-            p = self._create_placeholder_image(artist_name, track_id)
-            self.artist_cache[cache_key] = p
-            return p
+            # Пробуем разные варианты поиска
+            search_variants = [
+                artist_name,
+                f"{artist_name} musician",
+                f"{artist_name} singer", 
+                f"{artist_name} band",
+                f"{artist_name} artist"
+            ]
+            
+            languages = ['ru', 'en', 'de', 'fr']  # Приоритетные языки
+            
+            for lang in languages:
+                for search_query in search_variants:
+                    url = self._wikipedia_pageimage(search_query, lang)
+                    if url:
+                        logger.info(f"✅ Wikipedia ({lang}): найдено фото для {artist_name}")
+                        return url
+            
+            return None
         except Exception as e:
-            logger.error(f"💥 Критическая ошибка: {e}")
-            p = self._create_placeholder_image(artist_name, track_id)
-            self.artist_cache[cache_key] = p
-            return p
-
-    def fetch_multiple_artist_photos(self, artist_name: str, count: int = 10) -> List[str]:
-        out: List[str] = []
-        artist_key = artist_name.strip().lower()
-        local_photo = self._find_local_artist_photo(artist_name)
-        if local_photo:
-            out.append(f"local://{local_photo}")
-        cached = [url for url in self.photo_cache.get(artist_key, []) if not url.startswith("local://")]
-        out += cached
-        w = self._wikimedia_best(artist_name)
-        if w: out.append(w)
-        out += self._search_google_faces(artist_name, count=count)
-        out += self._search_yandex_simple(artist_name)
-        seen, uniq = set(), []
-        for u in out:
-            base = u if u.startswith("local://") else u.split("?")[0]
-            if base not in seen:
-                seen.add(base)
-                uniq.append(u)
-        uniq = [u for u in uniq if u.startswith("local://") or not is_coverish_url(u)]
-        uniq = uniq[:max(1, count)]
-        if uniq:
-            self.photo_cache[artist_key] = uniq
-            self._save_photo_cache()
-        logger.info(f"✅ Всего найдено уникальных фото: {len(uniq)}")
-        return uniq
-
-    # ---------- приватные: загрузка/обработка ----------
-    def _download_process_and_store(self, url: str, track_id: int, use_rembg: bool = True) -> Optional[str]:
-        try:
-            if url.startswith("local://"):
-                return self._process_local_photo(url.replace("local://", ""), track_id)
-            raw = download_bytes(url)
-            if not raw: return None
-            return self._process_internet_photo(raw, track_id, use_rembg)
-        except Exception as e:
-            logger.debug(f"_download_process_and_store fail: {e}")
+            logger.debug(f"Enhanced Wikipedia search failed: {e}")
             return None
 
-    def _cache_push(self, artist_key: str, url: str):
-        arr = self.photo_cache.get(artist_key, [])
-        if url not in arr:
-            arr.insert(0, url)
-            self.photo_cache[artist_key] = arr[:20]
-            self._save_photo_cache()
+    # ---------- поиск через MusicBrainz ----------
+    def _search_musicbrainz(self, artist_name: str) -> Optional[str]:
+        """Поиск фото через MusicBrainz API"""
+        try:
+            # Ищем артиста в MusicBrainz
+            search_url = "https://musicbrainz.org/ws/2/artist"
+            params = {
+                "query": f'artist:"{artist_name}"',
+                "fmt": "json",
+                "limit": 1
+            }
+            
+            response = requests.get(search_url, params=params, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                artists = data.get('artists', [])
+                if artists:
+                    artist_id = artists[0]['id']
+                    
+                    # Ищем изображения через Cover Art Archive
+                    cover_art_url = f"https://coverartarchive.org/artist/{artist_id}"
+                    response = requests.get(cover_art_url, timeout=10)
+                    if response.status_code == 200:
+                        cover_data = response.json()
+                        images = cover_data.get('images', [])
+                        for image in images:
+                            if image.get('front', True):  # Берем фронтальные обложки
+                                image_url = image['image']
+                                logger.info(f"✅ MusicBrainz: найдено фото для {artist_name}")
+                                return image_url
+            
+            return None
+        except Exception as e:
+            logger.debug(f"MusicBrainz search failed: {e}")
+            return None
 
-    # ---------- Wikimedia / Wikipedia ----------
+    # ---------- поиск через Discogs ----------
+    def _search_discogs(self, artist_name: str) -> Optional[str]:
+        """Поиск фото через Discogs API"""
+        try:
+            # Для Discogs нужен API ключ (можно получить бесплатно)
+            api_key = os.getenv('DISCOGS_API_KEY')
+            if not api_key:
+                return None
+                
+            headers = {
+                'User-Agent': 'MusicApp/1.0',
+                'Authorization': f'Discogs token={api_key}'
+            }
+            
+            search_url = "https://api.discogs.com/database/search"
+            params = {
+                "q": artist_name,
+                "type": "artist",
+                "per_page": 1
+            }
+            
+            response = requests.get(search_url, params=params, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                results = data.get('results', [])
+                if results:
+                    artist_data = results[0]
+                    image_url = artist_data.get('cover_image')
+                    if image_url and not is_coverish_url(image_url):
+                        logger.info(f"✅ Discogs: найдено фото для {artist_name}")
+                        return image_url
+            
+            return None
+        except Exception as e:
+            logger.debug(f"Discogs search failed: {e}")
+            return None
+
+    # ---------- умный поиск в Google Images ----------
+    def _search_google_smart(self, artist_name: str, count: int = 8) -> List[str]:
+        """Умный поиск в Google с разными запросами"""
+        try:
+            api_key = os.getenv('GOOGLE_API_KEY')
+            cx = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
+            if not api_key or not cx:
+                return []
+                
+            # Разные варианты поисковых запросов
+            search_queries = [
+                f'{artist_name} portrait -album -cover -single',
+                f'{artist_name} photo -album -cover',
+                f'{artist_name} musician portrait',
+                f'{artist_name} singer photo',
+                f'{artist_name} official photo',
+                f'{artist_name} press photo'
+            ]
+            
+            all_urls = []
+            for query in search_queries:
+                if len(all_urls) >= count:
+                    break
+                    
+                params = {
+                    "q": query,
+                    "key": api_key, 
+                    "cx": cx,
+                    "searchType": "image", 
+                    "num": min(5, count - len(all_urls)),
+                    "imgType": "face", 
+                    "safe": "active", 
+                    "imgSize": "large",
+                    "rights": "cc_publicdomain"  # Ищем изображения с свободной лицензией
+                }
+                
+                r = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=TIMEOUT)
+                if r.status_code == 200:
+                    items = r.json().get("items", []) or []
+                    for item in items:
+                        url = item.get("link")
+                        if (url and 
+                            not is_coverish_url(url) and 
+                            url not in all_urls and
+                            self._is_good_image_url(url)):
+                            all_urls.append(url)
+            
+            return all_urls[:count]
+            
+        except Exception as e:
+            logger.warning(f"Google smart search error: {e}")
+            return []
+
+    def _is_good_image_url(self, url: str) -> bool:
+        """Проверяет, что URL ведет на хорошее изображение"""
+        try:
+            # Исключаем плохие домены
+            bad_domains = ['wiki', 'wikipedia', 'last.fm', 'discogs']  # Эти уже ищем отдельно
+            if any(domain in url.lower() for domain in bad_domains):
+                return False
+                
+            # Проверяем расширение файла
+            good_extensions = ['.jpg', '.jpeg', '.png', '.webp']
+            if not any(url.lower().endswith(ext) for ext in good_extensions):
+                return False
+                
+            return True
+        except:
+            return False
+
+    # ---------- улучшенный Яндекс поиск ----------
+    def _search_yandex_enhanced(self, artist_name: str) -> List[str]:
+        """Улучшенный поиск в Яндекс Картинках"""
+        try:
+            # Разные варианты запросов для Яндекса
+            queries = [
+                f"{artist_name} фото портрет",
+                f"{artist_name} музыкант фото",
+                f"{artist_name} певец фото",
+                f"{artist_name} официальное фото"
+            ]
+            
+            all_urls = []
+            for query in queries:
+                if len(all_urls) >= 8:
+                    break
+                    
+                q_encoded = query.replace(" ", "+")
+                url = f"https://yandex.ru/images/search?text={q_encoded}&itype=jpg"
+                r = requests.get(url, headers=HDRS, timeout=TIMEOUT)
+                
+                if r.status_code == 200:
+                    # Ищем URL в JSON данных Яндекс
+                    import re
+                    pattern = r'"url":"(https:[^"]+\.(?:jpg|jpeg|png|webp))"'
+                    matches = re.findall(pattern, r.text)
+                    
+                    for match in matches:
+                        url = match.encode().decode("unicode_escape")
+                        if (not is_coverish_url(url) and 
+                            url not in all_urls and
+                            self._is_good_image_url(url)):
+                            all_urls.append(url)
+                            if len(all_urls) >= 8:
+                                break
+            
+            return all_urls[:8]
+        except Exception:
+            return []
+
+    # ---------- поиск через социальные сети ----------
+    def _search_social_media(self, artist_name: str) -> Optional[str]:
+        """Поиск фото из социальных сетей"""
+        try:
+            # Ищем в Instagram через сторонние API
+            instagram_urls = [
+                f"https://www.instagram.com/{slugify(artist_name)}/",
+                f"https://www.instagram.com/{slugify(artist_name.replace(' ', ''))}/"
+            ]
+            
+            for url in instagram_urls:
+                try:
+                    response = requests.head(url, timeout=5, allow_redirects=True)
+                    if response.status_code == 200:
+                        # Если аккаунт существует, можно попробовать получить фото через другие методы
+                        logger.info(f"🔍 Найден Instagram для {artist_name}")
+                        # Здесь можно добавить логику для получения фото профиля
+                except:
+                    continue
+                    
+            return None
+        except Exception as e:
+            logger.debug(f"Social media search failed: {e}")
+            return None
+
+    # ---------- Wikimedia / Wikipedia (оригинальные методы) ----------
     def _wikimedia_best(self, artist_name: str) -> Optional[str]:
         try:
             qid = self._wikidata_qid(artist_name)
@@ -370,7 +499,7 @@ class SimpleArtistImageSearch:
         except Exception:
             return None
 
-    # ---------- Google CSE ----------
+    # ---------- Google CSE (оригинальный) ----------
     def _search_google_faces(self, artist_name: str, count: int = 8) -> List[str]:
         api_key = os.getenv('GOOGLE_API_KEY')
         cx = os.getenv('GOOGLE_SEARCH_ENGINE_ID')
@@ -395,7 +524,7 @@ class SimpleArtistImageSearch:
             logger.warning(f"Google CSE error: {e}")
             return []
 
-    # ---------- Яндекс ----------
+    # ---------- Яндекс (оригинальный) ----------
     def _search_yandex_simple(self, artist_name: str) -> List[str]:
         try:
             q = f"{artist_name} фото портрет".replace(" ", "+")
@@ -411,6 +540,201 @@ class SimpleArtistImageSearch:
             return urls
         except Exception:
             return []
+
+    # ---------- улучшенный публичный метод ----------
+    def fetch_artist_png(self, artist_name: str, track_id: int, use_rembg: bool = True):
+        cache_key = f"{artist_name}_{track_id}"
+        if cache_key in self.artist_cache:
+            return self.artist_cache[cache_key]
+        
+        try:
+            logger.info(f"🎭 Улучшенный поиск фото для: {artist_name}")
+            
+            # 1. ✅ Локальные фото
+            local_photo = self._find_local_artist_photo(artist_name)
+            if local_photo:
+                try:
+                    processed_path = self._process_local_photo(local_photo, track_id)
+                    if processed_path:
+                        self.artist_cache[cache_key] = processed_path
+                        self._cache_push(artist_name.strip().lower(), f"local://{local_photo}")
+                        logger.info(f"✅ Найдено локальное фото: {local_photo}")
+                        return processed_path
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка обработки локального фото: {e}")
+
+            # 2. ✅ Кэш ранее найденных URL
+            artist_key = artist_name.strip().lower()
+            if artist_key in self.photo_cache:
+                for url in self.photo_cache[artist_key]:
+                    if url.startswith("local://"):
+                        continue
+                    p = self._download_process_and_store(url, track_id, use_rembg)
+                    if p: 
+                        self.artist_cache[cache_key] = p
+                        logger.info(f"✅ Найдено в кэше: {url}")
+                        return p
+
+            # 3. ✅ Улучшенный Wikipedia поиск
+            url = self._wikipedia_enhanced_search(artist_name)
+            if url:
+                p = self._download_process_and_store(url, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, url)
+                    self.artist_cache[cache_key] = p
+                    logger.info(f"✅ Найдено в Wikipedia: {url}")
+                    return p
+
+            # 4. ✅ MusicBrainz
+            url = self._search_musicbrainz(artist_name)
+            if url:
+                p = self._download_process_and_store(url, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, url)
+                    self.artist_cache[cache_key] = p
+                    logger.info(f"✅ Найдено в MusicBrainz: {url}")
+                    return p
+
+            # 5. ✅ Discogs
+            url = self._search_discogs(artist_name)
+            if url:
+                p = self._download_process_and_store(url, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, url)
+                    self.artist_cache[cache_key] = p
+                    logger.info(f"✅ Найдено в Discogs: {url}")
+                    return p
+
+            # 6. ✅ Умный Google поиск
+            urls = self._search_google_smart(artist_name, count=10)
+            for u in urls:
+                p = self._download_process_and_store(u, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, u)
+                    self.artist_cache[cache_key] = p
+                    logger.info(f"✅ Найдено в Google: {u}")
+                    return p
+
+            # 7. ✅ Улучшенный Яндекс поиск
+            urls = self._search_yandex_enhanced(artist_name)
+            for u in urls:
+                p = self._download_process_and_store(u, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, u)
+                    self.artist_cache[cache_key] = p
+                    logger.info(f"✅ Найдено в Яндекс: {u}")
+                    return p
+
+            # 8. ✅ Оригинальный Google (резерв)
+            urls = self._search_google_faces(artist_name, count=8)
+            for u in urls:
+                p = self._download_process_and_store(u, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, u)
+                    self.artist_cache[cache_key] = p
+                    logger.info(f"✅ Найдено в Google (резерв): {u}")
+                    return p
+
+            # 9. ✅ Оригинальный Яндекс (резерв)
+            urls = self._search_yandex_simple(artist_name)
+            for u in urls:
+                p = self._download_process_and_store(u, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, u)
+                    self.artist_cache[cache_key] = p
+                    logger.info(f"✅ Найдено в Яндекс (резерв): {u}")
+                    return p
+
+            # 10. ✅ Социальные сети
+            url = self._search_social_media(artist_name)
+            if url:
+                p = self._download_process_and_store(url, track_id, use_rembg)
+                if p:
+                    self._cache_push(artist_key, url)
+                    self.artist_cache[cache_key] = p
+                    logger.info(f"✅ Найдено в соцсетях: {url}")
+                    return p
+
+            # 11. ✅ Placeholder
+            p = self._create_placeholder_image(artist_name, track_id)
+            self.artist_cache[cache_key] = p
+            logger.info("🖼️ Создан placeholder")
+            return p
+            
+        except Exception as e:
+            logger.error(f"💥 Критическая ошибка: {e}")
+            p = self._create_placeholder_image(artist_name, track_id)
+            self.artist_cache[cache_key] = p
+            return p
+
+    def fetch_multiple_artist_photos(self, artist_name: str, count: int = 10) -> List[str]:
+        out: List[str] = []
+        artist_key = artist_name.strip().lower()
+        local_photo = self._find_local_artist_photo(artist_name)
+        if local_photo:
+            out.append(f"local://{local_photo}")
+        cached = [url for url in self.photo_cache.get(artist_key, []) if not url.startswith("local://")]
+        out += cached
+        
+        # Добавляем результаты из всех источников
+        sources = [
+            lambda: [self._wikipedia_enhanced_search(artist_name)] if self._wikipedia_enhanced_search(artist_name) else [],
+            lambda: [self._search_musicbrainz(artist_name)] if self._search_musicbrainz(artist_name) else [],
+            lambda: [self._search_discogs(artist_name)] if self._search_discogs(artist_name) else [],
+            lambda: self._search_google_smart(artist_name, count=5),
+            lambda: self._search_yandex_enhanced(artist_name),
+            lambda: self._search_google_faces(artist_name, count=5),
+            lambda: self._search_yandex_simple(artist_name),
+        ]
+        
+        for source in sources:
+            try:
+                urls = source()
+                out.extend(urls)
+                if len(out) >= count * 2:  # Собираем больше, потом отфильтруем
+                    break
+            except Exception as e:
+                logger.debug(f"Source failed: {e}")
+                continue
+        
+        # Фильтруем и ограничиваем
+        seen, uniq = set(), []
+        for u in out:
+            if not u:
+                continue
+            base = u if u.startswith("local://") else u.split("?")[0]
+            if base not in seen:
+                seen.add(base)
+                uniq.append(u)
+        
+        uniq = [u for u in uniq if u.startswith("local://") or not is_coverish_url(u)]
+        uniq = uniq[:max(1, count)]
+        
+        if uniq:
+            self.photo_cache[artist_key] = uniq
+            self._save_photo_cache()
+        
+        logger.info(f"✅ Всего найдено уникальных фото: {len(uniq)}")
+        return uniq
+
+    # ---------- приватные: загрузка/обработка ----------
+    def _download_process_and_store(self, url: str, track_id: int, use_rembg: bool = True) -> Optional[str]:
+        try:
+            if url.startswith("local://"):
+                return self._process_local_photo(url.replace("local://", ""), track_id)
+            raw = download_bytes(url)
+            if not raw: return None
+            return self._process_internet_photo(raw, track_id, use_rembg)
+        except Exception as e:
+            logger.debug(f"_download_process_and_store fail: {e}")
+            return None
+
+    def _cache_push(self, artist_key: str, url: str):
+        arr = self.photo_cache.get(artist_key, [])
+        if url not in arr:
+            arr.insert(0, url)
+            self.photo_cache[artist_key] = arr[:20]
+            self._save_photo_cache()
 
     # ---------- placeholder ----------
     def _create_placeholder_image(self, artist_name: str, track_id: int) -> str:
@@ -431,15 +755,37 @@ class SimpleArtistImageSearch:
             return str(Path(self.images_dir) / f"{track_id}_artist.png")
 
     def _get_best_font(self, size: int):
-        paths = [
-            "C:/Windows/Fonts/arial.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/System/Library/Fonts/Arial.ttf",
-            "arial.ttf","Arial.ttf"
-        ]
-        for p in paths:
-            try: return ImageFont.truetype(p, size)
-            except: pass
+        """Автоматический выбор шрифта в зависимости от ОС"""
+        import platform
+        
+        system = platform.system().lower()
+        
+        if system == "windows":
+            paths = [
+                "C:/Windows/Fonts/arial.ttf",
+                "C:/Windows/Fonts/arialbd.ttf",
+            ]
+        elif system == "darwin":  # macOS
+            paths = [
+                "/System/Library/Fonts/SFNS.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/System/Library/Fonts/Arial.ttf",
+            ]
+        else:  # Linux и другие
+            paths = [
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ]
+        
+        for font_path in paths:
+            try:
+                if font_path.endswith('.ttc'):
+                    return ImageFont.truetype(font_path, size, index=0)
+                else:
+                    return ImageFont.truetype(font_path, size)
+            except:
+                continue
+        
         return ImageFont.load_default()
 
 # Глобальный экземпляр

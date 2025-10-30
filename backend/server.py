@@ -323,72 +323,12 @@ def _find_track_json_path() -> str | None:
     return None
 
 # =========================
-# INIT FROM track_data.json
-# =========================
-def _load_tracks_from_json_into_library():
-    try:
-        if hasattr(media_library, "get_tracks") and media_library.get_tracks():
-            logger.info("ℹ️ Медиатека уже заполнена — пропускаем загрузку из JSON")
-            return
-
-        data_file = _find_track_json_path()
-        if not data_file:
-            return
-
-        with open(data_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        tracks = data.get("tracks", [])
-        if not tracks:
-            logger.info("ℹ️ В track_data.json нет треков — пропускаем")
-            return
-
-        loaded = 0
-        for t in tracks:
-            added = media_library.add_track(t.get("file_path"), t.get("original_filename", ""))
-            if not added:
-                continue
-            media_library.update_track(added["id"], {
-                "id": t.get("id", added["id"]),
-                "artist": t.get("artist", "Неизвестный исполнитель"),
-                "title": t.get("title", "Без названия"),
-                "segment_start": float(t.get("segment_start", 0)),
-                "segment_duration": int(t.get("segment_duration", 30)),
-                "image_path": t.get("image_path"),
-                "file_path": t.get("file_path"),
-                "metadata": t.get("metadata", {}),
-                "original_filename": t.get("original_filename", "")
-            })
-            loaded += 1
-
-        logger.info(f"📦 Инициализировано из JSON: {loaded} треков")
-
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось инициализировать медиатеку из JSON: {e}")
-
-def _count_tracks_with_fallback() -> int:
-    try:
-        cur = media_library.get_tracks_count()
-        if cur > 0:
-            return cur
-        path = _find_track_json_path()
-        if not path:
-            return 0
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return len(data.get("tracks", []))
-    except Exception as e:
-        logger.warning(f"⚠️ Ошибка подсчёта треков с fallback: {e}")
-        return 0
-
-# =========================
 # INITIALIZATION
 # =========================
 
 
 # Инициализация модулей
 media_library = MediaLibrary()
-_load_tracks_from_json_into_library()
 base_pptx_path = os.path.join(BASE_DIR, "base.pptx")
 modern_presentation_gen = ModernPresentationGenerator(base_path=base_pptx_path)
 ticket_gen = TicketGenerator()
@@ -874,17 +814,8 @@ async def serve_frontend():
 
 @app.get("/api/tracks")
 async def get_tracks():
+    """Возвращает список треков из медиатеки"""
     try:
-        if not media_library.get_tracks():
-            _load_tracks_from_json_into_library()
-            if not media_library.get_tracks():
-                path = _find_track_json_path()
-                if path:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    tracks = data.get("tracks", [])
-                    logger.info(f"📊 Отдаём треки напрямую из JSON: {len(tracks)}")
-                    return tracks
         tracks = media_library.get_tracks()
         logger.info(f"📊 Запрошены треки, найдено: {len(tracks)}")
         return tracks
@@ -1672,187 +1603,291 @@ async def upload_background(file: UploadFile = File(...)):
 
 # -------- Photo processing helpers --------
 
-async def download_and_save_photo(photo_url: str, track_id: int, artist_name: str):
-    """Скачивает и сохраняет фото с разделением логики: локальные - без удаления фона, интернет - с удалением"""
-    try:
-        # Сначала проверяем локальную папку artists
-        artists_dir = os.path.join(BASE_DIR, "artists")
-        if os.path.exists(artists_dir):
-            local_photo = image_searcher._find_local_artist_photo(artist_name)
-            if local_photo:
-                logger.info(f"📁 Используем локальное фото (фон не удаляем): {local_photo}")
-                # Обрабатываем локальное фото БЕЗ удаления фона
-                return await process_local_photo(local_photo, track_id)
-        
-        # Если локального фото нет, загружаем из интернета С удалением фона
-        logger.info(f"🌐 Загружаем фото из интернета (фон будет удален): {photo_url}")
-        return await process_internet_photo(photo_url, track_id)
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки фото: {e}")
-        return await create_placeholder_image(artist_name, track_id)
+async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
+    """
+    Скачивание треков с YouTube по порядку с ограничением размера,
+    анализом сегмента и поиском фото. ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ.
+    """
+    import asyncio, os, shutil, tempfile
+    from pathlib import Path
+    import yt_dlp
+    from concurrent.futures import ThreadPoolExecutor
 
-async def process_local_photo(local_path: str, track_id: int):
-    """Обрабатывает локальное фото БЕЗ удаления фона"""
-    try:
-        images_dir = os.path.join(BASE_DIR, "images")
-        os.makedirs(images_dir, exist_ok=True)
-        
-        ext = Path(local_path).suffix.lower()
-        image_path = os.path.join(images_dir, f"{track_id}_artist{ext}")
-        
-        # Просто копируем файл без обработки
-        import shutil
-        shutil.copy2(local_path, image_path)
-        
-        logger.info(f"✅ Локальное фото сохранено (фон не удален): {image_path}")
-        return image_path
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки локального фото: {e}")
-        return None
+    MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
+    total = len(tracks)
+    
+    # Создаем директории один раз
+    temp_dir = os.path.join(tempfile.gettempdir(), "youtube_dl_fast")
+    downloads_dir = os.path.join(BASE_DIR, "downloads")
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs(downloads_dir, exist_ok=True)
+    
+    logger.info(f"🎵 Начинаем параллельное скачивание {total} треков")
 
-async def process_internet_photo(photo_url: str, track_id: int):
-    """Обрабатывает интернет-фото С удалением фона"""
-    try:
-        images_dir = os.path.join(BASE_DIR, "images")
-        os.makedirs(images_dir, exist_ok=True)
-        image_path = os.path.join(images_dir, f"{track_id}_artist.png")
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; x64) AppleWebKit/537.36',
-            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-        }
-        response = requests.get(photo_url, headers=headers, timeout=30)
-        if response.status_code != 200:
-            raise Exception(f"HTTP error: {response.status_code}")
-        
-        # Сохраняем временный файл
-        temp_path = image_path.replace('.png', '_temp.jpg')
-        with open(temp_path, 'wb') as f:
-            f.write(response.content)
-        
-        # Обрабатываем с удалением фона
-        success = await process_downloaded_image_with_bg_removal(temp_path, image_path)
-        
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            
-        if success:
-            return image_path
-        return None
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки интернет-фото: {e}")
-        return None
-
-async def process_downloaded_image_with_bg_removal(temp_path: str, output_path: str):
-    """Обрабатывает скачанное фото С удалением фона"""
-    try:
-        with Image.open(temp_path) as img:
-            if img.mode in ('RGBA', 'P'):
-                img = img.convert('RGB')
-            max_size = (800, 800)
-            img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            
-            # Сохраняем временно для rembg
-            temp_png = temp_path.replace('.jpg', '_for_rembg.png')
-            img.save(temp_png, "PNG")
-        
-        # Удаляем фон с помощью rembg
+    async def process_single_track(i: int, track_info: dict) -> dict:
+        """Обработка одного трека"""
         try:
-            from rembg import remove
-            with open(temp_png, 'rb') as i:
-                input_data = i.read()
-            output_data = remove(input_data)
-            with open(output_path, 'wb') as o:
-                o.write(output_data)
-            logger.info("🎨 Фон удален (интернет-фото)")
+            query = f"{track_info.get('artist', '')} {track_info.get('title', '')}".strip() or track_info.get("original_line", "")
+            logger.info(f"🔍 [{i+1}/{total}] {query}")
+
+            ydl_opts = {
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "outtmpl": os.path.join(temp_dir, f"{i:03d}_%(id)s.%(ext)s"),
+                "quiet": True,
+                "noplaylist": True,
+                "no_warnings": True,
+                "socket_timeout": 30,
+                "retries": 2,
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio", 
+                    "preferredcodec": "mp3", 
+                    "preferredquality": "192"
+                }],
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            }
+
+            def _download():
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+                        if not info or "entries" not in info or not info["entries"]:
+                            return None
+                        
+                        entry = info["entries"][0]
+                        duration = entry.get('duration', 0)
+                        if duration > 1800:
+                            logger.warning(f"⚠️ Слишком длинное видео: {duration} сек")
+                            return None
+                            
+                        ydl.download([f"ytsearch1:{query}"])
+                        
+                        import glob
+                        pattern = os.path.join(temp_dir, f"{i:03d}_*.*")
+                        files = glob.glob(pattern)
+                        return files[0] if files else None
+                except Exception as e:
+                    logger.error(f"Ошибка загрузки {query}: {e}")
+                    return None
+
+            # Скачиваем трек
+            loop = asyncio.get_event_loop()
+            downloaded_file = await loop.run_in_executor(None, _download)
             
-            # Удаляем временный файл
-            if os.path.exists(temp_png):
-                os.remove(temp_png)
+            if not downloaded_file:
+                return {"success": False, "error": f"Не удалось скачать: {query}"}
+
+            # Проверка размера
+            file_size = os.path.getsize(downloaded_file)
+            if file_size > MAX_SIZE_BYTES:
+                logger.warning(f"⚠️ {query} слишком большой ({file_size//1024//1024} МБ), пропуск")
+                try:
+                    os.remove(downloaded_file)
+                except:
+                    pass
+                return {"success": False, "error": f"Файл слишком большой: {query}"}
+
+            # Создаем безопасное имя
+            safe_artist = track_info.get("artist", "Unknown").replace('/', '-').replace('\\', '-')[:50]
+            safe_title = track_info.get("title", "Unknown").replace('/', '-').replace('\\', '-')[:50]
+            final_filename = f"{safe_artist} - {safe_title}.mp3"
+            final_path = os.path.join(downloads_dir, final_filename)
+            
+            # Перемещение файла
+            await loop.run_in_executor(None, shutil.move, downloaded_file, final_path)
+
+            # Добавляем в медиатеку
+            track = media_library.add_track(final_path, final_filename)
+            if not track:
+                return {"success": False, "error": f"Ошибка добавления {final_filename}"}
+
+            # ПАРАЛЛЕЛЬНО выполняем все остальные задачи
+            tasks = []
+            
+            # Задача 1: Обновление метаданных
+            tasks.append(
+                loop.run_in_executor(
+                    None,
+                    lambda: media_library.update_track(track["id"], {
+                        "artist": safe_artist,
+                        "title": safe_title,
+                        "metadata": {"source": "internet_download", "query": query}
+                    })
+                )
+            )
+            
+            # Задача 2: Анализ сегмента
+            tasks.append(
+                loop.run_in_executor(
+                    None,
+                    lambda: audio_editor.suggest_best_segment(final_path)
+                )
+            )
+            
+            # Задача 3: Поиск фото
+            tasks.append(
+                loop.run_in_executor(
+                    None,
+                    lambda: image_searcher.fetch_artist_png(safe_artist, track["id"])
+                )
+            )
+            
+            # Ждем завершения ВСЕХ параллельных задач
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Обрабатываем результаты
+            metadata_result, segment_result, image_result = results
+            
+            # Применяем анализ сегмента
+            if not isinstance(segment_result, Exception) and segment_result is not None:
+                media_library.update_track_segment(track["id"], segment_result, 30)
+            
+            # Применяем фото
+            if not isinstance(image_result, Exception) and image_result:
+                media_library.update_track(track["id"], {"image_path": image_result})
+                logger.info(f"✅ Фото для {safe_artist} добавлено")
+
+            return {
+                "success": True, 
+                "file_path": final_path, 
+                "track_id": track["id"], 
+                "artist": safe_artist
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка {track_info.get('original_line', '')}: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ОСНОВНОЕ ИЗМЕНЕНИЕ: Параллельная обработка треков
+    semaphore = asyncio.Semaphore(3)  # Максимум 3 параллельных скачивания
+    
+    async def limited_download(i, track_info):
+        async with semaphore:
+            return await process_single_track(i, track_info)
+    
+    # Запускаем ВСЕ задачи параллельно
+    tasks = []
+    for i, track_info in enumerate(tracks):
+        task = asyncio.create_task(limited_download(i, track_info))
+        tasks.append(task)
+    
+    # Ждем завершения всех задач
+    results = await asyncio.gather(*tasks)
+    
+    # Логируем прогресс
+    successful = len([r for r in results if r.get('success')])
+    logger.info(f"🎉 Параллельное скачивание завершено: {successful}/{total} успешно")
+    
+    # Очистка временных файлов
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, shutil.rmtree, temp_dir, True)
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка очистки временных файлов: {e}")
+    
+    return results
+
+
+
+async def auto_search_photos_for_downloaded_tracks(results: list):
+    """Автоматически ищет фото для успешно скачанных треков - ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ"""
+    try:
+        successful_tracks = [r for r in results if r.get('success')]
+        
+        if not successful_tracks:
+            return
+            
+        logger.info(f"🖼️ Параллельный поиск фото для {len(successful_tracks)} треков")
+        
+        # Создаем семафор для ограничения параллельных запросов
+        semaphore = asyncio.Semaphore(5)
+        
+        async def process_photo(track):
+            async with semaphore:
+                try:
+                    track_id = track.get('track_id')
+                    artist = track.get('artist')
+                    
+                    if track_id and artist:
+                        image_path = await download_artist_photo(artist, track_id)
+                        if image_path:
+                            media_library.update_track(track_id, {'image_path': image_path})
+                            logger.info(f"✅ Авто-фото сохранено для {artist}")
+                        return True
+                except Exception as e:
+                    logger.warning(f"⚠️ Ошибка авто-поиска фото для {track.get('artist')}: {e}")
+                return False
+        
+        # Запускаем все задачи параллельно
+        tasks = [process_photo(track) for track in successful_tracks]
+        await asyncio.gather(*tasks)
+        
+        logger.info("✅ Параллельный поиск фото завершен")
                 
-            return True
-        except ImportError:
-            logger.warning("⚠️ rembg не установлен, сохраняем без удаления фона")
-            img.save(output_path, "PNG", optimize=True)
-            return True
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка удаления фона: {e}, сохраняем без удаления")
-            img.save(output_path, "PNG", optimize=True)
-            return True
-            
     except Exception as e:
-        logger.error(f"❌ Ошибка обработки изображения: {e}")
-        return False
+        logger.error(f"❌ Ошибка в авто-поиске фото: {e}")
 
-async def process_uploaded_image(image_path: str, track_id: int):
-    """Обрабатывает загруженное пользователем фото - решаем по контексту"""
+# =========================
+# INTERNET TRACK DOWNLOAD API
+# =========================
+
+@app.post("/api/tracks/download-from-list")
+async def download_tracks_from_list(request_data: dict):
+    """Скачивание треков из YouTube по списку названий - ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ"""
     try:
-        # Определяем, нужно ли удалять фон
-        # Если фото загружено через интерфейс артиста - вероятно, это портрет, можно удалить фон
-        # Если это локальное фото из папки artists - не удаляем фон
+        track_list_text = request_data.get('track_list', '')
+        if not track_list_text.strip():
+            raise HTTPException(status_code=400, detail="Список треков пуст")
         
-        # Для простоты: все загруженные через интерфейс фото обрабатываем с удалением фона
-        processed_path = image_path.replace('.png', '_processed.png')
+        tracks_to_download = parse_track_list(track_list_text)
+        if not tracks_to_download:
+            raise HTTPException(status_code=400, detail="Не удалось распознать список треков")
         
-        with Image.open(image_path) as img:
-            if img.mode in ('RGBA', 'P'):
-                img = img.convert('RGB')
-            max_size = (800, 800)
-            img.thumbnail(max_size, Image.Resampling.LANCZOS)
-            img.save(processed_path, "PNG", optimize=True)
+        logger.info(f"🎵 Начало ПАРАЛЛЕЛЬНОГО скачивания {len(tracks_to_download)} треков")
         
-        # Удаляем фон для загруженных фото
-        try:
-            from rembg import remove
-            with open(processed_path, 'rb') as i:
-                input_data = i.read()
-            output_data = remove(input_data)
-            with open(processed_path, 'wb') as o:
-                o.write(output_data)
-            logger.info("🎨 Фон удален (загруженное фото)")
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось удалить фон: {e}")
+        # Получаем параметры параллелизма из запроса
+        max_workers = request_data.get('max_workers', 3)
+        logger.info(f"⚡ Максимум параллельных загрузок: {max_workers}")
         
-        return processed_path
+        # Скачиваем треки (теперь параллельно)
+        results = await download_tracks_batch(tracks_to_download)
+        
+        # Автопоиск фото (тоже параллельно)
+        auto_search_photos = request_data.get('auto_search_photos', True)
+        if auto_search_photos:
+            # Запускаем в фоне, не ждем завершения
+            asyncio.create_task(auto_search_photos_for_downloaded_tracks(results))
+        
+        successful_count = len([r for r in results if r.get('success')])
+        failed_count = len([r for r in results if not r.get('success')])
+        
+        logger.info(f"🎉 Скачивание завершено: {successful_count} успешно, {failed_count} с ошибками")
+        
+        return {
+            "success": True,
+            "message": f"Обработано {len(results)} треков",
+            "results": results,
+            "downloaded": successful_count,
+            "failed": failed_count
+        }
+        
     except Exception as e:
-        logger.error(f"❌ Ошибка обработки загруженного изображения: {e}")
-        return None
+        logger.error(f"❌ Ошибка скачивания треков: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка скачивания: {str(e)}")
 
-async def create_placeholder_image(artist_name: str, track_id: int):
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-        images_dir = os.path.join(BASE_DIR, "images")
-        os.makedirs(images_dir, exist_ok=True)
-        placeholder_path = os.path.join(images_dir, f"{track_id}_artist_placeholder.png")
-        width, height = 400, 400
-        image = Image.new('RGB', (width, height), color=(74, 107, 156))
-        draw = ImageDraw.Draw(image)
-        try:
-            font = ImageFont.truetype("arial.ttf", 24)
-        except:
-            try:
-                font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 24)
-            except:
-                font = ImageFont.load_default()
-        text = artist_name
-        if len(text) > 20:
-            text = text[:17] + "..."
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        x = (width - text_width) / 2
-        y = (height - text_height) / 2
-        draw.text((x, y), text, fill=(255, 255, 255), font=font)
-        image.save(placeholder_path, "PNG")
-        return placeholder_path
-    except Exception as e:
-        logger.error(f"❌ Ошибка создания placeholder: {e}")
-        return None
 
+# -------- Simple photo API wrappers --------
+
+async def download_artist_photo(artist_name: str, track_id: int):
+    """Простая обертка для скачивания фото артиста"""
+    return await asyncio.to_thread(
+        image_searcher.fetch_artist_png, artist_name, track_id
+    )
+
+async def search_artist_photos(artist_name: str, count: int = 10):
+    """Поиск фото артиста"""
+    return await asyncio.to_thread(
+        image_searcher.fetch_multiple_artist_photos, artist_name, count
+    )
 # -------- Legacy --------
 
 @app.post("/api/generate/presentation")

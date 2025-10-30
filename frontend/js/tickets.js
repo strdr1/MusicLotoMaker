@@ -1,5 +1,5 @@
 ﻿// static/js/tickets.js
-// Исправленная версия с новыми настройками дизайна
+// Исправленная версия с автоматическим обновлением треков
 
 const API_BASE_URL = (typeof API_BASE !== 'undefined') ? API_BASE : 'http://127.0.0.1:8000';
 const TRACKS_ENDPOINTS = [
@@ -12,6 +12,8 @@ const TRACKS_ENDPOINTS = [
 const TICKETS_API = `/api/tickets/generate`;
 let allTracks = [];
 let previewTracks = [];
+let autoRefreshInterval = null;
+let lastTrackCount = 0;
 
 /** Установка значений по умолчанию */
 function setDefaultTicketSettings() {
@@ -82,11 +84,10 @@ function generateRandomPreviewTracks() {
         return [];
     }
 
-    if (previewTracks.length === 0) {
-        const shuffled = [...allTracks].sort(() => Math.random() - 0.5);
-        previewTracks = shuffled.slice(0, 36);
-        console.log('🎲 Сгенерирован новый набор превью треков');
-    }
+    // Всегда генерируем новый случайный набор при обновлении
+    const shuffled = [...allTracks].sort(() => Math.random() - 0.5);
+    previewTracks = shuffled.slice(0, 36);
+    console.log('🎲 Сгенерирован новый набор превью треков');
 
     return previewTracks;
 }
@@ -101,13 +102,32 @@ function regeneratePreviewTracks() {
     }
 }
 
-/** Загрузка треков для билетов (универсальная версия) */
-async function loadTracksForTickets() {
+/** Загрузка треков для билетов с принудительным обновлением */
+async function loadTracksForTickets(forceRefresh = false) {
     let lastErr = null;
+
+    // Сбрасываем preview если принудительное обновление
+    if (forceRefresh) {
+        previewTracks = [];
+        console.log('🔄 Принудительное обновление треков...');
+    }
+
     for (const url of TRACKS_ENDPOINTS) {
         try {
             console.log('[tickets] попытка fetch', url);
-            const resp = await fetch(url, { cache: 'no-store' });
+
+            // Добавляем timestamp для избежания кеширования
+            const timestamp = Date.now();
+            const fetchUrl = `${url}?t=${timestamp}&force=${forceRefresh}`;
+
+            const resp = await fetch(fetchUrl, {
+                cache: 'no-store',
+                headers: {
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache'
+                }
+            });
+
             if (!resp.ok) {
                 lastErr = `HTTP ${resp.status} от ${url}`;
                 console.warn('[tickets] non-ok response', lastErr);
@@ -135,12 +155,21 @@ async function loadTracksForTickets() {
                 continue;
             }
 
-            allTracks = arr;
-            console.log('[tickets] загружено треков:', allTracks.length, 'из', url);
+            // Проверяем, изменилось ли количество треков
+            const newTrackCount = arr.length;
+            const tracksChanged = newTrackCount !== lastTrackCount;
 
+            allTracks = arr;
+            lastTrackCount = newTrackCount;
+
+            console.log(`[tickets] загружено треков: ${allTracks.length} из ${url}, изменилось: ${tracksChanged}`);
+
+            // Всегда сбрасываем preview при обновлении треков
             previewTracks = [];
+
             updatePreviewStats();
             updateTicketPreview();
+
             return; // успешно загрузили, выходим
         } catch (err) {
             lastErr = err.message || String(err);
@@ -158,6 +187,42 @@ async function loadTracksForTickets() {
     updatePreviewStats();
 }
 
+/** Автоматическое обновление треков каждые 10 секунд */
+function startAutoRefresh() {
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+    }
+
+    autoRefreshInterval = setInterval(() => {
+        // Обновляем только если вкладка активна
+        if (!document.hidden) {
+            console.log('🔄 Авто-обновление треков...');
+            loadTracksForTickets(true).catch(console.error);
+        }
+    }, 10000); // 10 секунд
+
+    console.log('✅ Авто-обновление треков запущено (каждые 10 сек)');
+}
+
+/** Остановка авто-обновления */
+function stopAutoRefresh() {
+    if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+        console.log('⏹️ Авто-обновление треков остановлено');
+    }
+}
+
+/** Обновление при возвращении на вкладку */
+function setupVisibilityHandler() {
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+            // При возвращении на вкладку сразу обновляем треки
+            console.log('📱 Возврат на вкладку - обновляем треки');
+            loadTracksForTickets(true).catch(console.error);
+        }
+    });
+}
 
 /** Чтение настроек UI с новыми названиями */
 function readTicketDesignFromUI() {
@@ -167,14 +232,13 @@ function readTicketDesignFromUI() {
         artist_size: parseInt(document.getElementById('t_artist_size')?.value || 9),
         text_color: document.getElementById('t_text_color')?.value || '#666666',
         accent_color: document.getElementById('t_accent_color')?.value || '#000000',
-        bold: document.getElementById('t_bold')?.checked || false, 
+        bold: document.getElementById('t_bold')?.checked || false,
         uppercase: document.getElementById('t_upper')?.checked || false,
         title_position: parseInt(document.getElementById('t_title_position')?.value || 0),
         artist_position: parseInt(document.getElementById('t_artist_position')?.value || 90),
         vertical_padding: parseInt(document.getElementById('t_vertical_padding')?.value || 5)
     };
 }
-
 
 /** Обновление увеличенного превью 6x6 с белым фоном */
 function updateTicketPreview() {
@@ -214,6 +278,7 @@ function updateTicketPreview() {
     grid.style.padding = '15px';
     grid.style.background = '#ffffff';
 
+    // Всегда генерируем новый случайный набор
     const currentPreviewTracks = generateRandomPreviewTracks();
 
     for (let i = 0; i < 36; i++) {
@@ -254,10 +319,10 @@ function updateTicketPreview() {
         titleNode.textContent = titleText;
         titleNode.style.fontFamily = cfg.font_family;
         titleNode.style.fontSize = Math.max(6, cfg.title_size) + 'px';
-        titleNode.style.fontWeight = cfg.bold ? '700' : '400'; // теперь bold влияет
+        titleNode.style.fontWeight = cfg.bold ? '700' : '400';
         titleNode.style.color = cfg.accent_color;
         titleNode.style.textAlign = 'center';
-        titleNode.style.textTransform = cfg.uppercase ? 'uppercase' : 'none'; // теперь работает верхний регистр
+        titleNode.style.textTransform = cfg.uppercase ? 'uppercase' : 'none';
         titleNode.style.lineHeight = '1.1';
         titleNode.style.whiteSpace = 'normal';
         titleNode.style.wordWrap = 'break-word';
@@ -283,8 +348,7 @@ function updateTicketPreview() {
         grid.appendChild(cell);
     }
 
-    console.log('✅ Превью билета обновлено (Bold + Uppercase применены)');
-
+    console.log('✅ Превью билета обновлено');
 }
 
 /** Показать уведомление */
@@ -373,13 +437,11 @@ async function generateTickets() {
 
         const result = await resp.json();
 
-        // Отключено автоматическое скачивание/открытие
         if (result && (result.file || result.zip_file || result.folder)) {
             console.log('[tickets] generation result:', result);
             const folder = result.folder || ('output/' + (result.file || result.zip_file || ''));
             showNotification(`✅ Сгенерировано ${count} билетов!\nПапка: ${folder}`, 'success');
 
-            // Если хочешь — покажи путь в UI (элемент с id="ticketsPath")
             const ticketsPathEl = document.getElementById('ticketsPath');
             if (ticketsPathEl) {
                 ticketsPathEl.textContent = folder;
@@ -432,11 +494,12 @@ function setupSliderValueDisplays() {
         slider.addEventListener('change', updateValue);
     });
 }
+
 /** Привязка событий */
 function attachTicketSettingsEvents() {
     const ids = [
         't_font', 't_title_size', 't_artist_size', 't_text_color', 't_accent_color',
-        't_bold', 't_upper', 't_title_position', 't_artist_position', 't_vertical_padding' 
+        't_bold', 't_upper', 't_title_position', 't_artist_position', 't_vertical_padding'
     ];
 
     ids.forEach(id => {
@@ -462,6 +525,15 @@ function attachTicketSettingsEvents() {
     const genBtn = document.getElementById('generateTicketsBtn');
     if (genBtn) genBtn.addEventListener('click', generateTickets);
 
+    // Кнопка обновления треков
+    const refreshBtn = document.getElementById('refreshTracksBtn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => {
+            loadTracksForTickets(true).catch(console.error);
+            showNotification('🔄 Обновление треков...', 'info');
+        });
+    }
+
     // Обновление при изменении размера окна
     window.addEventListener('resize', updateTicketPreview);
 
@@ -486,17 +558,23 @@ document.addEventListener('DOMContentLoaded', () => {
         console.warn('[tickets] Ошибка загрузки треков:', e);
     });
 
+    // Запускаем авто-обновление
+    startAutoRefresh();
+
+    // Настраиваем обработчик видимости вкладки
+    setupVisibilityHandler();
+
     // Начальное обновление превью
     setTimeout(updateTicketPreview, 500);
 
-    console.log('🎫 Модуль билетов инициализирован');
+    console.log('🎫 Модуль билетов инициализирован с авто-обновлением');
 });
 
 // Глобальные функции для отладки
 window.ticketsDebug = {
     reloadTracks: () => {
         console.log('🔄 Принудительная перезагрузка треков...');
-        loadTracksForTickets().catch(console.error);
+        loadTracksForTickets(true).catch(console.error);
     },
     showTrackCount: () => {
         console.log('📊 Треков в системе:', allTracks ? allTracks.length : 0);
@@ -505,5 +583,11 @@ window.ticketsDebug = {
     regeneratePreview: () => {
         console.log('🔄 Перегенерация превью...');
         regeneratePreviewTracks();
+    },
+    startAutoRefresh: () => {
+        startAutoRefresh();
+    },
+    stopAutoRefresh: () => {
+        stopAutoRefresh();
     }
 };

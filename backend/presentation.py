@@ -210,7 +210,7 @@ class ModernPresentationGenerator:
         except Exception as e:
             logger.error(f"❌ Ошибка вставки фото для слайда {slide_num}: {e}")
 
-    # === ОПТИМИЗИРОВАННАЯ ГЕНЕРАЦИЯ ===
+    # === ИСПРАВЛЕННАЯ ОПТИМИЗИРОВАННАЯ ГЕНЕРАЦИЯ ===
     def generate(self, game_title: str, tracks: list = None, make_bw: bool = False, use_parallel: bool = True):
         if not tracks:
             tracks = self._load_tracks_from_json()
@@ -246,10 +246,10 @@ class ModernPresentationGenerator:
                     slide1.write_text(content.replace("{{TITLE}}", game_title), encoding="utf-8")
                     logger.info(f"📝 Заголовок заменен на: {game_title}")
 
-            # === ОПТИМИЗИРОВАННАЯ ОБРАБОТКА АУДИО ===
+            # === ИСПРАВЛЕННАЯ ОБРАБОТКА АУДИО ===
             rels_list = self._get_rels_list_sorted(slides_rels_dir)
             slide_track_map = {}
-            processed_tracks = 0
+            track_index = 0  # Отдельный индекс для треков
             track_for_13_and_44 = None
 
             # Подготавливаем задачи для параллельной обработки
@@ -257,47 +257,64 @@ class ModernPresentationGenerator:
             for rels_path in rels_list:
                 slide_num = int(''.join(ch for ch in rels_path.stem if ch.isdigit()) or 0)
                 
+                # Пропускаем слайды из черного списка
                 if slide_num in self.skip_slides:
                     continue
-                    
+                
+                # Обработка специальных слайдов 13 и 44
                 if slide_num == 13:
+                    # Для слайда 13 резервируем текущий трек, но не увеличиваем индекс
+                    if track_index < len(tracks):
+                        track_for_13_and_44 = tracks[track_index]
+                        # НЕ увеличиваем track_index здесь!
+                        track = track_for_13_and_44
+                        audio_tasks.append((rels_path, track, slide_num, media_dir))
+                        slide_track_map[slide_num] = track
+                        logger.info(f"🎵 Слайд 13: зарезервирован трек '{track.get('title', 'Без названия')}'")
                     continue
                 elif slide_num == 44:
-                    if track_for_13_and_44 is None and processed_tracks < len(tracks):
-                        track_for_13_and_44 = tracks[processed_tracks]
-                        processed_tracks += 1
-                    track = track_for_13_and_44
+                    # Слайд 44 использует тот же трек, что и слайд 13
+                    if track_for_13_and_44:
+                        track = track_for_13_and_44
+                        audio_tasks.append((rels_path, track, slide_num, media_dir))
+                        slide_track_map[slide_num] = track
+                        logger.info(f"🎵 Слайд 44: использован трек '{track.get('title', 'Без названия')}'")
+                    continue
                 else:
-                    if processed_tracks >= len(tracks):
+                    # Обычные слайды
+                    if track_index >= len(tracks):
+                        logger.warning(f"⚠️ Закончились треки на слайде {slide_num}")
                         break
-                    track = tracks[processed_tracks]
-                    processed_tracks += 1
-
-                if track:
+                    
+                    track = tracks[track_index]
+                    track_index += 1  # Увеличиваем индекс только для обычных слайдов
+                    
                     audio_tasks.append((rels_path, track, slide_num, media_dir))
+                    slide_track_map[slide_num] = track
+                    logger.debug(f"🎵 Слайд {slide_num}: назначен трек '{track.get('title', 'Без названия')}' (индекс: {track_index-1})")
 
             # Параллельная обработка аудио
             if use_parallel and len(audio_tasks) > 1:
+                logger.info("🔄 Параллельная обработка аудио...")
                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
                     results = list(executor.map(self._process_audio_segment, audio_tasks))
+                    # Обновляем карту треков результатами обработки
                     for result in results:
                         if result:
-                            slide_track_map[result[0]] = result[1]
+                            slide_num, processed_track = result
+                            slide_track_map[slide_num] = processed_track
             else:
                 # Последовательная обработка если не используем параллельность
+                logger.info("🔄 Последовательная обработка аудио...")
                 for task in audio_tasks:
                     result = self._process_audio_segment(task)
                     if result:
-                        slide_track_map[result[0]] = result[1]
+                        slide_num, processed_track = result
+                        slide_track_map[slide_num] = processed_track
 
-            # Обработка слайда 13
-            if track_for_13_and_44:
-                slide_13_rels = slides_rels_dir / "slide13.xml.rels"
-                if slide_13_rels.exists():
-                    task = (slide_13_rels, track_for_13_and_44, 13, media_dir)
-                    result = self._process_audio_segment(task)
-                    if result:
-                        slide_track_map[13] = result[1]
+            # Логируем распределение треков для отладки
+            logger.info(f"📊 Распределено треков по слайдам: {len(slide_track_map)}")
+            logger.info(f"📊 Использовано треков из доступных: {track_index} из {len(tracks)}")
 
             # Быстрая сборка PPTX
             final_pptx = out_root / f"presentation_{timestamp}.pptx"
@@ -308,13 +325,33 @@ class ModernPresentationGenerator:
                         arcname = os.path.relpath(fp, extract_dir)
                         zip_out.write(fp, arcname)
 
-            # Финальная обработка
+            # Финальная обработка текста и фото
             prs = Presentation(final_pptx)
             self._replace_placeholders_and_photos(prs, slide_track_map, make_bw)
             prs.save(final_pptx)
 
             logger.info(f"✅ Презентация готова: {final_pptx}")
+            logger.info(f"📁 Папка с результатами: {out_root}")
             return str(out_root)
 
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка при генерации презентации: {e}")
+            raise
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+            logger.info("🧹 Временные файлы очищены")
+
+
+# Пример использования
+if __name__ == "__main__":
+    try:
+        generator = ModernPresentationGenerator("template.pptx")
+        result_path = generator.generate(
+            game_title="Моя музыкальная викторина",
+            tracks=None,  # Автоматически загрузит из tracks.json
+            make_bw=False,
+            use_parallel=True
+        )
+        print(f"🎉 Презентация создана в: {result_path}")
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
