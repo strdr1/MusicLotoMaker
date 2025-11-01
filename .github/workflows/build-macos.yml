@@ -1,4 +1,4 @@
-﻿name: Build macOS DMG (x86_64)
+﻿name: Build macOS DMG (x86_64 clean)
 
 on:
   push:
@@ -19,8 +19,10 @@ jobs:
           python-version: "3.11"
           architecture: "x64"
 
-      - name: Install dependencies
+      - name: Clean previous builds and install dependencies
         run: |
+          # Удаляем старые пакеты, чтобы не было смешанных архитектур
+          python -m pip uninstall -y -r requirements.txt || true
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
