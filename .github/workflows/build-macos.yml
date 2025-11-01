@@ -18,43 +18,34 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install universal2 dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller dmgbuild
+          # Устанавливаем зависимости как universal2 wheels
+          export PIP_USE_PEP517=1
+          pip install --target-architecture universal2 -r requirements.txt pyinstaller dmgbuild
 
-      - name: Build x86_64 app
+      - name: Build with PyInstaller (universal2)
         run: |
-          echo "🚧 Building MusicLotoMaker.app for x86_64..."
-          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --target-arch x86_64 app.py
-          mv dist/MusicLotoMaker.app dist_x86_64/
-          echo "✅ x86_64 build done"
+          echo "🚧 Building MusicLotoMaker.app as Universal2..."
+          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --target-architecture universal2 app.py
+          echo "✅ Universal2 build done"
 
-      - name: Build arm64 app
+      - name: Verify binary architecture
         run: |
-          echo "🚧 Building MusicLotoMaker.app for arm64..."
-          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --target-arch arm64 app.py
-          mv dist/MusicLotoMaker.app dist_arm64/
-          echo "✅ arm64 build done"
-
-      - name: Create Universal2 app
-        run: |
-          echo "🚀 Creating Universal2 MusicLotoMaker.app..."
-          mkdir -p dist_universal/MusicLotoMaker.app/Contents/MacOS
-          lipo -create \
-            dist_x86_64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
-            dist_arm64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
-            -output dist_universal/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
-          cp -R dist_x86_64/MusicLotoMaker.app/Contents/Resources dist_universal/MusicLotoMaker.app/Contents/
-          echo "✅ Universal2 app ready"
+          echo "📊 Проверяем архитектуру исполняемого файла..."
+          file dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
+          lipo -info dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
 
       - name: Prepare DMG settings
         run: |
-          echo "files = ['dist_universal/MusicLotoMaker.app']" > dmg_settings.py
-          echo "format = 'UDBZ'" >> dmg_settings.py
-          echo "symlinks = {'Applications': '/Applications'}" >> dmg_settings.py
-          echo "window_rect = ((100, 100), (640, 480))" >> dmg_settings.py
-          echo "icon_size = 128" >> dmg_settings.py
+          cat > dmg_settings.py << EOF
+          files = ['dist/MusicLotoMaker.app']
+          format = 'UDBZ'
+          symlinks = {'Applications': '/Applications'}
+          window_rect = ((100, 100), (640, 480))
+          icon_size = 128
+          EOF
 
       - name: Build DMG
         run: |
