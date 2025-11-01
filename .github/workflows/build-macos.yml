@@ -1,4 +1,4 @@
-﻿name: Build macOS DMG (Full Project Tree)
+﻿name: Build macOS DMG (Full Project Installer)
 
 on:
   push:
@@ -18,37 +18,39 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install build tools
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
           pip install pyinstaller dmgbuild
 
-      - name: Build standalone app (backend inside)
+      - name: Build standalone app
         run: |
           echo "🚧 Собираем MusicLotoMaker.app..."
           pyinstaller --noconfirm --windowed --name "MusicLotoMaker" app.py
-          echo "✅ PyInstaller завершил сборку"
+          echo "✅ Сборка завершена"
 
-      - name: Prepare dist_project folder
+      - name: Prepare DMG directory
         run: |
           mkdir -p dist_project
-          
-          # Копируем нужную структуру
-          cp -R artists backend frontend assets templates covers game_templates dist_project/ 2>/dev/null || true
-          cp -R *.py *.pptx *.json *.txt dist_project/ 2>/dev/null || true
-          
-          # Добавляем .app собранное
+
+          # Копируем нужные папки
+          cp -R frontend backend assets game_templates templates covers dist_project/ 2>/dev/null || true
+
+          # Копируем основные файлы
+          cp -R *.py *.txt *.json *.pptx dist_project/ 2>/dev/null || true
+
+          # Добавляем скомпилированное приложение
           cp -R dist/MusicLotoMaker.app dist_project/
 
-          # Создаем скрипт запуска для macOS
+          # Создаём стартовый скрипт
           echo '#!/bin/bash' > dist_project/start.command
           echo 'cd "$(dirname "$0")"' >> dist_project/start.command
           echo 'echo "🚀 Запуск MusicLotoMaker..."' >> dist_project/start.command
-          echo 'python3 app.py' >> dist_project/start.command
+          echo './MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker' >> dist_project/start.command
           chmod +x dist_project/start.command
 
-          echo "✅ Папка dist_project готова со всей структурой проекта"
+          echo "MusicLotoMaker for macOS" > dist_project/README.txt
+          echo "✅ Папка dist_project готова"
 
       - name: Create dmg_settings.py
         run: |

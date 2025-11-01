@@ -38,3 +38,5 @@ lxml>=4.9.0
 
 # Data classes
 dataclasses-json>=0.6.0
+
+pyinstaller
