@@ -18,12 +18,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install universal2 dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Устанавливаем зависимости как universal2 wheels
-          export PIP_USE_PEP517=1
-          pip install --target-architecture universal2 -r requirements.txt pyinstaller dmgbuild
+          pip install -r requirements.txt pyinstaller dmgbuild
 
       - name: Build with PyInstaller (universal2)
         run: |
