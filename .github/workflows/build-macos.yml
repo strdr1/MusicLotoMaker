@@ -18,36 +18,106 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller dmgbuild
+          pip install pyinstaller dmgbuild
 
-      - name: Build with PyInstaller (universal2)
+      - name: Build x86_64 app
         run: |
-          echo "🚧 Building MusicLotoMaker.app as Universal2..."
-          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --target-architecture universal2 app.py
-          echo "✅ Universal2 build done"
+          echo "🚧 Building MusicLotoMaker.app for x86_64..."
+          
+          # Создаем виртуальное окружение для x86_64
+          python -m venv venv_x86
+          
+          # Устанавливаем зависимости в x86_64 окружении
+          arch -x86_64 ./venv_x86/bin/pip install -r requirements.txt
+          
+          # Собираем с PyInstaller для x86_64
+          arch -x86_64 ./venv_x86/bin/pyinstaller \
+            --noconfirm \
+            --windowed \
+            --name "MusicLotoMaker" \
+            --clean \
+            app.py
+          
+          mv dist/MusicLotoMaker.app dist_x86_64/
+          echo "✅ x86_64 build done"
 
-      - name: Verify binary architecture
+      - name: Build arm64 app
         run: |
-          echo "📊 Проверяем архитектуру исполняемого файла..."
-          file dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
+          echo "🚧 Building MusicLotoMaker.app for arm64..."
+          
+          # Создаем виртуальное окружение для arm64
+          python -m venv venv_arm
+          
+          # Устанавливаем зависимости в arm64 окружении
+          arch -arm64 ./venv_arm/bin/pip install -r requirements.txt
+          
+          # Собираем с PyInstaller для arm64
+          arch -arm64 ./venv_arm/bin/pyinstaller \
+            --noconfirm \
+            --windowed \
+            --name "MusicLotoMaker" \
+            --clean \
+            app.py
+          
+          mv dist/MusicLotoMaker.app dist_arm64/
+          echo "✅ arm64 build done"
+
+      - name: Create Universal2 app
+        run: |
+          echo "🚀 Creating Universal2 MusicLotoMaker.app..."
+          
+          # Создаем структуру папок для универсального приложения
+          mkdir -p dist/MusicLotoMaker.app/Contents/MacOS
+          mkdir -p dist/MusicLotoMaker.app/Contents/Resources
+          
+          # Объединяем главные бинарники
+          lipo -create \
+            dist_x86_64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
+            dist_arm64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
+            -output dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
+          
+          # Копируем ресурсы (берем из arm64 версии, но можно и из x86_64)
+          cp -R dist_arm64/MusicLotoMaker.app/Contents/Resources/* dist/MusicLotoMaker.app/Contents/Resources/
+          cp dist_arm64/MusicLotoMaker.app/Contents/Info.plist dist/MusicLotoMaker.app/Contents/
+          
+          # Копируем остальные файлы если есть
+          if [ -d "dist_arm64/MusicLotoMaker.app/Contents/Frameworks" ]; then
+            cp -R dist_arm64/MusicLotoMaker.app/Contents/Frameworks dist/MusicLotoMaker.app/Contents/
+          fi
+          
+          # Делаем бинарник исполняемым
+          chmod +x dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
+          echo "✅ Universal2 app ready"
+
+      - name: Verify universal binary
+        run: |
+          echo "📊 Проверяем универсальный бинарник..."
           lipo -info dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
+          echo "📦 Размер приложения:"
+          du -sh dist/MusicLotoMaker.app
 
       - name: Prepare DMG settings
         run: |
           cat > dmg_settings.py << EOF
+          # DMG settings
           files = ['dist/MusicLotoMaker.app']
           format = 'UDBZ'
           symlinks = {'Applications': '/Applications'}
           window_rect = ((100, 100), (640, 480))
           icon_size = 128
+          icon_locations = {
+              'MusicLotoMaker.app': (240, 180),
+              'Applications': (400, 180)
+          }
           EOF
 
       - name: Build DMG
         run: |
           dmgbuild -s dmg_settings.py "MusicLotoMaker" "MusicLotoMaker.dmg"
+          echo "✅ DMG created"
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
