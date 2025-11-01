@@ -1,4 +1,4 @@
-﻿name: Build macOS DMG (Universal2)
+﻿name: Build macOS DMG (x86_64)
 
 on:
   push:
@@ -23,10 +23,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build standalone app (Universal2)
+      - name: Build standalone app (x86_64)
         run: |
-          echo "🚧 Собираем MusicLotoMaker.app (Universal2)..."
-          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --target-arch universal2 app.py
+          echo "🚧 Собираем MusicLotoMaker.app (x86_64)..."
+          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --target-arch x86_64 app.py
           echo "✅ Сборка завершена"
 
       - name: Prepare DMG directory
