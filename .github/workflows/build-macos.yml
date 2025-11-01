@@ -44,12 +44,6 @@ jobs:
             --clean \
             app.py
           
-          # Проверяем что собралось
-          echo "📁 Содержимое dist после x86_64 сборки:"
-          ls -la dist/
-          echo "📁 Содержимое app:"
-          ls -la dist/MusicLotoMaker.app/Contents/MacOS/
-          
           mkdir -p dist_x86_64
           mv dist/MusicLotoMaker.app dist_x86_64/
           echo "✅ x86_64 build done"
@@ -75,48 +69,13 @@ jobs:
             --clean \
             app.py
           
-          # Проверяем что собралось
-          echo "📁 Содержимое dist после arm64 сборки:"
-          ls -la dist/
-          echo "📁 Содержимое app:"
-          ls -la dist/MusicLotoMaker.app/Contents/MacOS/
-          
           mkdir -p dist_arm64
           mv dist/MusicLotoMaker.app dist_arm64/
           echo "✅ arm64 build done"
 
-      - name: Debug folder structure
-        run: |
-          echo "📁 Отладочная информация о структуре папок:"
-          echo "dist_x86_64:"
-          ls -la dist_x86_64/ || echo "dist_x86_64 не существует"
-          echo "dist_arm64:"
-          ls -la dist_arm64/ || echo "dist_arm64 не существует"
-          
-          if [ -d "dist_x86_64/MusicLotoMaker.app" ]; then
-            echo "📁 Содержимое x86_64 app:"
-            find dist_x86_64/MusicLotoMaker.app -type f
-          fi
-          
-          if [ -d "dist_arm64/MusicLotoMaker.app" ]; then
-            echo "📁 Содержимое arm64 app:"
-            find dist_arm64/MusicLotoMaker.app -type f
-          fi
-
       - name: Create Universal2 app
         run: |
           echo "🚀 Creating Universal2 MusicLotoMaker.app..."
-          
-          # Проверяем что файлы существуют
-          if [ ! -f "dist_x86_64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker" ]; then
-            echo "❌ x86_64 binary not found!"
-            exit 1
-          fi
-          
-          if [ ! -f "dist_arm64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker" ]; then
-            echo "❌ arm64 binary not found!"
-            exit 1
-          fi
           
           # Создаем структуру папок для универсального приложения
           rm -rf dist
@@ -140,6 +99,10 @@ jobs:
           
           # Делаем бинарник исполняемым
           chmod +x dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
+          
+          # Удаляем атрибуты карантина (решает проблему "приложение повреждено")
+          xattr -cr dist/MusicLotoMaker.app
+          
           echo "✅ Universal2 app ready"
 
       - name: Verify universal binary
@@ -167,10 +130,35 @@ jobs:
       - name: Build DMG
         run: |
           dmgbuild -s dmg_settings.py "MusicLotoMaker" "MusicLotoMaker.dmg"
+          
+          # Удаляем карантин с DMG файла
+          xattr -cr MusicLotoMaker.dmg
+          
           echo "✅ DMG created"
+
+      - name: Create README with installation instructions
+        run: |
+          cat > DMG_README.txt << EOF
+          ИНСТРУКЦИЯ ПО УСТАНОВКЕ:
+
+          Если при открытии появляется сообщение "Приложение повреждено":
+          
+          1. Откройте Системные настройки → Защита и безопасность → Основные
+          2. В разделе "Разрешить загрузки из:" выберите "App Store и идентифицированные разработчики"
+          3. Если приложение все равно не открывается, выполните в Терминале:
+             xattr -cr /Applications/MusicLotoMaker.app
+
+          Чтобы установить приложение:
+          1. Откройте MusicLotoMaker.dmg
+          2. Перетащите MusicLotoMaker.app в папку "Программы"
+          3. Запустите приложение из папки "Программы"
+
+          EOF
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
           name: MusicLotoMaker-dmg
-          path: MusicLotoMaker.dmg
+          path: |
+            MusicLotoMaker.dmg
+            DMG_README.txt
