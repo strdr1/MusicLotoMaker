@@ -1,4 +1,4 @@
-﻿name: Build macOS DMG (Full Project + Launcher)
+﻿name: Build macOS DMG (Standalone App)
 
 on:
   push:
@@ -20,46 +20,31 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dmgbuild
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install dmgbuild
+          pip install -r requirements.txt
+          pip install pyinstaller dmgbuild
 
-      - name: Prepare project folder
+      - name: Build standalone app with PyInstaller
         run: |
-          # Создаем папку для дистрибутива
-          mkdir dist_project
+          echo "🚧 Собираем MusicLotoMaker.app..."
+          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" app.py
+          echo "✅ PyInstaller закончил сборку"
+
+      - name: Prepare app bundle for DMG
+        run: |
+          mkdir -p dist_project
+          cp -R dist/MusicLotoMaker.app dist_project/
           
-          # Копируем все файлы и папки явно
-          cp -R ./* ./.* dist_project/ 2>/dev/null || true
-          
-          # Удаляем track_data.json из корня проекта
-          if [ -f "dist_project/track_data.json" ]; then
-            rm dist_project/track_data.json
-            echo "✅ Удален track_data.json из корня проекта"
-          fi
-          
-          # Особое внимание на фронтенд
-          echo "🔍 Проверяем содержимое frontend:"
-          ls -la frontend/
-          echo "🔍 Проверяем содержимое frontend после копирования:"
-          ls -la dist_project/frontend/
-          
-          # Создаём запускающий скрипт для macOS
+          # Добавляем запускалку и текстовый файл
           echo '#!/bin/bash' > dist_project/start.command
           echo 'cd "$(dirname "$0")"' >> dist_project/start.command
-          echo 'echo "🚀 Запуск MusicLotoMaker..."' >> dist_project/start.command
-          echo 'python3 app.py' >> dist_project/start.command
+          echo 'open MusicLotoMaker.app' >> dist_project/start.command
           chmod +x dist_project/start.command
           
-          # Создаём запускающий скрипт для Windows
-          echo '@echo off' > dist_project/start.bat
-          echo 'chcp 65001 > nul' >> dist_project/start.bat
-          echo 'echo 🚀 Запуск MusicLotoMaker...' >> dist_project/start.bat
-          echo 'python app.py' >> dist_project/start.bat
-          echo 'pause' >> dist_project/start.bat
-          
-          echo "✅ Подготовка проекта завершена"
+          echo "MusicLotoMaker for macOS" > dist_project/ReadMe.txt
+          echo "✅ Готово: dist_project содержит готовое приложение"
 
       - name: Create dmg_settings.py dynamically
         run: |
@@ -69,7 +54,7 @@ jobs:
           echo "window_rect = ((100, 100), (640, 480))" >> dmg_settings.py
           echo "icon_size = 128" >> dmg_settings.py
 
-      - name: Create DMG using dmgbuild
+      - name: Build DMG with dmgbuild
         run: |
           dmgbuild -s dmg_settings.py "MusicLotoMaker" "MusicLotoMaker.dmg"
 
