@@ -1,4 +1,4 @@
-﻿name: Build macOS DMG (Standalone App)
+﻿name: Build macOS DMG (Full Project Tree)
 
 on:
   push:
@@ -12,8 +12,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -26,27 +24,33 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller dmgbuild
 
-      - name: Build standalone app with PyInstaller
+      - name: Build standalone app (backend inside)
         run: |
           echo "🚧 Собираем MusicLotoMaker.app..."
           pyinstaller --noconfirm --windowed --name "MusicLotoMaker" app.py
-          echo "✅ PyInstaller закончил сборку"
+          echo "✅ PyInstaller завершил сборку"
 
-      - name: Prepare app bundle for DMG
+      - name: Prepare dist_project folder
         run: |
           mkdir -p dist_project
-          cp -R dist/MusicLotoMaker.app dist_project/
           
-          # Добавляем запускалку и текстовый файл
+          # Копируем нужную структуру
+          cp -R artists backend frontend assets templates covers game_templates dist_project/ 2>/dev/null || true
+          cp -R *.py *.pptx *.json *.txt dist_project/ 2>/dev/null || true
+          
+          # Добавляем .app собранное
+          cp -R dist/MusicLotoMaker.app dist_project/
+
+          # Создаем скрипт запуска для macOS
           echo '#!/bin/bash' > dist_project/start.command
           echo 'cd "$(dirname "$0")"' >> dist_project/start.command
-          echo 'open MusicLotoMaker.app' >> dist_project/start.command
+          echo 'echo "🚀 Запуск MusicLotoMaker..."' >> dist_project/start.command
+          echo 'python3 app.py' >> dist_project/start.command
           chmod +x dist_project/start.command
-          
-          echo "MusicLotoMaker for macOS" > dist_project/ReadMe.txt
-          echo "✅ Готово: dist_project содержит готовое приложение"
 
-      - name: Create dmg_settings.py dynamically
+          echo "✅ Папка dist_project готова со всей структурой проекта"
+
+      - name: Create dmg_settings.py
         run: |
           echo "files = ['dist_project']" > dmg_settings.py
           echo "format = 'UDBZ'" >> dmg_settings.py
@@ -54,7 +58,7 @@ jobs:
           echo "window_rect = ((100, 100), (640, 480))" >> dmg_settings.py
           echo "icon_size = 128" >> dmg_settings.py
 
-      - name: Build DMG with dmgbuild
+      - name: Build DMG
         run: |
           dmgbuild -s dmg_settings.py "MusicLotoMaker" "MusicLotoMaker.dmg"
 
