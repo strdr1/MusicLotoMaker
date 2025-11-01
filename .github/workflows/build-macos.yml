@@ -41,81 +41,10 @@ jobs:
         run: |
           echo "🚀 Creating Universal2 MusicLotoMaker.app..."
           mkdir -p dist_universal/MusicLotoMaker.app/Contents/MacOS
-          # Объединяем бинарники
           lipo -create \
             dist_x86_64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
             dist_arm64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
             -output dist_universal/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
-          # Копируем ресурсы (templates, assets, README и т.д.)
-          cp -R dist_x86_64/MusicLotoMaker.app/Contents/Resources dist_universal/MusicLotoMaker.app/Contents/
-          echo "✅ Universal2 app ready"
-
-      - name: Prepare DMG settings
-        run: |
-          echo "files = ['dist_universal/MusicLotoMaker.app']" > dmg_settings.py
-          echo "format = 'UDBZ'" >> dmg_settings.py
-          echo "symlinks = {'Applications': '/Applications'}" >> dmg_settings.py
-          echo "window_rect = ((100, 100), (640, 480))" >> dmg_settings.py
-          echo "icon_size = 128" >> dmg_settings.py
-
-      - name: Build DMG
-        run: |
-          dmgbuild -s dmg_settings.py "MusicLotoMaker" "MusicLotoMaker.dmg"
-
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: MusicLotoMaker-dmg
-          path: MusicLotoMaker.dmg
-name: Build macOS Universal2 DMG
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
-jobs:
-  build-macos:
-    runs-on: macos-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt pyinstaller dmgbuild
-
-      - name: Build x86_64 app
-        run: |
-          echo "🚧 Building MusicLotoMaker.app for x86_64..."
-          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --target-arch x86_64 app.py
-          mv dist/MusicLotoMaker.app dist_x86_64/
-          echo "✅ x86_64 build done"
-
-      - name: Build arm64 app
-        run: |
-          echo "🚧 Building MusicLotoMaker.app for arm64..."
-          pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --target-arch arm64 app.py
-          mv dist/MusicLotoMaker.app dist_arm64/
-          echo "✅ arm64 build done"
-
-      - name: Create Universal2 app
-        run: |
-          echo "🚀 Creating Universal2 MusicLotoMaker.app..."
-          mkdir -p dist_universal/MusicLotoMaker.app/Contents/MacOS
-          # Объединяем бинарники
-          lipo -create \
-            dist_x86_64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
-            dist_arm64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
-            -output dist_universal/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
-          # Копируем ресурсы (templates, assets, README и т.д.)
           cp -R dist_x86_64/MusicLotoMaker.app/Contents/Resources dist_universal/MusicLotoMaker.app/Contents/
           echo "✅ Universal2 app ready"
 
