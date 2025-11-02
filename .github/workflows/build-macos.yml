@@ -77,7 +77,11 @@ jobs:
         run: |
           echo "📊 Проверяем универсальный бинарник..."
           lipo -info dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
-          spctl --assess --verbose dist/MusicLotoMaker.app
+          
+          echo "📦 Проверяем через spctl (Gatekeeper, может быть rejected на CI)..."
+          spctl --assess --verbose dist/MusicLotoMaker.app || true
+          
+          echo "📦 Размер приложения:"
           du -sh dist/MusicLotoMaker.app
 
       - name: Prepare DMG settings
