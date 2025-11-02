@@ -26,69 +26,37 @@ jobs:
       - name: Build x86_64 app
         run: |
           echo "🚧 Building MusicLotoMaker.app for x86_64..."
-          
-          # Очищаем предыдущие сборки
           rm -rf dist build dist_x86_64
-          
-          # Создаем виртуальное окружение для x86_64
           python -m venv venv_x86
-          
-          # Устанавливаем зависимости в x86_64 окружении
           arch -x86_64 ./venv_x86/bin/pip install -r requirements.txt
-          
-          # Собираем с PyInstaller для x86_64
-          arch -x86_64 ./venv_x86/bin/pyinstaller \
-            --noconfirm \
-            --windowed \
-            --name "MusicLotoMaker" \
-            --clean \
-            app.py
-          
+          arch -x86_64 ./venv_x86/bin/pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --clean app.py
           mkdir -p dist_x86_64
           mv dist/MusicLotoMaker.app dist_x86_64/
-          echo "✅ x86_64 build done"
 
       - name: Build arm64 app
         run: |
           echo "🚧 Building MusicLotoMaker.app for arm64..."
-          
-          # Очищаем предыдущие сборки
           rm -rf dist build dist_arm64
-          
-          # Создаем виртуальное окружение для arm64
           python -m venv venv_arm
-          
-          # Устанавливаем зависимости в arm64 окружении
           arch -arm64 ./venv_arm/bin/pip install -r requirements.txt
-          
-          # Собираем с PyInstaller для arm64
-          arch -arm64 ./venv_arm/bin/pyinstaller \
-            --noconfirm \
-            --windowed \
-            --name "MusicLotoMaker" \
-            --clean \
-            app.py
-          
+          arch -arm64 ./venv_arm/bin/pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --clean app.py
           mkdir -p dist_arm64
           mv dist/MusicLotoMaker.app dist_arm64/
-          echo "✅ arm64 build done"
 
       - name: Create Universal2 app
         run: |
           echo "🚀 Creating Universal2 MusicLotoMaker.app..."
-          
-          # Создаем структуру папок для универсального приложения
           rm -rf dist
           mkdir -p dist/MusicLotoMaker.app/Contents/MacOS
           mkdir -p dist/MusicLotoMaker.app/Contents/Resources
           
-          # Объединяем главные бинарники
+          # Объединяем бинарники
           lipo -create \
             dist_x86_64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
             dist_arm64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
             -output dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
           
-          # Копируем ресурсы
+          # Копируем ресурсы и Info.plist
           cp -R dist_arm64/MusicLotoMaker.app/Contents/Resources/* dist/MusicLotoMaker.app/Contents/Resources/
           cp dist_arm64/MusicLotoMaker.app/Contents/Info.plist dist/MusicLotoMaker.app/Contents/
           
@@ -97,10 +65,10 @@ jobs:
             cp -R dist_arm64/MusicLotoMaker.app/Contents/Frameworks dist/MusicLotoMaker.app/Contents/
           fi
           
-          # Делаем бинарник исполняемым
           chmod +x dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
           
-          # Удаляем атрибуты карантина (решает проблему "приложение повреждено")
+          # Ad-hoc подпись
+          codesign --deep --force --verbose --sign - dist/MusicLotoMaker.app
           xattr -cr dist/MusicLotoMaker.app
           
           echo "✅ Universal2 app ready"
@@ -109,7 +77,7 @@ jobs:
         run: |
           echo "📊 Проверяем универсальный бинарник..."
           lipo -info dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
-          echo "📦 Размер приложения:"
+          spctl --assess --verbose dist/MusicLotoMaker.app
           du -sh dist/MusicLotoMaker.app
 
       - name: Prepare DMG settings
@@ -130,23 +98,13 @@ jobs:
       - name: Build DMG
         run: |
           dmgbuild -s dmg_settings.py "MusicLotoMaker" "MusicLotoMaker.dmg"
-          
-          # Удаляем карантин с DMG файла
           xattr -cr MusicLotoMaker.dmg
-          
           echo "✅ DMG created"
 
       - name: Create README with installation instructions
         run: |
           cat > DMG_README.txt << EOF
           ИНСТРУКЦИЯ ПО УСТАНОВКЕ:
-
-          Если при открытии появляется сообщение "Приложение повреждено":
-          
-          1. Откройте Системные настройки → Защита и безопасность → Основные
-          2. В разделе "Разрешить загрузки из:" выберите "App Store и идентифицированные разработчики"
-          3. Если приложение все равно не открывается, выполните в Терминале:
-             xattr -cr /Applications/MusicLotoMaker.app
 
           Чтобы установить приложение:
           1. Откройте MusicLotoMaker.dmg
