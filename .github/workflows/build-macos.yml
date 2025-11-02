@@ -29,9 +29,15 @@ jobs:
           rm -rf dist build dist_x86_64
           python -m venv venv_x86
           arch -x86_64 ./venv_x86/bin/pip install -r requirements.txt
-          arch -x86_64 ./venv_x86/bin/pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --clean app.py
+          arch -x86_64 ./venv_x86/bin/pyinstaller \
+            --noconfirm \
+            --windowed \
+            --name "MusicLotoMaker" \
+            --clean \
+            app.py
           mkdir -p dist_x86_64
           mv dist/MusicLotoMaker.app dist_x86_64/
+          echo "✅ x86_64 build done"
 
       - name: Build arm64 app
         run: |
@@ -39,16 +45,32 @@ jobs:
           rm -rf dist build dist_arm64
           python -m venv venv_arm
           arch -arm64 ./venv_arm/bin/pip install -r requirements.txt
-          arch -arm64 ./venv_arm/bin/pyinstaller --noconfirm --windowed --name "MusicLotoMaker" --clean app.py
+          arch -arm64 ./venv_arm/bin/pyinstaller \
+            --noconfirm \
+            --windowed \
+            --name "MusicLotoMaker" \
+            --clean \
+            app.py
           mkdir -p dist_arm64
           mv dist/MusicLotoMaker.app dist_arm64/
+          echo "✅ arm64 build done"
 
       - name: Create Universal2 app
         run: |
           echo "🚀 Creating Universal2 MusicLotoMaker.app..."
           rm -rf dist
+          
+          # Создаём структуру приложения
           mkdir -p dist/MusicLotoMaker.app/Contents/MacOS
           mkdir -p dist/MusicLotoMaker.app/Contents/Resources
+          
+          # Копируем Info.plist
+          cp dist_arm64/MusicLotoMaker.app/Contents/Info.plist dist/MusicLotoMaker.app/Contents/
+          
+          # Копируем Frameworks (если есть)
+          if [ -d "dist_arm64/MusicLotoMaker.app/Contents/Frameworks" ]; then
+            cp -R dist_arm64/MusicLotoMaker.app/Contents/Frameworks dist/MusicLotoMaker.app/Contents/
+          fi
           
           # Объединяем бинарники
           lipo -create \
@@ -56,38 +78,25 @@ jobs:
             dist_arm64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
             -output dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
           
-          # Копируем ресурсы и Info.plist
+          # Копируем ресурсы
           cp -R dist_arm64/MusicLotoMaker.app/Contents/Resources/* dist/MusicLotoMaker.app/Contents/Resources/
-          cp dist_arm64/MusicLotoMaker.app/Contents/Info.plist dist/MusicLotoMaker.app/Contents/
-          
-          # Копируем Frameworks если есть
-          if [ -d "dist_arm64/MusicLotoMaker.app/Contents/Frameworks" ]; then
-            cp -R dist_arm64/MusicLotoMaker.app/Contents/Frameworks dist/MusicLotoMaker.app/Contents/
-          fi
           
           chmod +x dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
-          
-          # Ad-hoc подпись
-          codesign --deep --force --verbose --sign - dist/MusicLotoMaker.app
           xattr -cr dist/MusicLotoMaker.app
-          
           echo "✅ Universal2 app ready"
 
       - name: Verify universal binary
         run: |
           echo "📊 Проверяем универсальный бинарник..."
           lipo -info dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
-          
-          echo "📦 Проверяем через spctl (Gatekeeper, может быть rejected на CI)..."
+          echo "📦 Проверяем через spctl (может быть rejected на CI, не критично)..."
           spctl --assess --verbose dist/MusicLotoMaker.app || true
-          
           echo "📦 Размер приложения:"
           du -sh dist/MusicLotoMaker.app
 
       - name: Prepare DMG settings
         run: |
           cat > dmg_settings.py << EOF
-          # DMG settings
           files = ['dist/MusicLotoMaker.app']
           format = 'UDBZ'
           symlinks = {'Applications': '/Applications'}
@@ -110,11 +119,17 @@ jobs:
           cat > DMG_README.txt << EOF
           ИНСТРУКЦИЯ ПО УСТАНОВКЕ:
 
+          Если при открытии появляется сообщение "Приложение повреждено":
+
+          1. Откройте Системные настройки → Защита и безопасность → Основные
+          2. В разделе "Разрешить загрузки из:" выберите "App Store и идентифицированные разработчики"
+          3. Если приложение всё равно не открывается, выполните в Терминале:
+             xattr -cr /Applications/MusicLotoMaker.app
+
           Чтобы установить приложение:
           1. Откройте MusicLotoMaker.dmg
           2. Перетащите MusicLotoMaker.app в папку "Программы"
           3. Запустите приложение из папки "Программы"
-
           EOF
 
       - name: Upload DMG artifact
