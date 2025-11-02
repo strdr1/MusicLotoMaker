@@ -1,4 +1,4 @@
-﻿name: Build macOS Universal2 DMG
+﻿name: Build macOS Universal2 DMG Fixed
 
 on:
   push:
@@ -55,43 +55,67 @@ jobs:
           mv dist/MusicLotoMaker.app dist_arm64/
           echo "✅ arm64 build done"
 
-      - name: Create Universal2 app
+      - name: Create Universal2 app PROPERLY
         run: |
-          echo "🚀 Creating Universal2 MusicLotoMaker.app..."
+          echo "🚀 Creating PROPER Universal2 MusicLotoMaker.app..."
           rm -rf dist
           
           # Создаём структуру приложения
           mkdir -p dist/MusicLotoMaker.app/Contents/MacOS
           mkdir -p dist/MusicLotoMaker.app/Contents/Resources
+          mkdir -p dist/MusicLotoMaker.app/Contents/Frameworks
           
-          # Копируем Info.plist
+          # Копируем Info.plist (из любой архитектуры)
           cp dist_arm64/MusicLotoMaker.app/Contents/Info.plist dist/MusicLotoMaker.app/Contents/
           
-          # Копируем Frameworks (если есть)
+          # Копируем ВСЕ Frameworks из arm64 как основу
           if [ -d "dist_arm64/MusicLotoMaker.app/Contents/Frameworks" ]; then
-            cp -R dist_arm64/MusicLotoMaker.app/Contents/Frameworks dist/MusicLotoMaker.app/Contents/
+            cp -R dist_arm64/MusicLotoMaker.app/Contents/Frameworks/* dist/MusicLotoMaker.app/Contents/Frameworks/
           fi
           
-          # Объединяем бинарники
+          # ОБЪЕДИНЯЕМ ВСЕ БИНАРНИКИ В ФРЕЙМВОРКАХ
+          echo "🔧 Merging binaries in Frameworks..."
+          find dist_x86_64/MusicLotoMaker.app/Contents/Frameworks -type f | while read file; do
+            if file "$file" | grep -q "Mach-O"; then
+              relative_path="${file#dist_x86_64/MusicLotoMaker.app/Contents/Frameworks/}"
+              arm_file="dist_arm64/MusicLotoMaker.app/Contents/Frameworks/$relative_path"
+              
+              if [ -f "$arm_file" ]; then
+                echo "Merging: $relative_path"
+                mkdir -p "$(dirname dist/MusicLotoMaker.app/Contents/Frameworks/$relative_path)"
+                lipo -create "$file" "$arm_file" -output "dist/MusicLotoMaker.app/Contents/Frameworks/$relative_path"
+              fi
+            fi
+          done
+          
+          # Объединяем главный бинарник
+          echo "🔧 Merging main executable..."
           lipo -create \
             dist_x86_64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
             dist_arm64/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker \
             -output dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
           
-          # Копируем ресурсы
+          # Копируем ресурсы (из любой архитектуры)
           cp -R dist_arm64/MusicLotoMaker.app/Contents/Resources/* dist/MusicLotoMaker.app/Contents/Resources/
           
+          # Права доступа
           chmod +x dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
+          find dist/MusicLotoMaker.app/Contents/Frameworks -name "*.so" -exec chmod +x {} \;
+          find dist/MusicLotoMaker.app/Contents/Frameworks -name "*.dylib" -exec chmod +x {} \;
+          
+          # Очистка атрибутов
           xattr -cr dist/MusicLotoMaker.app
           echo "✅ Universal2 app ready"
 
       - name: Verify universal binary
         run: |
-          echo "📊 Проверяем универсальный бинарник..."
+          echo "📊 Checking universal binary..."
           lipo -info dist/MusicLotoMaker.app/Contents/MacOS/MusicLotoMaker
-          echo "📦 Проверяем через spctl (может быть rejected на CI, не критично)..."
-          spctl --assess --verbose dist/MusicLotoMaker.app || true
-          echo "📦 Размер приложения:"
+          
+          echo "📊 Checking Python framework..."
+          lipo -info dist/MusicLotoMaker.app/Contents/Frameworks/Python.framework/Versions/3.11/Python
+          
+          echo "📦 App size:"
           du -sh dist/MusicLotoMaker.app
 
       - name: Prepare DMG settings
@@ -114,28 +138,8 @@ jobs:
           xattr -cr MusicLotoMaker.dmg
           echo "✅ DMG created"
 
-      - name: Create README with installation instructions
-        run: |
-          cat > DMG_README.txt << EOF
-          ИНСТРУКЦИЯ ПО УСТАНОВКЕ:
-
-          Если при открытии появляется сообщение "Приложение повреждено":
-
-          1. Откройте Системные настройки → Защита и безопасность → Основные
-          2. В разделе "Разрешить загрузки из:" выберите "App Store и идентифицированные разработчики"
-          3. Если приложение всё равно не открывается, выполните в Терминале:
-             xattr -cr /Applications/MusicLotoMaker.app
-
-          Чтобы установить приложение:
-          1. Откройте MusicLotoMaker.dmg
-          2. Перетащите MusicLotoMaker.app в папку "Программы"
-          3. Запустите приложение из папки "Программы"
-          EOF
-
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MusicLotoMaker-dmg
-          path: |
-            MusicLotoMaker.dmg
-            DMG_README.txt
+          name: MusicLotoMaker-Universal2-Fixed
+          path: MusicLotoMaker.dmg
