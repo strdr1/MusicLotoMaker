@@ -2108,3 +2108,25 @@ header {
         grid-template-columns: 1fr;
     }
 }
+.artist-photos-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 10px;
+}
+
+.artist-photo-card {
+    background: #1e293b;
+    color: #fff;
+    padding: 10px;
+    border-radius: 8px;
+    width: 160px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    text-align: center;
+}
+
+    .artist-photo-card img {
+        max-width: 100%;
+        border-radius: 6px;
+        margin-bottom: 8px;
+    }

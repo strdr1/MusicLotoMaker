@@ -6,6 +6,7 @@ import logging
 import zipfile
 from pathlib import Path
 import json
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,10 @@ async def generate_tickets_endpoint(payload: dict = Body(...)):
             logger.error("🎫 Ошибка: нет треков в медиатеке")
             raise HTTPException(status_code=400, detail="Нет треков в медиатеке")
 
+        if len(tracks) < 36:
+            logger.error(f"🎫 Ошибка: недостаточно треков. Нужно 36, доступно {len(tracks)}")
+            raise HTTPException(status_code=400, detail=f"Недостаточно треков. Нужно минимум 36, доступно: {len(tracks)}")
+
         # Логируем примеры треков
         logger.info("🎫 Примеры треков из медиатеки:")
         for i, track in enumerate(tracks[:3]):
@@ -78,43 +83,52 @@ async def generate_tickets_endpoint(payload: dict = Body(...)):
 
         # Генерируем билеты с поддержкой дизайна
         logger.info("🎫 Запускаем ticket_gen.generate_modern_tickets с дизайном...")
-        tickets_folder = ticket_gen.generate_modern_tickets(
+        
+        # ВАЖНО: метод generate_modern_tickets возвращает СЛОВАРЬ!
+        generation_result = ticket_gen.generate_modern_tickets(
             tracks=tracks, 
             count=count, 
             design=design
         )
         
-        logger.info(f"🎫 ✅ Билеты сгенерированы в папке: {tickets_folder}")
+        logger.info(f"🎫 ✅ Результат генерации: {json.dumps(generation_result, ensure_ascii=False, indent=2)}")
         
-        # Создаем ZIP архив со всеми билетами
-        zip_filename = f"tickets_{os.path.basename(tickets_folder)}.zip"
-        zip_path = os.path.join("output", zip_filename)
+        # Проверяем структуру ответа
+        if not isinstance(generation_result, dict):
+            logger.error(f"🎫 Ошибка: метод вернул не словарь, а {type(generation_result)}")
+            raise HTTPException(status_code=500, detail="Некорректный ответ от генератора билетов")
         
-        logger.info(f"🎫 Создаем ZIP архив: {zip_path}")
+        if not generation_result.get("success"):
+            error_msg = generation_result.get("message", "Неизвестная ошибка генерации")
+            logger.error(f"🎫 Ошибка генерации: {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
         
-        # Создаем ZIP архив
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(tickets_folder):
-                for file in files:
-                    if file.endswith('.pdf'):
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, tickets_folder)
-                        zipf.write(file_path, arcname)
-                        logger.debug(f"🎫 Добавлен в ZIP: {file}")
+        # Получаем данные из результата
+        zip_filename = generation_result.get("zip_file")
+        download_url = generation_result.get("download_url")
+        file_path = generation_result.get("file_path")
+        folder = generation_result.get("folder")
         
-        logger.info(f"🎫 ✅ Создан ZIP архив: {zip_path}")
+        # Проверяем, что ZIP файл существует
+        if file_path and os.path.exists(file_path):
+            logger.info(f"🎫 Используем готовый ZIP файл: {file_path}")
+            
+            result = {
+                "success": True, 
+                "message": f"Сгенерировано {count} билетов",
+                "folder": folder,
+                "zip_file": zip_filename,
+                "download_url": download_url,
+                "tickets_count": count,
+                "tracks_used": len(tracks)
+            }
+            
+            logger.info(f"🎫 Возвращаем результат: {json.dumps(result, ensure_ascii=False, indent=2)}")
+            return result
         
-        result = {
-            "success": True, 
-            "folder": tickets_folder,
-            "zip_file": f"/api/tickets/download/{zip_filename}",
-            "tickets_count": count,
-            "tracks_used": len(tracks),
-            "files": [f for f in os.listdir(tickets_folder) if f.endswith('.pdf')]
-        }
-        
-        logger.info(f"🎫 Возвращаем результат: {json.dumps(result, ensure_ascii=False, indent=2)}")
-        return result
+        else:
+            logger.error(f"🎫 Ошибка: ZIP файл не найден по пути: {file_path}")
+            raise HTTPException(status_code=500, detail="ZIP файл не создан")
 
     except HTTPException as he:
         logger.error(f"🎫 HTTPException: {he.detail}")
@@ -125,10 +139,11 @@ async def generate_tickets_endpoint(payload: dict = Body(...)):
 
 @router.get("/api/tickets/download/{filename}")
 async def download_ticket_file(filename: str):
-    """Скачивание билетов"""
+    """Скачивание билетов - альтернативный endpoint"""
     logger.info(f"📥 === ВЫЗВАН /api/tickets/download/{filename} ===")
     
-    if not filename.endswith('.pdf') or '..' in filename or '/' in filename:
+    # Разрешаем скачивание ZIP файлов
+    if not filename.endswith(('.pdf', '.zip')) or '..' in filename or '/' in filename:
         logger.error(f"📥 Неверное имя файла: {filename}")
         raise HTTPException(status_code=400, detail="Invalid filename")
     
@@ -143,11 +158,18 @@ async def download_ticket_file(filename: str):
     for path in possible_paths:
         if os.path.exists(path):
             logger.info(f"📥 Файл найден: {path}")
+            
+            # Определяем MIME тип
+            if filename.endswith('.zip'):
+                media_type = "application/zip"
+            else:
+                media_type = "application/pdf"
+                
             return FileResponse(
                 path, 
-                media_type="application/pdf", 
+                media_type=media_type,
                 filename=filename,
-                headers={"Content-Disposition": f"inline; filename={filename}"}
+                headers={"Content-Disposition": f"attachment; filename={filename}"}
             )
         else:
             logger.info(f"📥 Файл не найден по пути: {path}")
@@ -159,11 +181,21 @@ async def download_ticket_file(filename: str):
 async def tickets_status():
     """Статус билетов"""
     logger.info("📊 === ВЫЗВАН /api/tickets/status ===")
+    
+    tracks_count = 0
+    if media_library:
+        if hasattr(media_library, 'get_tracks'):
+            tracks = media_library.get_tracks()
+            tracks_count = len(tracks) if tracks else 0
+        elif hasattr(media_library, 'tracks'):
+            tracks_count = len(media_library.tracks)
+    
     status = {
         "status": "ready" if media_library and ticket_gen else "not_initialized",
         "media_library_available": media_library is not None,
         "ticket_generator_available": ticket_gen is not None,
-        "tracks_count": len(media_library.get_tracks()) if media_library and hasattr(media_library, 'get_tracks') else 0
+        "tracks_count": tracks_count,
+        "ready_for_generation": tracks_count >= 36
     }
     logger.info(f"📊 Статус: {status}")
     return status

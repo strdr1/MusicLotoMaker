@@ -1,13 +1,8 @@
 ﻿// static/js/tickets.js
 // Исправленная версия с автоматическим обновлением треков
 
-const API_BASE_URL = (typeof API_BASE !== 'undefined') ? API_BASE : 'http://127.0.0.1:8000';
-const TRACKS_ENDPOINTS = [
-    `${API_BASE_URL}/api/tracks`,
-    `${API_BASE_URL}/tracks`,
-    `/api/tracks`,
-    `/tracks`
-];
+const API_BASE_URL = '/api';
+const TRACKS_ENDPOINTS = ['/api/tracks'];
 
 const TICKETS_API = `/api/tickets/generate`;
 let allTracks = [];
@@ -397,7 +392,7 @@ function showNotification(message, type = 'info') {
     }, 4000);
 }
 
-/** Генерация билетов */
+/** Генерация билетов с автоматическим скачиванием */
 async function generateTickets() {
     const count = parseInt(document.getElementById('ticketsCount')?.value || '10', 10);
     if (isNaN(count) || count < 1 || count > 100) {
@@ -412,56 +407,134 @@ async function generateTickets() {
     const design = readTicketDesignFromUI();
     const btn = document.getElementById('generateTicketsBtn');
     const originalText = btn ? btn.textContent : '';
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Генерация...'; }
+
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Генерация...';
+    }
 
     try {
-        showNotification('🚀 Начинаем генерацию билетов...', 'info');
+        showNotification('🚀 Генерация билетов...', 'info');
 
-        const resp = await fetch(TICKETS_API, {
+        const payload = { count, design };
+        const resp = await fetch('/api/tickets/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ count, design })
+            body: JSON.stringify(payload)
         });
-
-        if (!resp.ok) {
-            let errorMessage = `HTTP ${resp.status}`;
-            try {
-                const errorData = await resp.json();
-                errorMessage = errorData.detail || errorMessage;
-            } catch (e) {
-                const text = await resp.text();
-                if (text) errorMessage = text;
-            }
-            throw new Error(errorMessage);
-        }
 
         const result = await resp.json();
 
-        if (result && (result.file || result.zip_file || result.folder)) {
-            console.log('[tickets] generation result:', result);
-            const folder = result.folder || ('output/' + (result.file || result.zip_file || ''));
-            showNotification(`✅ Сгенерировано ${count} билетов!\nПапка: ${folder}`, 'success');
+        if (resp.ok && result.success && result.download_url) {
+            showNotification(`✅ ${result.message}`, 'success');
 
-            const ticketsPathEl = document.getElementById('ticketsPath');
-            if (ticketsPathEl) {
-                ticketsPathEl.textContent = folder;
-                ticketsPathEl.style.display = 'block';
+            // --- НОВАЯ ЛОГИКА: Автоматическое скачивание ---
+            const fullUrl = result.download_url.startsWith('/')
+                ? `${window.location.origin}${result.download_url}`
+                : result.download_url;
+
+            // Создаем временную ссылку для скачивания
+            const link = document.createElement('a');
+            link.href = fullUrl;
+            link.download = result.zip_file; // Указываем имя файла
+
+            // Добавляем в DOM, кликаем и удаляем
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            console.log('✅ Автоматическое скачивание запущено:', result.zip_file);
+
+            // --- НОВАЯ ЛОГИКА: Показать блок загрузки с информацией ---
+            const downloadSection = document.getElementById('downloadSection');
+            if (downloadSection) {
+                // Заполняем информацию о скачивании
+                document.getElementById('downloadFileName').textContent = result.zip_file || '-';
+                // API не возвращает tickets_count и tracks_used, используем переданные значения
+                document.getElementById('downloadTicketsCount').textContent = result.tickets_count || count;
+                document.getElementById('downloadTracksUsed').textContent = result.tracks_used || '36'; // Или длина allTracks
+
+                // Показываем блок
+                downloadSection.style.display = 'block';
+
+                // Привязываем событие к кнопке скачивания на случай, если пользователь захочет снова скачать
+                const downloadBtn = document.getElementById('downloadTicketsBtn');
+                if (downloadBtn) {
+                    downloadBtn.onclick = function () {
+                        console.log('🎫 Повторное нажатие кнопки скачивания');
+                        // Повторяем логику скачивания
+                        const link = document.createElement('a');
+                        link.href = fullUrl;
+                        link.download = result.zip_file;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    };
+                }
             }
 
         } else {
-            throw new Error('Сервер вернул неожиданный ответ');
+            throw new Error(result.message || 'Ошибка генерации билетов');
         }
+
     } catch (err) {
-        console.error('[tickets] generate error', err);
-        let userMessage = err.message;
-        if (err.message.includes('404')) {
-            userMessage = 'Endpoint не найден. Проверьте подключение роутера билетов.';
-        } else if (err.message.includes('Failed to fetch')) {
-            userMessage = 'Не удалось подключиться к серверу.';
-        }
-        showNotification('❌ Ошибка: ' + userMessage, 'error');
+        console.error('❌ Ошибка генерации:', err);
+        showNotification(`❌ ${err.message}`, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = originalText; }
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
+}
+
+
+/** Простая функция скачивания (теперь используется только для повторного скачивания) */
+function downloadFile(downloadUrl, filename) {
+    console.log('🎫 downloadFile вызвана:', downloadUrl, filename);
+
+    try {
+        // Проверяем входные параметры
+        if (!downloadUrl || !filename) {
+            throw new Error('Не указан URL или имя файла для скачивания');
+        }
+
+        const fullUrl = downloadUrl.startsWith('/')
+            ? `${window.location.origin}${downloadUrl}`
+            : downloadUrl;
+        console.log('🎫 Полный URL для скачивания:', fullUrl);
+
+        // Создаем временную ссылку для скачивания
+        const link = document.createElement('a');
+        link.href = fullUrl;
+        link.download = filename;
+
+        // Добавляем в DOM, кликаем и удаляем
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        showNotification(`📦 Файл "${filename}" начал скачивание...`, 'success');
+
+        // Логируем успешное скачивание
+        console.log('🎫 ✅ Скачивание запущено:', {
+            url: fullUrl,
+            filename: filename,
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error('❌ Ошибка скачивания:', error);
+        showNotification(`❌ Ошибка при скачивании файла: ${error.message}`, 'error');
+
+        // Fallback: открываем в новом окне
+        try {
+            const fullUrl = `${API_BASE_URL}${downloadUrl}`;
+            window.open(fullUrl, '_blank');
+            showNotification('📦 Файл открывается в новом окне...', 'info');
+        } catch (fallbackError) {
+            console.error('❌ Fallback также не сработал:', fallbackError);
+        }
     }
 }
 

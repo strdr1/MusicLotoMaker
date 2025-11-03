@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Music Loto Maker</title>
     <link rel="stylesheet" href="static/css/style.css">
-    
+
 </head>
 <body>
     <div class="container">
@@ -17,6 +17,7 @@
                 <button class="tab-btn active" data-tab="media">📁 Медиатека</button>
                 <button class="tab-btn" data-tab="presentation">🎬 Презентация</button>
                 <button class="tab-btn" data-tab="tickets">🎫 Билеты</button>
+                <button class="tab-btn" data-tab="dropbox">☁️ Dropbox</button>
                 <button class="tab-btn" data-tab="status">📊 Статус</button>
             </nav>
         </header>
@@ -114,7 +115,31 @@ Another Artist - Another Song
 
             <div id="mediaStatus" class="status"></div>
         </div>
+        <!-- Вкладка dropbox -->
+        <div id="dropbox" class="tab-content">
+            <h2>☁️ Управление Dropbox</h2>
+            <!-- Заголовок -->
+            <h3>📂 Загруженные файлы</h3>
+            <div class="form-group">
+                <label>📤 Загрузить новый base.pptx:</label>
+                <input type="file" id="uploadBasePptx" accept=".pptx">
+                <button onclick="uploadBasePptx()">⬆️ Загрузить</button>
+            </div>
 
+            <div class="form-group">
+                <label>📸 Фото артистов:</label>
+                <input type="file" id="uploadArtistPhotos" accept="image/*" multiple>
+                <button onclick="uploadArtistPhotos()">⬆️ Загрузить фото артистов</button>
+            </div>
+
+            <button onclick="refreshArtistPhotos()">🔄 Обновить список фото</button>
+            <div id="artistPhotosList" class="artist-photos-grid">
+                <!-- Фото появятся здесь -->
+            </div>
+            <div id="basePptxBlock" class="base-pptx-card" style="margin-top: 20px;">
+                <!-- Информация о base.pptx появится здесь -->
+            </div>
+        </div>
         <!-- Вкладка Презентация -->
         <div id="presentation" class="tab-content">
             <div class="generator-card simple">
@@ -244,6 +269,10 @@ Another Artist - Another Song
 
                                 <div class="generate-section">
                                     <button id="generateTicketsBtn" class="btn btn-large btn-primary">🎫 Сгенерировать билеты</button>
+                                    <div id="ticketsDownloadSection" style="display: none; margin-top: 10px;">
+                                        <p>📁 Папка с билетами: <span id="ticketsFolderPath"></span></p>
+                                        <a id="ticketsDownloadLink" class="btn btn-success" download>📥 Скачать билеты</a>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -276,7 +305,34 @@ Another Artist - Another Song
                     </div>
                 </div>
 
+                <!-- ОТДЕЛЬНЫЙ БЛОК ДЛЯ СКАЧИВАНИЯ -->
+                <div id="downloadSection" style="display: none; margin-top: 30px; padding: 25px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 12px; border: 2px solid #059669; text-align: center; box-shadow: 0 8px 25px rgba(0,0,0,0.3);">
+                    <div style="color: white;">
+                        <h3 style="margin-bottom: 10px; font-size: 24px;">✅ Билеты успешно сгенерированы!</h3>
+                        <p style="margin-bottom: 20px; font-size: 16px; opacity: 0.9;">Ваши билеты готовы к скачиванию</p>
+
+                        <button id="downloadTicketsBtn" class="btn" style="padding: 16px 32px; font-size: 18px; font-weight: bold; background: white; color: #059669; border: none; border-radius: 10px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.2); transition: all 0.3s ease;">
+                            📥 СКАЧАТЬ АРХИВ С БИЛЕТАМИ
+                        </button>
+
+                        <div id="downloadInfo" style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
+                            <div style="display: flex; justify-content: center; gap: 30px; flex-wrap: wrap;">
+                                <div><strong>Файл:</strong> <span id="downloadFileName">-</span></div>
+                                <div><strong>Количество билетов:</strong> <span id="downloadTicketsCount">-</span></div>
+                                <div><strong>Использовано треков:</strong> <span id="downloadTracksUsed">-</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div id="ticketsStatus" class="status"></div>
+                <!-- ВРЕМЕННЫЙ БЛОК ДЛЯ СКАЧИВАНИЯ -->
+                <div id="tempDownloadSection" style="display:none; margin-top: 30px; padding: 25px; background: #f0fdf4; border: 2px solid #059669; border-radius: 12px;">
+                    <div id="tempDownloadInfo" style="margin-bottom: 15px; font-size: 16px; color: #065f46;"></div>
+                    <button id="tempDownloadBtn" class="btn btn-success" style="padding: 12px 24px; font-size: 16px;">
+                        📥 Скачать билеты
+                    </button>
+                </div>
             </div>
         </div>
 

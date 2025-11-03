@@ -1,28 +1,44 @@
-﻿# backend/server.py
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+﻿# === CORE FASTAPI ===
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+
+# === SYSTEM & PATHS ===
 import os
 import sys
 import shutil
 from pathlib import Path
-import logging
+from datetime import datetime
+import tempfile
 
-# === EXTENDED LOGGING CONFIGURATION ===
+# === LOGGING ===
 import logging
 from logging.handlers import TimedRotatingFileHandler
-from datetime import datetime
-from flask import Flask
-app = Flask(__name__)
-# Create logs directory (Windows path)
+
+# === UTILS & LIBS ===
+import json
+import glob
+import requests
+from PIL import Image
+import io
+import random
+import inspect
+import yt_dlp
+import asyncio
+import aiohttp
+from urllib.parse import quote
+import re
+from typing import List
+# === INTERNAL MODULES ===
+from backend.dropbox_storage import DropboxStorage
+dropbox_storage = DropboxStorage()
+
+# === LOGGING CONFIGURATION ===
 LOG_DIR = r"E:\1\MusicLotoMaker\MusicLotoMaker\logs"
 os.makedirs(LOG_DIR, exist_ok=True)
-
 log_filename = os.path.join(LOG_DIR, f"server_{datetime.now().strftime('%Y-%m-%d')}.log")
 
-
-# Configure root logger
 formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s", "%Y-%m-%d %H:%M:%S")
 
 file_handler = TimedRotatingFileHandler(log_filename, when="midnight", backupCount=7, encoding="utf-8")
@@ -37,28 +53,20 @@ root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
+
+logger = logging.getLogger(__name__)
 # === END LOGGING CONFIGURATION ===
 
-from datetime import datetime
-import json
-import glob
-import requests
-from PIL import Image
-import io
-import random  # ⬅️ для рандомных дубликатов
-import inspect  # ⬅️ чтобы аккуратно прокинуть design в генератор
-import yt_dlp
-import asyncio
-import aiohttp
-from urllib.parse import quote
-import re
-import tempfile
+# === FASTAPI APP INITIALIZATION ===
+app = FastAPI(title="Music Loto Maker", version="3.0.0")
 
-
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Можно указать конкретные домены
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # === ADDED: frontend logging endpoint ===
 from fastapi import Request
@@ -329,8 +337,9 @@ def _find_track_json_path() -> str | None:
 
 # Инициализация модулей
 media_library = MediaLibrary()
-base_pptx_path = os.path.join(BASE_DIR, "base.pptx")
-modern_presentation_gen = ModernPresentationGenerator(base_path=base_pptx_path)
+if not os.path.exists("base.pptx"):
+    dropbox_storage.download_base_pptx("base.pptx")
+modern_presentation_gen = ModernPresentationGenerator("base.pptx")
 ticket_gen = TicketGenerator()
 
 
@@ -1269,61 +1278,71 @@ def _safe_call_generator(func, *args, **kwargs):
 @app.post("/api/presentation/build")
 async def build_presentation(request_data: dict):
     """Генерация презентации по шаблону с заменой фото и аудио + упаковка в ZIP."""
-    from presentation import ModernPresentationGenerator
-
-    # 1. Получаем треки из медиатеки
-    tracks = media_library.get_tracks()
-    if not tracks:
-        raise HTTPException(status_code=400, detail="Нет треков для генерации презентации")
-
-    # 2. Формируем список из 120 треков
-    tracks_for_gen = _extend_to_120(tracks)
-
-    # 3. Подготовка директорий
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = os.path.join(BASE_DIR, "output")
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 4. Читаем данные о дизайне
-    design = request_data.get("design")
-    game_title = design.get("game_title", "Музыкальное Лото") if design else "Музыкальное Лото"
-
-    # 5. Сохраняем последний дизайн (если есть)
-    if design:
-        try:
-            os.makedirs(os.path.join(BASE_DIR, "config"), exist_ok=True)
-            with open(os.path.join(BASE_DIR, "config", "presentation_design_last.json"), "w", encoding="utf-8") as f:
-                json.dump(design, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось сохранить snapshot дизайна: {e}")
-
     try:
-        # 6. Инициализация нового генератора
-        generator = ModernPresentationGenerator(base_path=os.path.join(BASE_DIR, "base.pptx"))
+        # 1. Получаем треки из медиатеки
+        tracks = media_library.get_tracks()
+        if not tracks:
+            raise HTTPException(status_code=400, detail="Нет треков для генерации презентации")
 
-        # 7. Генерация PPTX и ZIP с нарезанными треками
-        make_bw = request_data.get("design", {}).get("make_bw", False)
-        zip_path = generator.generate(
-            game_title=game_title,
-            make_bw=make_bw,
-            tracks=tracks_for_gen,
-            output_dir=output_dir
-        )
+        # 2. Формируем список из 120 треков
+        tracks_for_gen = _extend_to_120(tracks)
 
-        logger.info(f"✅ Архив успешно создан: {zip_path}")
+        # 3. Подготовка директорий
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join(BASE_DIR, "output")
+        os.makedirs(output_dir, exist_ok=True)
 
-        # 8. Возврат клиенту
-        return {
-            "success": True,
-            "message": "Презентация и аудиотреки успешно сгенерированы",
-            "archive": os.path.basename(zip_path),
-            "archive_path": zip_path,
-            "tracks_count": len(tracks_for_gen),
-        }
+        # 4. Читаем данные о дизайне
+        design = request_data.get("design")
+        game_title = design.get("game_title", "Музыкальное Лото") if design else "Музыкальное Лото"
+
+        try:
+            # 6. Инициализация нового генератора
+            generator = ModernPresentationGenerator(base_path=os.path.join(BASE_DIR, "base.pptx"))
+
+            # 7. Генерация PPTX и ZIP с нарезанными треками
+            make_bw = request_data.get("design", {}).get("make_bw", False)
+            result_path = generator.generate(
+                game_title=game_title,
+                make_bw=make_bw,
+                tracks=tracks_for_gen,
+                output_dir=output_dir
+            )
+
+            # Ищем созданный файл
+            if result_path and os.path.isdir(result_path):
+                zip_files = list(Path(result_path).glob("*.zip"))
+                if zip_files:
+                    result_path = str(zip_files[0])
+                else:
+                    pptx_files = list(Path(result_path).glob("*.pptx"))
+                    if pptx_files:
+                        result_path = str(pptx_files[0])
+
+            if not result_path or not os.path.exists(result_path):
+                raise HTTPException(status_code=500, detail="Файл не создан")
+
+            filename = os.path.basename(result_path)
+            
+            logger.info(f"✅ Архив успешно создан: {result_path}")
+
+            # 8. Возврат клиенту
+            return {
+                "success": True,
+                "message": "Презентация и аудиотреки успешно сгенерированы",
+                "archive": filename,
+                "archive_path": result_path,
+                "download_url": f"/api/download/{filename}",
+                "tracks_count": len(tracks_for_gen),
+            }
+
+        except Exception as e:
+            logger.exception("❌ Ошибка генерации презентации")
+            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
     except Exception as e:
-        logger.exception("❌ Ошибка генерации презентации")
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+        logger.exception("❌ Ошибка в build_presentation")
+        raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
 
 @app.get("/api/templates")
 async def get_available_templates():
@@ -1908,25 +1927,44 @@ async def generate_presentation(request_data: dict):
         if not os.path.exists(base_path):
             raise HTTPException(status_code=500, detail="Файл base.pptx не найден")
 
-        generator = ModernPresentationGenerator(base_path=base_path)
+        generator = ModernPresentationGenerator(base_path)
 
         make_bw = request_data.get("design", {}).get("make_bw", False)
-        zip_path = generator.generate(
+        
+        # ВАЖНО: получаем путь к ZIP архиву, а не к папке
+        result_path = generator.generate(
             game_title=game_title,
-            tracks=tracks,  # может быть None — генератор подхватит JSON
+            tracks=tracks,
             make_bw=make_bw
         )
 
-        if not zip_path or not os.path.exists(zip_path):
+        # Проверяем, что result_path - это путь к ZIP файлу
+        if result_path and os.path.isdir(result_path):
+            # Ищем ZIP файл в папке
+            zip_files = list(Path(result_path).glob("*.zip"))
+            if zip_files:
+                result_path = str(zip_files[0])
+            else:
+                # Если ZIP не найден, ищем PPTX
+                pptx_files = list(Path(result_path).glob("*.pptx"))
+                if pptx_files:
+                    result_path = str(pptx_files[0])
+                else:
+                    raise HTTPException(status_code=500, detail="Файл презентации не создан")
+
+        if not result_path or not os.path.exists(result_path):
             raise HTTPException(status_code=500, detail="Ошибка генерации: файл не создан")
 
-        logger.info(f"✅ Презентация успешно создана: {zip_path}")
+        # Определяем имя файла для скачивания
+        filename = os.path.basename(result_path)
+        
+        logger.info(f"✅ Презентация успешно создана: {result_path}")
         return {
             "success": True,
             "message": f"Презентация '{game_title}' создана успешно",
-            "archive": os.path.basename(zip_path),
-            "archive_path": zip_path,
-            "download_url": f"/api/download/{os.path.basename(zip_path)}"
+            "archive": filename,
+            "archive_path": result_path,
+            "download_url": f"/api/download/{filename}"
         }
 
     except HTTPException:
@@ -1935,7 +1973,20 @@ async def generate_presentation(request_data: dict):
         logger.exception(f"❌ Ошибка генерации презентации: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
 
+from fastapi.responses import FileResponse
+from fastapi import HTTPException
 
+@app.get("/download/{filename}")
+def download_file(filename: str):
+    file_path = Path("output") / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Файл не найден")
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=filename
+    )
 @app.post("/api/generate/tickets")
 async def generate_tickets_legacy(count: int = 24):
     try:
@@ -1950,28 +2001,107 @@ async def generate_tickets_legacy(count: int = 24):
 
 @app.get("/api/download/{filename}")
 async def download_file(filename: str):
+    """
+    Скачивание файлов из различных директорий проекта
+    """
     try:
+        logger.info(f"📥 Запрос на скачивание файла: {filename}")
+        
+        # Безопасная проверка имени файла
+        if not filename or '..' in filename or filename.startswith('/'):
+            logger.warning(f"🚫 Некорректное имя файла: {filename}")
+            raise HTTPException(status_code=400, detail="Некорректное имя файла")
+        
+        # Убираем параметры запроса если есть
+        filename = filename.split('?')[0]
+        
+        # Список возможных путей для поиска файла
         possible_paths = [
+            os.path.join(BASE_DIR, "output", filename),
             os.path.join(BASE_DIR, "assets", "custom_buttons", filename),
             os.path.join(BASE_DIR, "assets", "backgrounds", filename),
-            os.path.join(BASE_DIR, "assets", filename),
-            os.path.join(BASE_DIR, "output", filename),
-            os.path.join(BASE_DIR, "temp", filename),
-            os.path.join(BASE_DIR, "uploads", filename),
-            os.path.join(BASE_DIR, "images", filename),
             os.path.join(BASE_DIR, "downloads", filename),
-            os.path.join(BASE_DIR, filename),
+            os.path.join(BASE_DIR, "uploads", filename),
+            os.path.join(BASE_DIR, "temp", filename),
+            os.path.join(BASE_DIR, "images", filename),
+            os.path.join(BASE_DIR, filename),  # Прямо в корневой директории
         ]
+        
+        # Добавляем поиск в подпапках output
+        output_dir = os.path.join(BASE_DIR, "output")
+        if os.path.exists(output_dir):
+            for root, dirs, files in os.walk(output_dir):
+                for file in files:
+                    if file == filename:
+                        possible_paths.append(os.path.join(root, file))
+        
+        logger.info(f"🔍 Ищем файл по путям: {[p for p in possible_paths if 'output' in p]}")
+        
         file_path = None
         for path in possible_paths:
-            if os.path.exists(path):
+            if os.path.exists(path) and os.path.isfile(path):
                 file_path = path
+                logger.info(f"✅ Файл найден: {file_path}")
                 break
-        if file_path and os.path.exists(file_path):
-            return FileResponse(file_path, filename=filename, media_type='application/octet-stream')
-        raise HTTPException(status_code=404, detail="Файл не найден")
+        
+        if not file_path:
+            # Попробуем найти файл без учета регистра
+            output_dir = os.path.join(BASE_DIR, "output")
+            if os.path.exists(output_dir):
+                for root, dirs, files in os.walk(output_dir):
+                    for file in files:
+                        if file.lower() == filename.lower():
+                            file_path = os.path.join(root, file)
+                            logger.info(f"✅ Файл найден (без учета регистра): {file_path}")
+                            break
+                    if file_path:
+                        break
+        
+        if not file_path:
+            logger.warning(f"❌ Файл не найден: {filename}")
+            logger.warning(f"📁 Содержимое output директории: {os.listdir(os.path.join(BASE_DIR, 'output')) if os.path.exists(os.path.join(BASE_DIR, 'output')) else 'Директория не существует'}")
+            raise HTTPException(status_code=404, detail=f"Файл '{filename}' не найден")
+
+        # Проверяем размер файла
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            logger.warning(f"⚠️ Файл пустой: {file_path}")
+            raise HTTPException(status_code=500, detail="Файл пустой")
+
+        # Определяем MIME тип
+        file_ext = os.path.splitext(filename)[1].lower()
+        mime_types = {
+            '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            '.zip': 'application/zip',
+            '.mp3': 'audio/mpeg',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.json': 'application/json',
+            '.txt': 'text/plain'
+        }
+        
+        media_type = mime_types.get(file_ext, 'application/octet-stream')
+        
+        logger.info(f"📤 Отправляем файл: {filename} ({file_size} bytes, {media_type})")
+        
+        return FileResponse(
+            file_path, 
+            filename=filename, 
+            media_type=media_type,
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Length': str(file_size)
+            }
+        )
+        
+    except HTTPException:
+        # Пробрасываем HTTP исключения как есть
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка загрузки: {str(e)}")
+        logger.error(f"❌ Критическая ошибка при загрузке файла {filename}: {e}")
+        logger.exception("Полная трассировка ошибки:")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 @app.get("/api/status")
 async def get_status():
@@ -2097,6 +2227,58 @@ async def get_track_segment_file(track_id: int, start_time: float = 0, duration:
     except Exception as e:
         logger.error(f"❌ Ошибка создания предпросмотра отрезка: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/dropbox/upload-base-pptx")
+async def upload_base_pptx(file: UploadFile = File(...)):
+    temp_path = f"temp/{file.filename}"
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+    result = dropbox_storage.upload_base_pptx(temp_path)
+    return {"success": bool(result), "info": result}
+
+@app.post("/api/dropbox/upload-artist-photo")
+async def upload_artist_photo(file: UploadFile = File(...), artist: str = Form(...)):
+    temp_path = f"temp/{file.filename}"
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+    result = dropbox_storage.upload_artist_photo(temp_path, artist)
+    return {"success": bool(result), "info": result}
+
+@app.post("/api/dropbox/upload-artist-photos")
+async def upload_artist_photos(files: List[UploadFile] = File(...)):
+    uploaded = []
+    for file in files:
+        artist_name = Path(file.filename).stem
+        suffix = Path(file.filename).suffix
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+        result = dropbox_storage.upload_artist_photo(tmp_path, artist_name)
+        if result:
+            uploaded.append(result)
+        Path(tmp_path).unlink(missing_ok=True)
+    return {"uploaded": uploaded}
+
+@app.get("/api/dropbox/list-artist-photos")
+def list_artist_photos():
+    return {"photos": dropbox_storage.list_artist_photos()}
+
+@app.delete("/api/dropbox/delete-artist-photo")
+async def delete_artist_photo(dropbox_path: str = Form(...)):
+    success = dropbox_storage.delete_artist_photo(dropbox_path)
+    return {"success": success}
+
+@app.get("/api/dropbox/list-base-pptx")
+def list_base_pptx():
+    local_path = "temp_base.pptx"
+    success = dropbox_storage.download_base_pptx(local_path)
+    if success:
+        result = dropbox_storage.upload_base_pptx(local_path)
+        Path(local_path).unlink(missing_ok=True)
+        if result and "download_url" in result:
+            return {"success": True, "download_url": result["download_url"]}
+    return {"success": False}
 
 # -------- Health --------
 

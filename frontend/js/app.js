@@ -1,5 +1,6 @@
 ﻿// frontend/js/app.js
-const API_BASE = 'http://127.0.0.1:8000/api';
+const API_BASE = '/api';
+
 
 // Глобальные переменные
 let currentTracks = [];
@@ -65,6 +66,8 @@ document.addEventListener('DOMContentLoaded', function () {
     setupEventListeners();
     addTimingsButton();
     addDebugButton(); // Добавляем кнопку дебага
+    refreshArtistPhotos();
+    refreshBasePptx();
 
     // авто-обновление счётчика каждые 10 сек
     setInterval(updateTracksCount, 10000);
@@ -2605,6 +2608,93 @@ async function initPresentationDesigner() {
 
     Designer.loaded = true;
 }
+//DropBox
+async function uploadBasePptx() {
+    const input = document.getElementById('uploadBasePptx');
+    if (!input || !input.files.length) return alert('Выберите файл base.pptx');
+
+    const formData = new FormData();
+    formData.append('file', input.files[0]);
+
+    const res = await fetch('/api/dropbox/upload-base-pptx', {
+        method: 'POST',
+        body: formData
+    });
+
+    const data = await res.json();
+    if (data.success) {
+        alert('✅ base.pptx загружен!');
+    } else {
+        alert('❌ Ошибка загрузки base.pptx');
+    }
+}
+
+async function uploadArtistPhotos() {
+    const input = document.getElementById('uploadArtistPhotos');
+    if (!input || !input.files.length) return alert('Выберите фото артистов');
+
+    const formData = new FormData();
+    for (const file of input.files) {
+        formData.append('files', file);
+    }
+
+    const res = await fetch('/api/dropbox/upload-artist-photos', {
+        method: 'POST',
+        body: formData
+    });
+
+    const data = await res.json();
+    if (data.uploaded?.length) {
+        showNotification(`✅ Загружено ${data.uploaded.length} фото`, 'success');
+        refreshArtistPhotos(); // ← обновляем список
+    
+    } else {
+        alert('❌ Ошибка загрузки фото');
+    }
+}
+
+async function refreshArtistPhotos() {
+    const res = await fetch('/api/dropbox/list-artist-photos');
+    const data = await res.json();
+    const container = document.getElementById('artistPhotosList');
+    container.innerHTML = '';
+
+    if (!data.length) {
+        container.innerHTML = '<p>Нет загруженных фото</p>';
+        return;
+    }
+
+    for (const photo of data) {
+        const card = document.createElement('div');
+        card.className = 'artist-photo-card';
+        card.innerHTML = `
+            <img src="${photo.download_url}" alt="${photo.artist_name}">
+            <div class="filename">${photo.artist_name}</div>
+            <a href="${photo.download_url}" target="_blank" class="download-link">📥 Скачать</a>
+        `;
+        container.appendChild(card);
+    }
+}
+
+async function refreshBasePptx() {
+    const res = await fetch('/api/dropbox/list-base-pptx');
+    const data = await res.json();
+    const block = document.getElementById('basePptxBlock');
+    block.innerHTML = '';
+
+    if (!data.success || !data.download_url) {
+        block.innerHTML = '<p>Файл base.pptx не найден</p>';
+        return;
+    }
+
+    block.innerHTML = `
+        <h4>📄 base.pptx</h4>
+        <p>Файл презентации доступен для скачивания:</p>
+        <a href="${data.download_url}" target="_blank">📥 Скачать base.pptx</a>
+    `;
+}
+
+
 
 // 🔧 Защита от отсутствия функции getBackgroundConfig
 if (typeof getBackgroundConfig === "undefined") {

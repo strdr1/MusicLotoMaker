@@ -1,5 +1,4 @@
-﻿# backend/tickets.py
-from reportlab.pdfgen import canvas
+﻿from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.colors import HexColor, white, black
 from reportlab.lib.units import mm
@@ -10,6 +9,9 @@ import os
 import logging
 from datetime import datetime
 from PyPDF2 import PdfMerger
+import zipfile
+import shutil
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,7 @@ class TicketGenerator:
         return result
 
     def generate_modern_tickets(self, tracks, count=10, design=None):
+        """Генерирует билеты и возвращает путь к ZIP архиву для скачивания"""
         if not tracks:
             raise ValueError("Нет треков для генерации билетов")
 
@@ -118,6 +121,7 @@ class TicketGenerator:
         ticket_sets = self._generate_random_ticket_sets(tracks, count, 36)
         generated_files = []
 
+        # Генерируем отдельные PDF файлы
         for i in range(count):
             filename = f"ticket_{i+1:03d}.pdf"
             path = os.path.join(folder, filename)
@@ -130,8 +134,25 @@ class TicketGenerator:
             )
             generated_files.append(path)
 
-        self._merge_in_groups(folder, generated_files)
-        return folder
+        # Создаем объединенный PDF
+        merged_pdf_path = os.path.join(folder, "all_tickets.pdf")
+        self._merge_pdfs(generated_files, merged_pdf_path)
+
+        # Создаем ZIP архив со всеми файлами
+        zip_filename = f"tickets_{timestamp}.zip"
+        zip_path = os.path.join(self.output_dir, zip_filename)
+        self._create_zip_archive(folder, zip_path)
+
+        logger.info(f"✅ Билеты сгенерированы: {zip_path}")
+        
+        return {
+            "success": True,
+            "message": f"Сгенерировано {count} билетов",
+            "zip_file": zip_filename,
+            "folder": f"tickets_{timestamp}",
+            "download_url": f"/api/tickets/download/{zip_filename}",
+            "file_path": zip_path
+        }
 
     def _generate_single_ticket(self, path, num, tracks, t_font, a_font,
                                t_size, a_size, text_color, accent_color,
@@ -253,23 +274,30 @@ class TicketGenerator:
             result.append(s)
         return result
 
-    def _merge_in_groups(self, folder, files):
-        if not files:
-            return
-        files = sorted(files, key=lambda f: os.path.basename(f))
-        group_size = 50
-        groups = []
-        for i in range(0, len(files), group_size):
-            g = files[i:i + group_size]
-            m = PdfMerger()
-            for f in g:
-                m.append(f)
-            name = os.path.join(folder, f"all_tickets_{i+1}_{i+len(g)}.pdf")
-            m.write(name)
-            m.close()
-            groups.append(name)
-        m_all = PdfMerger()
-        for g in groups:
-            m_all.append(g)
-        m_all.write(os.path.join(folder, "all_tickets.pdf"))
-        m_all.close()
+    def _merge_pdfs(self, input_files, output_file):
+        """Объединяет PDF файлы в один"""
+        try:
+            merger = PdfMerger()
+            for pdf_file in input_files:
+                merger.append(pdf_file)
+            merger.write(output_file)
+            merger.close()
+            logger.info(f"✅ PDF файлы объединены: {output_file}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка объединения PDF: {e}")
+
+    def _create_zip_archive(self, folder_path, zip_path):
+        """Создает ZIP архив с билетами"""
+        try:
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(folder_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, folder_path)
+                        zipf.write(file_path, arcname)
+            
+            logger.info(f"✅ ZIP архив создан: {zip_path}")
+            return zip_path
+        except Exception as e:
+            logger.error(f"❌ Ошибка создания ZIP архива: {e}")
+            raise

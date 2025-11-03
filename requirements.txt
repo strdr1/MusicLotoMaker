@@ -30,8 +30,6 @@ yt-dlp>=2023.11.0
 python-dotenv>=1.0.0
 python-dateutil>=2.8.0
 
-# GUI
-pywebview>=4.2.0
 
 # XML processing
 lxml>=4.9.0
@@ -39,4 +37,7 @@ lxml>=4.9.0
 # Data classes
 dataclasses-json>=0.6.0
 
-pyinstaller
+aiofiles
+google-api-python-client
+google-auth
+google-auth-oauthlib

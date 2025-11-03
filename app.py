@@ -1,5 +1,4 @@
 ﻿# app.py - главный файл запуска
-import webview
 import threading
 import time
 import os
@@ -44,32 +43,5 @@ def check_server_ready():
     return False
 
 if __name__ == '__main__':
-    print("🎵 Запуск Music Loto Maker...")
-    
-    # Создаем необходимые папки
-    os.makedirs("temp", exist_ok=True)
-    os.makedirs("output", exist_ok=True)
-    print("📁 Папки созданы")
-    
-    # Запускаем сервер в отдельном потоке
-    server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
-    print("🚀 Сервер запускается...")
-    
-    # Ждем готовности сервера
-    if check_server_ready():
-        # Создаем и запускаем окно
-        window = webview.create_window(
-            "Music Loto Maker 🎵",
-            "http://127.0.0.1:8000",
-            width=1300,
-            height=850,
-            min_size=(1000, 600),
-            text_select=True
-        )
-        
-        print("🖥️ Запуск оконного приложения...")
-        webview.start()
-    else:
-        print("❌ Не удалось запустить приложение")
-        input("Нажмите Enter для выхода...")
+    import uvicorn
+    uvicorn.run("backend.server:app", host="0.0.0.0", port=8000)
