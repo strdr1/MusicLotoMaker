@@ -1770,102 +1770,17 @@ async def upload_background(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Ошибка загрузки фона: {str(e)}")
 
 # -------- Photo processing helpers --------
-
-async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
+proxy = "https://84.52.125.113:8082"
+async def download_tracks_batch(tracks: list, max_size_mb: int = 40, proxy: str | None = None) -> list:
     """
     Скачивание треков с YouTube по порядку с ограничением размера,
     анализом сегмента и поиском фото. ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ.
+    proxy: str = "http://login:password@45.136.21.33:8080"
     """
     import asyncio, os, shutil, tempfile
     from pathlib import Path
     import yt_dlp
     from concurrent.futures import ThreadPoolExecutor
-    from googleapiclient.discovery import build
-    from googleapiclient.errors import HttpError
-
-    # Инициализация YouTube API
-    YOUTUBE_API_KEY = "AIzaSyCkEIq_9-WvdogDTFddwqrGYHFFzVUwVOY"
-    youtube_api = None
-    
-    try:
-        youtube_api = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
-        logger.info("✅ YouTube API успешно инициализирован")
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации YouTube API: {e}")
-        youtube_api = None
-
-    def parse_youtube_duration(duration: str) -> int:
-        """Парсит длительность видео YouTube в секунды"""
-        import re
-        match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
-        if not match:
-            return 0
-        
-        hours = int(match.group(1)) if match.group(1) else 0
-        minutes = int(match.group(2)) if match.group(2) else 0
-        seconds = int(match.group(3)) if match.group(3) else 0
-        
-        return hours * 3600 + minutes * 60 + seconds
-
-    async def search_with_youtube_api(query: str) -> dict:
-        """Поиск видео через YouTube API"""
-        if not youtube_api:
-            return None
-        
-        try:
-            # Поиск видео
-            search_response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: youtube_api.search().list(
-                    q=query,
-                    part="id,snippet",
-                    maxResults=3,
-                    type="video",
-                    videoDuration="medium",
-                    videoCategoryId="10",  # Музыка
-                    relevanceLanguage="ru",
-                    regionCode="RU"
-                ).execute()
-            )
-            
-            if not search_response.get('items'):
-                return None
-            
-            # Получаем детальную информацию о видео
-            video_ids = [item['id']['videoId'] for item in search_response['items']]
-            
-            videos_response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: youtube_api.videos().list(
-                    part="contentDetails,statistics",
-                    id=','.join(video_ids)
-                ).execute()
-            )
-            
-            # Ищем подходящее видео
-            for search_item in search_response['items']:
-                video_id = search_item['id']['videoId']
-                for video_item in videos_response.get('items', []):
-                    if video_item['id'] == video_id:
-                        duration_str = video_item['contentDetails']['duration']
-                        duration = parse_youtube_duration(duration_str)
-                        
-                        # Пропускаем слишком длинные видео
-                        if duration > 600:  # 10 минут максимум
-                            continue
-                        
-                        return {
-                            'video_id': video_id,
-                            'title': search_item['snippet']['title'],
-                            'url': f'https://www.youtube.com/watch?v={video_id}',
-                            'duration': duration
-                        }
-            
-            return None
-            
-        except Exception as e:
-            logger.warning(f"⚠️ YouTube API ошибка: {e}")
-            return None
 
     MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
     total = len(tracks)
@@ -1884,11 +1799,6 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             query = f"{track_info.get('artist', '')} {track_info.get('title', '')}".strip() or track_info.get("original_line", "")
             logger.info(f"🔍 [{i+1}/{total}] {query}")
 
-            # Сначала пробуем найти через YouTube API
-            video_info = None
-            if youtube_api:
-                video_info = await search_with_youtube_api(query)
-            
             ydl_opts = {
                 "format": "bestaudio[ext=m4a]/bestaudio/best",
                 "outtmpl": os.path.join(temp_dir, f"{i:03d}_%(id)s.%(ext)s"),
@@ -1905,26 +1815,24 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                 "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
             }
 
+            # 🔹 Здесь вставляем прокси
+            if proxy:
+                ydl_opts["proxy"] = proxy
+
             def _download():
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        # Если нашли через API, используем прямой URL
-                        if video_info:
-                            logger.info(f"🎯 Скачивание через API: {video_info['title']}")
-                            ydl.download([video_info['url']])
-                        else:
-                            # Иначе используем обычный поиск
-                            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-                            if not info or "entries" not in info or not info["entries"]:
-                                return None
+                        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+                        if not info or "entries" not in info or not info["entries"]:
+                            return None
+                        
+                        entry = info["entries"][0]
+                        duration = entry.get('duration', 0)
+                        if duration > 1800:
+                            logger.warning(f"⚠️ Слишком длинное видео: {duration} сек")
+                            return None
                             
-                            entry = info["entries"][0]
-                            duration = entry.get('duration', 0)
-                            if duration > 1800:
-                                logger.warning(f"⚠️ Слишком длинное видео: {duration} сек")
-                                return None
-                                
-                            ydl.download([f"ytsearch1:{query}"])
+                        ydl.download([f"ytsearch1:{query}"])
                         
                         import glob
                         pattern = os.path.join(temp_dir, f"{i:03d}_*.*")
@@ -1934,14 +1842,12 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                     logger.error(f"Ошибка загрузки {query}: {e}")
                     return None
 
-            # Скачиваем трек
             loop = asyncio.get_event_loop()
             downloaded_file = await loop.run_in_executor(None, _download)
             
             if not downloaded_file:
                 return {"success": False, "error": f"Не удалось скачать: {query}"}
 
-            # Проверка размера
             file_size = os.path.getsize(downloaded_file)
             if file_size > MAX_SIZE_BYTES:
                 logger.warning(f"⚠️ {query} слишком большой ({file_size//1024//1024} МБ), пропуск")
@@ -1951,98 +1857,55 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                     pass
                 return {"success": False, "error": f"Файл слишком большой: {query}"}
 
-            # Создаем безопасное имя
             safe_artist = track_info.get("artist", "Unknown").replace('/', '-').replace('\\', '-')[:50]
             safe_title = track_info.get("title", "Unknown").replace('/', '-').replace('\\', '-')[:50]
             final_filename = f"{safe_artist} - {safe_title}.mp3"
             final_path = os.path.join(downloads_dir, final_filename)
             
-            # Перемещение файла
             await loop.run_in_executor(None, shutil.move, downloaded_file, final_path)
 
-            # Добавляем в медиатеку
             track = media_library.add_track(final_path, final_filename)
             if not track:
                 return {"success": False, "error": f"Ошибка добавления {final_filename}"}
 
-            # ПАРАЛЛЕЛЬНО выполняем все остальные задачи
-            tasks = []
-            
-            # Задача 1: Обновление метаданных
-            tasks.append(
-                loop.run_in_executor(
-                    None,
-                    lambda: media_library.update_track(track["id"], {
-                        "artist": safe_artist,
-                        "title": safe_title,
-                        "metadata": {"source": "internet_download", "query": query}
-                    })
-                )
-            )
-            
-            # Задача 2: Анализ сегмента
-            tasks.append(
-                loop.run_in_executor(
-                    None,
-                    lambda: audio_editor.suggest_best_segment(final_path)
-                )
-            )
-            
-            # Задача 3: Поиск фото
-            tasks.append(
-                loop.run_in_executor(
-                    None,
-                    lambda: image_searcher.fetch_artist_png(safe_artist, track["id"])
-                )
-            )
-            
-            # Ждем завершения ВСЕХ параллельных задач
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            # Обрабатываем результаты
-            metadata_result, segment_result, image_result = results
-            
-            # Применяем анализ сегмента
+            # Параллельные задачи
+            tasks = [
+                loop.run_in_executor(None, lambda: media_library.update_track(track["id"], {
+                    "artist": safe_artist,
+                    "title": safe_title,
+                    "metadata": {"source": "internet_download", "query": query}
+                })),
+                loop.run_in_executor(None, lambda: audio_editor.suggest_best_segment(final_path)),
+                loop.run_in_executor(None, lambda: image_searcher.fetch_artist_png(safe_artist, track["id"]))
+            ]
+
+            metadata_result, segment_result, image_result = await asyncio.gather(*tasks, return_exceptions=True)
+
             if not isinstance(segment_result, Exception) and segment_result is not None:
                 media_library.update_track_segment(track["id"], segment_result, 30)
             
-            # Применяем фото
             if not isinstance(image_result, Exception) and image_result:
                 media_library.update_track(track["id"], {"image_path": image_result})
                 logger.info(f"✅ Фото для {safe_artist} добавлено")
 
-            return {
-                "success": True, 
-                "file_path": final_path, 
-                "track_id": track["id"], 
-                "artist": safe_artist
-            }
+            return {"success": True, "file_path": final_path, "track_id": track["id"], "artist": safe_artist}
 
         except Exception as e:
             logger.error(f"❌ Ошибка {track_info.get('original_line', '')}: {e}")
             return {"success": False, "error": str(e)}
 
-    # ОСНОВНОЕ ИЗМЕНЕНИЕ: Параллельная обработка треков
-    semaphore = asyncio.Semaphore(3)  # Максимум 3 параллельных скачивания
+    semaphore = asyncio.Semaphore(3)
     
     async def limited_download(i, track_info):
         async with semaphore:
             return await process_single_track(i, track_info)
     
-    # Запускаем ВСЕ задачи параллельно
-    tasks = []
-    for i, track_info in enumerate(tracks):
-        task = asyncio.create_task(limited_download(i, track_info))
-        tasks.append(task)
-    
-    # Ждем завершения всех задач
+    tasks = [asyncio.create_task(limited_download(i, track_info)) for i, track_info in enumerate(tracks)]
     results = await asyncio.gather(*tasks)
     
-    # Логируем прогресс
     successful = len([r for r in results if r.get('success')])
     logger.info(f"🎉 Параллельное скачивание завершено: {successful}/{total} успешно")
     
-    # Очистка временных файлов
     try:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, shutil.rmtree, temp_dir, True)
@@ -2050,6 +1913,7 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
         logger.warning(f"⚠️ Ошибка очистки временных файлов: {e}")
     
     return results
+
 
 
 
