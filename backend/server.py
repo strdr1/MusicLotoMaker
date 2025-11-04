@@ -557,53 +557,52 @@ def parse_track_line(line: str) -> tuple:
 
 
 async def search_youtube_music(query: str, track_info: dict) -> dict:
-    """Асинхронная функция поиска и скачивания трека с YouTube и альтернативных источников в формате MP3 (≤ 40 МБ)."""
+    """Асинхронная функция поиска и скачивания трека с альтернативных источников в формате MP3 (≤ 40 МБ)."""
     try:
-        def _yt_search_and_download(q, track_info_local):
+        def _search_and_download(q, track_info_local):
             try:
                 MAX_FILE_SIZE_MB = 40
                 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-                temp_dir = os.path.join(tempfile.gettempdir(), 'youtube_dl')
+                temp_dir = os.path.join(tempfile.gettempdir(), 'music_download')
                 os.makedirs(temp_dir, exist_ok=True)
 
-                # Путь к файлу cookies
-                cookies_path = os.path.join(BASE_DIR, "config", "youtube_cookies.txt")
-                cookies_exist = os.path.exists(cookies_path)
-                logger.info(f"🍪 Cookies файл {'найден' if cookies_exist else 'НЕ НАЙДЕН'}: {cookies_path}")
-
-                # Конфигурация альтернативных источников
+                # Конфигурация источников (приоритет для русских сервисов)
                 SOURCES_CONFIG = [
-                    {
-                        'name': 'youtube',
-                        'search_template': 'ytsearch:{query}',
-                        'player_clients': ['android', 'web'],
-                        'fallback_clients': ['mweb'],
-                        'query_modifiers': [' official audio', ' audio']
-                    },
                     {
                         'name': 'yandex_music', 
                         'search_template': 'ymsearch:{query}',
                         'player_clients': ['web'],
-                        'query_modifiers': [' официальный аудио', '']
+                        'query_modifiers': ['', ' официальный аудио', ' трек'],
+                        'cookies_supported': False
                     },
                     {
                         'name': 'vk_video',
                         'search_template': 'vksearch:{query}',
                         'player_clients': ['web'],
-                        'query_modifiers': [' музыка', '']
+                        'query_modifiers': ['', ' музыка', ' аудио'],
+                        'cookies_supported': True
                     },
                     {
                         'name': 'rutube',
                         'search_template': 'rutubesearch:{query}',
                         'player_clients': ['web'],
-                        'query_modifiers': [' музыка', ' audio']
+                        'query_modifiers': ['', ' музыка', ' audio'],
+                        'cookies_supported': False
                     },
                     {
                         'name': 'soundcloud',
                         'search_template': 'scsearch:{query}',
                         'player_clients': ['web'],
-                        'query_modifiers': ['', ' official audio']
+                        'query_modifiers': ['', ' official audio'],
+                        'cookies_supported': False
+                    },
+                    {
+                        'name': 'mail_ru',
+                        'search_template': 'mailru:{query}',
+                        'player_clients': ['web'],
+                        'query_modifiers': ['', ' музыка'],
+                        'cookies_supported': False
                     }
                 ]
 
@@ -613,6 +612,13 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
                             try:
                                 search_query = f"{q}{query_modifier}".strip()
                                 logger.info(f"🔍 Поиск в {source_config['name']}: {search_query}")
+
+                                # Подготовка cookies
+                                cookies_path = None
+                                if source_config['cookies_supported']:
+                                    cookies_path = os.path.join(BASE_DIR, "config", f"{source_config['name']}_cookies.txt")
+                                    if not os.path.exists(cookies_path):
+                                        cookies_path = os.path.join(BASE_DIR, "config", "music_cookies.txt")
 
                                 ydl_opts = {
                                     'format': 'bestaudio[ext=m4a]/bestaudio/best',
@@ -630,13 +636,10 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
                                         'preferredquality': '192',
                                     }],
                                     'http_headers': {
-                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                                         'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
                                     },
-                                    'extractor_args': {
-                                        'youtube': {'player_client': [player_client]},
-                                    },
-                                    'cookiefile': cookies_path if cookies_exist else None,
+                                    'cookiefile': cookies_path if cookies_path and os.path.exists(cookies_path) else None,
                                 }
 
                                 # Настройки для разных источников
@@ -648,6 +651,8 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
                                     ydl_opts['extractor_args'] = {'rutube': {'player_client': [player_client]}}
                                 elif source_config['name'] == 'soundcloud':
                                     ydl_opts['extractor_args'] = {'soundcloud': {'player_client': [player_client]}}
+                                elif source_config['name'] == 'mail_ru':
+                                    ydl_opts['extractor_args'] = {'mailru': {'player_client': [player_client]}}
 
                                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                                     # Поиск
@@ -730,69 +735,39 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
                     if result['success']:
                         return result
 
-                # Fallback для YouTube с разными клиентами
-                logger.info("🔄 Fallback: пробуем YouTube с разными клиентами...")
-                fallback_clients = [['mweb'], ['android'], ['web']]
-                
-                for clients in fallback_clients:
-                    try:
-                        ydl_opts_fallback = {
-                            'format': 'bestaudio[ext=m4a]/bestaudio/best',
-                            'outtmpl': os.path.join(temp_dir, 'fallback_%(title)s.%(ext)s'),
-                            'quiet': True,
-                            'no_warnings': True,
-                            'noplaylist': True,
-                            'retries': 2,
-                            'socket_timeout': 30,
-                            'sleep_interval': 6,
-                            'max_sleep_interval': 10,
-                            'postprocessors': [{
-                                'key': 'FFmpegExtractAudio',
-                                'preferredcodec': 'mp3',
-                                'preferredquality': '192',
-                            }],
-                            'http_headers': {
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-                            },
-                            'extractor_args': {
-                                'youtube': {'player_client': clients},
-                            },
-                            'cookiefile': cookies_path if cookies_exist else None,
-                        }
+                # Расширенный fallback поиск с разными вариантами запроса
+                logger.info("🔄 Расширенный поиск с разными вариантами запроса...")
+                search_variants = [
+                    q,
+                    f"{q} audio",
+                    f"{q} трек",
+                    f"{q} музыка",
+                    f"{track_info_local.get('artist', '')} {track_info_local.get('title', '')}",
+                    f"{track_info_local.get('artist', '')} - {track_info_local.get('title', '')}",
+                ]
 
-                        with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
-                            search_query = f"{q} audio"
-                            info = ydl.extract_info(f"ytsearch:{search_query}", download=False)
-                            if info and info.get('entries'):
-                                video_info = info['entries'][0]
-                                video_url = video_info.get('webpage_url') or video_info.get('url')
-                                download_info = ydl.extract_info(video_url, download=True)
-                                downloaded_file = ydl.prepare_filename(download_info)
-                                base, _ = os.path.splitext(downloaded_file)
-                                mp3_path = base + ".mp3"
-                                final_file = mp3_path if os.path.exists(mp3_path) else downloaded_file
-                                if os.path.exists(final_file) and os.path.getsize(final_file) <= MAX_FILE_SIZE_BYTES:
-                                    logger.info(f"✅ Успех с fallback {clients}: {final_file}")
-                                    return {
-                                        'success': True, 
-                                        'file_path': final_file, 
-                                        'title': video_info.get('title', 'Unknown'),
-                                        'source': 'youtube_fallback'
-                                    }
-                    except Exception as e:
-                        logger.warning(f"⚠️ Fallback {clients} не сработал: {e}")
-                        continue
+                # Убираем дубликаты
+                search_variants = list(dict.fromkeys([v.strip() for v in search_variants if v.strip()]))
+
+                for search_variant in search_variants:
+                    for source_config in SOURCES_CONFIG:
+                        logger.info(f"🔄 Пробуем: '{search_variant}' в {source_config['name']}")
+                        result = try_download_with_source({
+                            **source_config,
+                            'query_modifiers': ['']
+                        })
+                        if result['success']:
+                            return result
 
                 return {'success': False, 'error': 'Трек не найден ни в одном источнике'}
 
             except Exception as e:
-                logger.exception(f"❌ Ошибка в _yt_search_and_download: {e}")
+                logger.exception(f"❌ Ошибка в _search_and_download: {e}")
                 return {'success': False, 'error': f'Ошибка загрузки: {e}'}
 
         # Выполняем в потоке
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _yt_search_and_download, query, track_info)
+        result = await loop.run_in_executor(None, _search_and_download, query, track_info)
         return result
 
     except Exception as e:
@@ -802,7 +777,7 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
 
 async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     """
-    Скачивание треков с YouTube и альтернативных источников по порядку с ограничением размера,
+    Скачивание треков с альтернативных источников по порядку с ограничением размера,
     анализом сегмента и поиском фото.
     """
     import asyncio, os, shutil, tempfile
@@ -812,9 +787,6 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
     results = []
     total = len(tracks)
-
-    # Путь к файлу cookies
-    cookies_path = os.path.join(BASE_DIR, "config", "youtube_cookies.txt")
 
     for i, track_info in enumerate(tracks):
         try:
