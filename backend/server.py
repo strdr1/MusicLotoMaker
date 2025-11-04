@@ -557,113 +557,217 @@ def parse_track_line(line: str) -> tuple:
 
 
 async def search_youtube_music(query: str, track_info: dict) -> dict:
-    """Асинхронная функция поиска и скачивания трека с YouTube в формате MP3 (≤ 40 МБ)."""
+    """Асинхронная функция поиска и скачивания трека с альтернативных источников в формате MP3 (≤ 40 МБ)."""
     try:
-        def _yt_search_and_download(q, track_info_local):
+        def _search_and_download(q, track_info_local):
             try:
                 MAX_FILE_SIZE_MB = 40
                 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
-                temp_dir = os.path.join(tempfile.gettempdir(), 'youtube_dl')
+                temp_dir = os.path.join(tempfile.gettempdir(), 'music_download')
                 os.makedirs(temp_dir, exist_ok=True)
 
-                # Путь к файлу cookies
-                cookies_path = os.path.join(BASE_DIR, "config", "youtube_cookies.txt")
-                
-                ydl_opts = {
-                    'format': 'bestaudio[ext=m4a]/bestaudio/best',
-                    'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-                    'quiet': True,
-                    'no_warnings': True,
-                    'noplaylist': True,
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }],
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-                        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+                # Конфигурация источников (приоритет для русских сервисов)
+                SOURCES_CONFIG = [
+                    {
+                        'name': 'yandex_music', 
+                        'search_template': 'ymsearch:{query}',
+                        'player_clients': ['web'],
+                        'query_modifiers': ['', ' официальный аудио', ' трек'],
+                        'cookies_supported': False
                     },
-                    'extractor_args': {
-                        'youtube': {'player_client': ['android', 'web']},
+                    {
+                        'name': 'vk_video',
+                        'search_template': 'vksearch:{query}',
+                        'player_clients': ['web'],
+                        'query_modifiers': ['', ' музыка', ' аудио'],
+                        'cookies_supported': True
                     },
-                    # Добавляем cookies
-                    'cookiefile': cookies_path if os.path.exists(cookies_path) else None,
-                }
+                    {
+                        'name': 'rutube',
+                        'search_template': 'rutubesearch:{query}',
+                        'player_clients': ['web'],
+                        'query_modifiers': ['', ' музыка', ' audio'],
+                        'cookies_supported': False
+                    },
+                    {
+                        'name': 'soundcloud',
+                        'search_template': 'scsearch:{query}',
+                        'player_clients': ['web'],
+                        'query_modifiers': ['', ' official audio'],
+                        'cookies_supported': False
+                    },
+                    {
+                        'name': 'mail_ru',
+                        'search_template': 'mailru:{query}',
+                        'player_clients': ['web'],
+                        'query_modifiers': ['', ' музыка'],
+                        'cookies_supported': False
+                    }
+                ]
 
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    search_query = f"{q} official audio"
-                    logger.info(f"🔍 Поиск на YouTube: {search_query}")
+                def try_download_with_source(source_config):
+                    for player_client in source_config['player_clients']:
+                        for query_modifier in source_config['query_modifiers']:
+                            try:
+                                search_query = f"{q}{query_modifier}".strip()
+                                logger.info(f"🔍 Поиск в {source_config['name']}: {search_query}")
 
-                    # --- поиск ---
-                    try:
-                        info = ydl.extract_info(f"ytsearch:{search_query}", download=False)
-                    except Exception as search_error:
-                        logger.warning(f"⚠️ Ошибка поиска, пробуем без 'official audio': {search_error}")
-                        info = ydl.extract_info(f"ytsearch:{q} audio", download=False)
+                                # Подготовка cookies
+                                cookies_path = None
+                                if source_config['cookies_supported']:
+                                    cookies_path = os.path.join(BASE_DIR, "config", f"{source_config['name']}_cookies.txt")
+                                    if not os.path.exists(cookies_path):
+                                        cookies_path = os.path.join(BASE_DIR, "config", "music_cookies.txt")
 
-                    if not info or 'entries' not in info or not info['entries']:
-                        return {'success': False, 'error': 'Трек не найден на YouTube'}
+                                ydl_opts = {
+                                    'format': 'bestaudio[ext=m4a]/bestaudio/best',
+                                    'outtmpl': os.path.join(temp_dir, f"{source_config['name']}_%(title)s.%(ext)s"),
+                                    'quiet': True,
+                                    'no_warnings': True,
+                                    'noplaylist': True,
+                                    'retries': 2,
+                                    'socket_timeout': 30,
+                                    'sleep_interval': 6,
+                                    'max_sleep_interval': 10,
+                                    'postprocessors': [{
+                                        'key': 'FFmpegExtractAudio',
+                                        'preferredcodec': 'mp3',
+                                        'preferredquality': '192',
+                                    }],
+                                    'http_headers': {
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                                        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+                                    },
+                                    'cookiefile': cookies_path if cookies_path and os.path.exists(cookies_path) else None,
+                                }
 
-                    video_info = info['entries'][0]
-                    video_url = video_info.get('webpage_url') or video_info.get('url')
-                    video_title = video_info.get('title') or video_info.get('id')
-                    logger.info(f"🎵 Найден: {video_title}")
+                                # Настройки для разных источников
+                                if source_config['name'] == 'yandex_music':
+                                    ydl_opts['extractor_args'] = {'yandexmusic': {'player_client': [player_client]}}
+                                elif source_config['name'] == 'vk_video':
+                                    ydl_opts['extractor_args'] = {'vk': {'player_client': [player_client]}}
+                                elif source_config['name'] == 'rutube':
+                                    ydl_opts['extractor_args'] = {'rutube': {'player_client': [player_client]}}
+                                elif source_config['name'] == 'soundcloud':
+                                    ydl_opts['extractor_args'] = {'soundcloud': {'player_client': [player_client]}}
+                                elif source_config['name'] == 'mail_ru':
+                                    ydl_opts['extractor_args'] = {'mailru': {'player_client': [player_client]}}
 
-                    # --- оценка размера ---
-                    estimated_bytes = None
-                    try:
-                        meta = ydl.extract_info(video_url, download=False)
-                        if meta:
-                            estimated_bytes = meta.get('filesize') or meta.get('filesize_approx')
-                            if not estimated_bytes and 'formats' in meta:
-                                for fmt in sorted(meta['formats'], key=lambda f: f.get('tbr', 0), reverse=True):
-                                    estimated_bytes = fmt.get('filesize') or fmt.get('filesize_approx')
-                                    if estimated_bytes:
-                                        break
-                    except Exception as e_meta:
-                        logger.warning(f"⚠️ Не удалось получить metadata: {e_meta}")
+                                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                                    # Поиск
+                                    try:
+                                        info = ydl.extract_info(source_config['search_template'].format(query=search_query), download=False)
+                                    except Exception as search_error:
+                                        logger.warning(f"⚠️ Ошибка поиска в {source_config['name']}: {search_error}")
+                                        continue
 
-                    if (estimated_bytes or 0) > MAX_FILE_SIZE_BYTES:
-                        mb = estimated_bytes / (1024 * 1024)
-                        logger.warning(f"🚫 {video_title} превышает {MAX_FILE_SIZE_MB} МБ ({mb:.1f} МБ)")
-                        return {'success': False, 'error': f'Размер > {MAX_FILE_SIZE_MB} МБ — пропуск'}
+                                    if not info or 'entries' not in info or not info['entries']:
+                                        logger.warning(f"⚠️ В {source_config['name']} ничего не найдено для: {search_query}")
+                                        continue
 
-                    # --- скачивание ---
-                    logger.info("⬇️ Скачивание аудио...")
-                    download_info = ydl.extract_info(video_url, download=True)
-                    downloaded_file = ydl.prepare_filename(download_info)
+                                    video_info = info['entries'][0]
+                                    video_url = video_info.get('webpage_url') or video_info.get('url')
+                                    video_title = video_info.get('title') or video_info.get('id')
+                                    logger.info(f"🎵 Найден в {source_config['name']}: {video_title}")
 
-                    # --- корректируем путь на финальный .mp3 ---
-                    base, _ = os.path.splitext(downloaded_file)
-                    mp3_path = base + ".mp3"
-                    if os.path.exists(mp3_path):
-                        downloaded_file = mp3_path
-                    elif os.path.exists(downloaded_file):
-                        logger.warning("⚠️ mp3 не найден, используем исходный файл")
-                    else:
-                        logger.error("❌ Файл не найден после скачивания")
-                        return {'success': False, 'error': 'Файл не найден после скачивания'}
+                                    # Оценка размера
+                                    estimated_bytes = None
+                                    try:
+                                        meta = ydl.extract_info(video_url, download=False)
+                                        if meta:
+                                            estimated_bytes = meta.get('filesize') or meta.get('filesize_approx')
+                                            if not estimated_bytes and 'formats' in meta:
+                                                for fmt in sorted(meta['formats'], key=lambda f: f.get('tbr', 0), reverse=True):
+                                                    estimated_bytes = fmt.get('filesize') or fmt.get('filesize_approx')
+                                                    if estimated_bytes:
+                                                        break
+                                    except Exception as e_meta:
+                                        logger.warning(f"⚠️ Не удалось получить metadata из {source_config['name']}: {e_meta}")
 
-                    # --- проверка размера ---
-                    actual_size = os.path.getsize(downloaded_file)
-                    if actual_size > MAX_FILE_SIZE_BYTES:
-                        os.remove(downloaded_file)
-                        mb = actual_size / (1024 * 1024)
-                        logger.warning(f"🚫 {video_title} превысил лимит ({mb:.1f} МБ)")
-                        return {'success': False, 'error': f'Файл > {MAX_FILE_SIZE_MB} МБ — удалён'}
+                                    if (estimated_bytes or 0) > MAX_FILE_SIZE_BYTES:
+                                        mb = estimated_bytes / (1024 * 1024)
+                                        logger.warning(f"🚫 {video_title} превышает {MAX_FILE_SIZE_MB} МБ ({mb:.1f} МБ)")
+                                        continue
 
-                    logger.info(f"✅ Готов файл: {downloaded_file}")
-                    return {'success': True, 'file_path': downloaded_file, 'title': video_title}
+                                    # Скачивание
+                                    logger.info(f"⬇️ Скачивание из {source_config['name']}...")
+                                    download_info = ydl.extract_info(video_url, download=True)
+                                    downloaded_file = ydl.prepare_filename(download_info)
+
+                                    # Корректируем путь на финальный .mp3
+                                    base, _ = os.path.splitext(downloaded_file)
+                                    mp3_path = base + ".mp3"
+                                    if os.path.exists(mp3_path):
+                                        downloaded_file = mp3_path
+                                    elif os.path.exists(downloaded_file):
+                                        logger.warning("⚠️ mp3 не найден, используем исходный файл")
+                                    else:
+                                        logger.error("❌ Файл не найден после скачивания")
+                                        continue
+
+                                    # Проверка размера
+                                    actual_size = os.path.getsize(downloaded_file)
+                                    if actual_size > MAX_FILE_SIZE_BYTES:
+                                        os.remove(downloaded_file)
+                                        mb = actual_size / (1024 * 1024)
+                                        logger.warning(f"🚫 {video_title} превысил лимит ({mb:.1f} МБ)")
+                                        continue
+
+                                    logger.info(f"✅ Готов файл из {source_config['name']}: {downloaded_file}")
+                                    return {
+                                        'success': True, 
+                                        'file_path': downloaded_file, 
+                                        'title': video_title,
+                                        'source': source_config['name']
+                                    }
+
+                            except Exception as e:
+                                logger.warning(f"⚠️ Ошибка в {source_config['name']} с {player_client}: {e}")
+                                continue
+
+                    return {'success': False, 'error': f'Не удалось скачать из {source_config["name"]}'}
+
+                # Пробуем все источники по порядку
+                for source_config in SOURCES_CONFIG:
+                    logger.info(f"🎯 Пробуем источник: {source_config['name']}")
+                    result = try_download_with_source(source_config)
+                    if result['success']:
+                        return result
+
+                # Расширенный fallback поиск с разными вариантами запроса
+                logger.info("🔄 Расширенный поиск с разными вариантами запроса...")
+                search_variants = [
+                    q,
+                    f"{q} audio",
+                    f"{q} трек",
+                    f"{q} музыка",
+                    f"{track_info_local.get('artist', '')} {track_info_local.get('title', '')}",
+                    f"{track_info_local.get('artist', '')} - {track_info_local.get('title', '')}",
+                ]
+
+                # Убираем дубликаты
+                search_variants = list(dict.fromkeys([v.strip() for v in search_variants if v.strip()]))
+
+                for search_variant in search_variants:
+                    for source_config in SOURCES_CONFIG:
+                        logger.info(f"🔄 Пробуем: '{search_variant}' в {source_config['name']}")
+                        result = try_download_with_source({
+                            **source_config,
+                            'query_modifiers': ['']
+                        })
+                        if result['success']:
+                            return result
+
+                return {'success': False, 'error': 'Трек не найден ни в одном источнике'}
 
             except Exception as e:
-                logger.exception(f"❌ Ошибка в _yt_search_and_download: {e}")
-                return {'success': False, 'error': f'Ошибка YouTube: {e}'}
+                logger.exception(f"❌ Ошибка в _search_and_download: {e}")
+                return {'success': False, 'error': f'Ошибка загрузки: {e}'}
 
-        # --- выполняем в потоке ---
+        # Выполняем в потоке
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _yt_search_and_download, query, track_info)
+        result = await loop.run_in_executor(None, _search_and_download, query, track_info)
         return result
 
     except Exception as e:
@@ -673,7 +777,7 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
 
 async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     """
-    Скачивание треков с YouTube по порядку с ограничением размера,
+    Скачивание треков с альтернативных источников по порядку с ограничением размера,
     анализом сегмента и поиском фото.
     """
     import asyncio, os, shutil, tempfile
@@ -684,75 +788,65 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     results = []
     total = len(tracks)
 
-    # Путь к файлу cookies
-    cookies_path = os.path.join(BASE_DIR, "config", "youtube_cookies.txt")
-
     for i, track_info in enumerate(tracks):
         try:
             query = f"{track_info.get('artist', '')} {track_info.get('title', '')}".strip() or track_info.get("original_line", "")
             logger.info(f"🔍 [{i+1}/{total}] {query}")
 
-            temp_dir = os.path.join(tempfile.gettempdir(), "youtube_dl_fast")
-            os.makedirs(temp_dir, exist_ok=True)
-
-            ydl_opts = {
-                "format": "bestaudio[ext=m4a]/bestaudio/best",
-                "outtmpl": os.path.join(temp_dir, f"{i:03d}_%(title)s.%(ext)s"),
-                "quiet": True,
-                "noplaylist": True,
-                "no_warnings": True,
-                "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
-                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-                # Добавляем cookies
-                "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
-            }
-
-            def _download():
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(f"ytsearch1:{query} audio", download=True)
-                    if not info or "entries" not in info or not info["entries"]:
-                        return None
-                    entry = info["entries"][0]
-                    filename = ydl.prepare_filename(entry)
-                    mp3_path = os.path.splitext(filename)[0] + ".mp3"
-                    return mp3_path if os.path.exists(mp3_path) else filename
-
-            loop = asyncio.get_event_loop()
-            downloaded_file = await loop.run_in_executor(None, _download)
-            if not downloaded_file:
-                results.append({"success": False, "error": f"Не удалось скачать: {query}"})
+            # Используем улучшенную функцию поиска
+            download_result = await search_youtube_music(query, track_info)
+            
+            if not download_result['success']:
+                results.append({
+                    "success": False, 
+                    "error": f"Не удалось скачать: {query} - {download_result.get('error', 'Unknown error')}"
+                })
                 continue
 
-            # проверка размера
+            downloaded_file = download_result['file_path']
+            source_name = download_result.get('source', 'unknown')
+
+            # Проверка размера
             if os.path.getsize(downloaded_file) > MAX_SIZE_BYTES:
                 logger.warning(f"⚠️ {query} слишком большой (> {max_size_mb} МБ), пропуск")
+                os.remove(downloaded_file)
                 results.append({"success": False, "error": f"Файл слишком большой: {query}"})
                 continue
 
+            # Подготовка имени файла
             safe_artist = "".join(c for c in track_info.get("artist", "Unknown") if c.isalnum() or c in (" ", "-", "_")).rstrip()
             safe_title = "".join(c for c in track_info.get("title", "Unknown") if c.isalnum() or c in (" ", "-", "_")).rstrip()
             final_filename = f"{safe_artist} - {safe_title}.mp3"
             downloads_dir = os.path.join(BASE_DIR, "downloads")
             os.makedirs(downloads_dir, exist_ok=True)
             final_path = os.path.join(downloads_dir, final_filename)
+
+            # Перемещение файла
+            loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, shutil.move, downloaded_file, final_path)
 
+            # Добавление в медиатеку
             track = media_library.add_track(final_path, final_filename)
             if not track:
                 results.append({"success": False, "error": f"Ошибка добавления {final_filename}"})
                 continue
 
+            # Обновление метаданных с указанием источника
             media_library.update_track(track["id"], {
                 "artist": safe_artist,
                 "title": safe_title,
-                "metadata": {"source": "internet_download", "query": query}
+                "metadata": {
+                    "source": "internet_download", 
+                    "query": query,
+                    "download_source": source_name
+                }
             })
 
-            # анализ сегмента
+            # Анализ сегмента
             best_start = await asyncio.to_thread(audio_editor.suggest_best_segment, final_path)
             media_library.update_track_segment(track["id"], best_start, 30)
 
-            # фото
+            # Поиск фото артиста
             local_photo = Path(BASE_DIR) / "artists" / f"{safe_artist}.jpg"
             if local_photo.exists():
                 image_path = await asyncio.to_thread(process_local_photo, local_photo, track["id"])
@@ -766,8 +860,14 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                         media_library.update_track(track["id"], {"image_path": image_path})
                         logger.info(f"✅ Фото артиста {safe_artist} добавлено")
 
-            results.append({"success": True, "file_path": final_path, "track_id": track["id"], "artist": safe_artist})
-            logger.info(f"✅ Готово: {final_filename}")
+            results.append({
+                "success": True, 
+                "file_path": final_path, 
+                "track_id": track["id"], 
+                "artist": safe_artist,
+                "source": source_name
+            })
+            logger.info(f"✅ Готово: {final_filename} (источник: {source_name})")
 
         except Exception as e:
             logger.error(f"❌ Ошибка {track_info.get('original_line', '')}: {e}")
