@@ -1,12 +1,9 @@
 ﻿fastapi>=0.104.0
 uvicorn>=0.24.0
-flask>=2.3.0
 python-multipart>=0.0.6
 pydub>=0.25.1
-librosa>=0.10.0
 mutagen>=1.47.0
 Pillow>=10.0.0
-rembg>=2.0.50
 numpy>=1.24.0
 matplotlib>=3.7.0
 scipy>=1.11.0
