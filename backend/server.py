@@ -3,7 +3,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
-PORT = int(os.environ.get("PORT", 8000))
+
 # === SYSTEM & PATHS ===
 import os
 import sys
@@ -33,7 +33,7 @@ from typing import List
 # === INTERNAL MODULES ===
 from backend.dropbox_storage import DropboxStorage
 dropbox_storage = DropboxStorage()
-
+PORT = int(os.environ.get("PORT", 8000))
 # === LOGGING CONFIGURATION ===
 LOG_DIR = r"E:\1\MusicLotoMaker\MusicLotoMaker\logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -2591,4 +2591,11 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    logger.info("🎵 Music Loto Maker Server v3.0 Starting...")
+    logger.info(f"🔧 Metadata processor: {type(metadata_processor).__name__}")
+    logger.info("📷 Artist photos: HYBRID (local + Dropbox download)")
+    logger.info("🎯 Key features: Smart segments, File management, Presentation generation")
+    logger.info("⏱️ Timing management: Auto smart segments + manual editing")
+    logger.info("🌐 Internet download: YouTube Music")
+    logger.info(f"🌐 Server running on http://0.0.0.0:{PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
