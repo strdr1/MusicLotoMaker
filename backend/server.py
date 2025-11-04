@@ -1829,16 +1829,20 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             return None
 
     async def process_single_track(i: int, track_info: dict) -> dict:
-        """Обработка одного трека"""
+        """Обработка одного трека с безопасным именем файла"""
         artist = track_info.get("artist", "")
         title = track_info.get("title", "")
         logger.info(f"🔍 [{i+1}/{total}] Обработка трека: {artist} - {title}")
 
+        # Получаем ссылку на MP3 с Hitmotop
         mp3_url = await fetch_hitmotop_mp3_url(artist, title)
         if not mp3_url:
             return {"success": False, "error": f"Нет ссылки на MP3 для трека: {track_info}"}
 
-        filename_safe = f"{artist.replace('/', '-').replace('\\', '-')[:50]} - {title.replace('/', '-').replace('\\', '-')[:50]}.mp3"
+        # Формируем безопасное имя файла
+        safe_artist = artist.replace('/', '-').replace('\\', '-')
+        safe_title = title.replace('/', '-').replace('\\', '-')
+        filename_safe = f"{safe_artist[:50]} - {safe_title[:50]}.mp3"
         final_path = os.path.join(downloads_dir, filename_safe)
 
         try:
@@ -1875,8 +1879,11 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             ]
             metadata_result, segment_result, image_result = await asyncio.gather(*tasks, return_exceptions=True)
 
+            # Обновление сегмента
             if not isinstance(segment_result, Exception) and segment_result is not None:
                 media_library.update_track_segment(track["id"], segment_result, 30)
+
+            # Обновление фото
             if not isinstance(image_result, Exception) and image_result:
                 media_library.update_track(track["id"], {"image_path": image_result})
                 logger.info(f"✅ Фото для {artist} добавлено")
@@ -1887,7 +1894,7 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             logger.error(f"❌ Ошибка скачивания/обработки {artist} - {title}: {e}")
             return {"success": False, "error": str(e)}
 
-    # Параллельная обработка треков
+    # Параллельная обработка треков с ограничением количества одновременных задач
     semaphore = asyncio.Semaphore(3)
     async def limited_download(i, track_info):
         async with semaphore:
