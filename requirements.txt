@@ -30,13 +30,14 @@ yt-dlp>=2023.11.0
 python-dotenv>=1.0.0
 python-dateutil>=2.8.0
 
-
 # XML processing
 lxml>=4.9.0
 
 # Data classes
 dataclasses-json>=0.6.0
 
+# ÄÎÁÀÂÜÒÅ ÝÒÈ ÑÒÐÎÊÈ:
+dropbox>=11.36.0
 aiofiles
 google-api-python-client
 google-auth
