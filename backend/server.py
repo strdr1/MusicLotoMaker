@@ -567,6 +567,9 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
                 temp_dir = os.path.join(tempfile.gettempdir(), 'youtube_dl')
                 os.makedirs(temp_dir, exist_ok=True)
 
+                # Путь к файлу cookies
+                cookies_path = os.path.join(BASE_DIR, "config", "youtube_cookies.txt")
+                
                 ydl_opts = {
                     'format': 'bestaudio[ext=m4a]/bestaudio/best',
                     'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
@@ -585,6 +588,8 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
                     'extractor_args': {
                         'youtube': {'player_client': ['android', 'web']},
                     },
+                    # Добавляем cookies
+                    'cookiefile': cookies_path if os.path.exists(cookies_path) else None,
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -666,7 +671,6 @@ async def search_youtube_music(query: str, track_info: dict) -> dict:
         return {'success': False, 'error': f'Ошибка search_youtube_music: {e}'}
 
 
-
 async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     """
     Скачивание треков с YouTube по порядку с ограничением размера,
@@ -679,6 +683,9 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
     results = []
     total = len(tracks)
+
+    # Путь к файлу cookies
+    cookies_path = os.path.join(BASE_DIR, "config", "youtube_cookies.txt")
 
     for i, track_info in enumerate(tracks):
         try:
@@ -696,6 +703,8 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                 "no_warnings": True,
                 "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
                 "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+                # Добавляем cookies
+                "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
             }
 
             def _download():
