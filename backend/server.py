@@ -1780,6 +1780,92 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     from pathlib import Path
     import yt_dlp
     from concurrent.futures import ThreadPoolExecutor
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+
+    # Инициализация YouTube API
+    YOUTUBE_API_KEY = "AIzaSyCkEIq_9-WvdogDTFddwqrGYHFFzVUwVOY"
+    youtube_api = None
+    
+    try:
+        youtube_api = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+        logger.info("✅ YouTube API успешно инициализирован")
+    except Exception as e:
+        logger.error(f"❌ Ошибка инициализации YouTube API: {e}")
+        youtube_api = None
+
+    def parse_youtube_duration(duration: str) -> int:
+        """Парсит длительность видео YouTube в секунды"""
+        import re
+        match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
+        if not match:
+            return 0
+        
+        hours = int(match.group(1)) if match.group(1) else 0
+        minutes = int(match.group(2)) if match.group(2) else 0
+        seconds = int(match.group(3)) if match.group(3) else 0
+        
+        return hours * 3600 + minutes * 60 + seconds
+
+    async def search_with_youtube_api(query: str) -> dict:
+        """Поиск видео через YouTube API"""
+        if not youtube_api:
+            return None
+        
+        try:
+            # Поиск видео
+            search_response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: youtube_api.search().list(
+                    q=query,
+                    part="id,snippet",
+                    maxResults=3,
+                    type="video",
+                    videoDuration="medium",
+                    videoCategoryId="10",  # Музыка
+                    relevanceLanguage="ru",
+                    regionCode="RU"
+                ).execute()
+            )
+            
+            if not search_response.get('items'):
+                return None
+            
+            # Получаем детальную информацию о видео
+            video_ids = [item['id']['videoId'] for item in search_response['items']]
+            
+            videos_response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: youtube_api.videos().list(
+                    part="contentDetails,statistics",
+                    id=','.join(video_ids)
+                ).execute()
+            )
+            
+            # Ищем подходящее видео
+            for search_item in search_response['items']:
+                video_id = search_item['id']['videoId']
+                for video_item in videos_response.get('items', []):
+                    if video_item['id'] == video_id:
+                        duration_str = video_item['contentDetails']['duration']
+                        duration = parse_youtube_duration(duration_str)
+                        
+                        # Пропускаем слишком длинные видео
+                        if duration > 600:  # 10 минут максимум
+                            continue
+                        
+                        return {
+                            'video_id': video_id,
+                            'title': search_item['snippet']['title'],
+                            'url': f'https://www.youtube.com/watch?v={video_id}',
+                            'duration': duration
+                        }
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"⚠️ YouTube API ошибка: {e}")
+            return None
 
     MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
     total = len(tracks)
@@ -1798,6 +1884,11 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             query = f"{track_info.get('artist', '')} {track_info.get('title', '')}".strip() or track_info.get("original_line", "")
             logger.info(f"🔍 [{i+1}/{total}] {query}")
 
+            # Сначала пробуем найти через YouTube API
+            video_info = None
+            if youtube_api:
+                video_info = await search_with_youtube_api(query)
+            
             ydl_opts = {
                 "format": "bestaudio[ext=m4a]/bestaudio/best",
                 "outtmpl": os.path.join(temp_dir, f"{i:03d}_%(id)s.%(ext)s"),
@@ -1817,17 +1908,23 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             def _download():
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-                        if not info or "entries" not in info or not info["entries"]:
-                            return None
-                        
-                        entry = info["entries"][0]
-                        duration = entry.get('duration', 0)
-                        if duration > 1800:
-                            logger.warning(f"⚠️ Слишком длинное видео: {duration} сек")
-                            return None
+                        # Если нашли через API, используем прямой URL
+                        if video_info:
+                            logger.info(f"🎯 Скачивание через API: {video_info['title']}")
+                            ydl.download([video_info['url']])
+                        else:
+                            # Иначе используем обычный поиск
+                            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+                            if not info or "entries" not in info or not info["entries"]:
+                                return None
                             
-                        ydl.download([f"ytsearch1:{query}"])
+                            entry = info["entries"][0]
+                            duration = entry.get('duration', 0)
+                            if duration > 1800:
+                                logger.warning(f"⚠️ Слишком длинное видео: {duration} сек")
+                                return None
+                                
+                            ydl.download([f"ytsearch1:{query}"])
                         
                         import glob
                         pattern = os.path.join(temp_dir, f"{i:03d}_*.*")
