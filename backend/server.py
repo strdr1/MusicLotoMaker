@@ -3,7 +3,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
-
+PORT = int(os.environ.get("PORT", 8000))
 # === SYSTEM & PATHS ===
 import os
 import sys
@@ -2591,11 +2591,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("🎵 Music Loto Maker Server v3.0 Starting...")
-    logger.info(f"🔧 Metadata processor: {type(metadata_processor).__name__}")
-    logger.info("📷 Artist photos: MANUAL (user adds photos manually)")
-    logger.info("🎯 Key features: Smart segments, No clip files, Single JSON storage")
-    logger.info("⏱️ Timing management: Auto smart segments + manual editing + JSON export")
-    logger.info("🌐 Internet download: YouTube Music")
-    logger.info("🌐 Server running on http://127.0.0.1:8000")
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
