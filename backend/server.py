@@ -339,6 +339,46 @@ def _find_track_json_path() -> str | None:
 media_library = MediaLibrary()
 if not os.path.exists("base.pptx"):
     dropbox_storage.download_base_pptx("base.pptx")
+# --- Проверка и загрузка фото артистов из Dropbox ---
+artists_dir = "artists"
+if not os.path.exists(artists_dir):
+    logger.info(f"📁 Папка {artists_dir} не найдена. Создание папки...")
+    os.makedirs(artists_dir, exist_ok=True)
+    logger.info(f"✅ Папка {artists_dir} создана.")
+
+# Проверяем, пуста ли папка
+local_files = os.listdir(artists_dir)
+if len(local_files) == 0:
+    logger.info(f"📂 Папка {artists_dir} пуста. Попытка загрузки фото из Dropbox...")
+    try:
+        photos_info = dropbox_storage.list_artist_photos()
+        if photos_info:
+            for photo_info in photos_info:
+                filename = photo_info['filename']
+                dropbox_path = photo_info['dropbox_path'] # Путь в Dropbox
+                local_path = os.path.join(artists_dir, filename)
+
+                # Пропускаем, если файл уже существует
+                if os.path.exists(local_path):
+                    logger.info(f"🖼️ Файл {filename} уже существует в {artists_dir}, пропуск.")
+                    continue
+
+                # Скачиваем файл через API Dropbox
+                try:
+                    metadata, response = dropbox_storage.dbx.files_download(dropbox_path)
+                    with open(local_path, 'wb') as f:
+                        f.write(response.content)
+                    logger.info(f"✅ Загружено фото: {filename} в {artists_dir}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка при скачивании фото {filename}: {e}")
+
+        else:
+            logger.info("🔍 В Dropbox в папке /artists не найдено фото.")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при загрузке фото артистов из Dropbox: {e}")
+else:
+    logger.info(f"✅ Папка {artists_dir} содержит {len(local_files)} файлов(а).")
+
 modern_presentation_gen = ModernPresentationGenerator("base.pptx")
 ticket_gen = TicketGenerator()
 
@@ -2228,57 +2268,299 @@ async def get_track_segment_file(track_id: int, start_time: float = 0, duration:
         logger.error(f"❌ Ошибка создания предпросмотра отрезка: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# =========================
+# FILE UPLOAD FIXES - COMPLETE BLOCK
+# =========================
 
-@app.post("/api/dropbox/upload-base-pptx")
+@app.post("/api/local/upload-base-pptx")
 async def upload_base_pptx(file: UploadFile = File(...)):
-    temp_path = f"temp/{file.filename}"
-    with open(temp_path, "wb") as f:
-        f.write(await file.read())
-    result = dropbox_storage.upload_base_pptx(temp_path)
-    return {"success": bool(result), "info": result}
+    """Загрузить новый base.pptx"""
+    try:
+        logger.info(f"🔼 Начало загрузки base.pptx: {file.filename}")
+        
+        if not file.filename or not file.filename.endswith('.pptx'):
+            raise HTTPException(status_code=400, detail="Файл должен быть в формате .pptx")
+        
+        base_path = os.path.join(BASE_DIR, "base.pptx")
+        
+        # Читаем содержимое файла
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+        
+        logger.info(f"📊 Размер файла: {len(content)} байт")
+        
+        # Сохраняем файл
+        with open(base_path, "wb") as f:
+            f.write(content)
+        
+        # Проверяем что файл сохранился
+        if not os.path.exists(base_path):
+            raise HTTPException(status_code=500, detail="Файл не сохранился на сервере")
+        
+        file_size = os.path.getsize(base_path)
+        logger.info(f"✅ base.pptx обновлен, размер: {file_size} байт")
+        
+        return {
+            "success": True,
+            "message": "base.pptx успешно обновлен",
+            "size": file_size,
+            "filename": "base.pptx"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки base.pptx: {e}")
+        return {"success": False, "error": str(e)}
 
-@app.post("/api/dropbox/upload-artist-photo")
-async def upload_artist_photo(file: UploadFile = File(...), artist: str = Form(...)):
-    temp_path = f"temp/{file.filename}"
-    with open(temp_path, "wb") as f:
-        f.write(await file.read())
-    result = dropbox_storage.upload_artist_photo(temp_path, artist)
-    return {"success": bool(result), "info": result}
+@app.post("/api/local/upload-artist-photos")
+async def upload_local_artist_photos(files: List[UploadFile] = File(...)):
+    """Загрузить фото артистов в локальную папку"""
+    try:
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        os.makedirs(artists_dir, exist_ok=True)
+        
+        uploaded = []
+        total_size = 0
+        
+        for file in files:
+            logger.info(f"🔼 Обработка файла: {file.filename}")
+            
+            if not file.filename:
+                continue
+                
+            if not file.content_type or not file.content_type.startswith('image/'):
+                logger.warning(f"⚠️ Пропущен не-изображение: {file.filename}")
+                continue
+            
+            # Создаем безопасное имя файла
+            safe_name = "".join(c for c in file.filename if c.isalnum() or c in (' ', '-', '_', '.')).rstrip()
+            safe_name = safe_name.replace(' ', '_').lower()
+            
+            # Добавляем расширение если его нет
+            if not '.' in safe_name:
+                safe_name += '.jpg'
+            
+            file_path = os.path.join(artists_dir, safe_name)
+            
+            # Читаем и сохраняем файл
+            content = await file.read()
+            if not content:
+                logger.warning(f"⚠️ Пустой файл: {file.filename}")
+                continue
+                
+            with open(file_path, "wb") as f:
+                f.write(content)
+            
+            # Проверяем что файл сохранился
+            if os.path.exists(file_path):
+                file_size = os.path.getsize(file_path)
+                total_size += file_size
+                uploaded.append({
+                    "filename": safe_name,
+                    "artist_name": os.path.splitext(safe_name)[0].replace('_', ' '),
+                    "file_path": file_path,
+                    "size": file_size
+                })
+                logger.info(f"✅ Фото сохранено: {safe_name} ({file_size} байт)")
+            else:
+                logger.error(f"❌ Файл не сохранился: {safe_name}")
+        
+        logger.info(f"📊 Итог загрузки: {len(uploaded)} из {len(files)} файлов, общий размер: {total_size} байт")
+        
+        return {
+            "success": True, 
+            "uploaded": uploaded, 
+            "message": f"Успешно загружено {len(uploaded)} фото",
+            "total_files": len(files),
+            "total_size": total_size
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки фото: {e}")
+        return {"success": False, "error": str(e)}
 
-@app.post("/api/dropbox/upload-artist-photos")
-async def upload_artist_photos(files: List[UploadFile] = File(...)):
-    uploaded = []
-    for file in files:
-        artist_name = Path(file.filename).stem
-        suffix = Path(file.filename).suffix
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
-        result = dropbox_storage.upload_artist_photo(tmp_path, artist_name)
-        if result:
-            uploaded.append(result)
-        Path(tmp_path).unlink(missing_ok=True)
-    return {"uploaded": uploaded}
+@app.get("/api/local/base-pptx")
+async def get_base_pptx_info():
+    """Получить информацию о base.pptx"""
+    try:
+        base_path = os.path.join(BASE_DIR, "base.pptx")
+        
+        if os.path.exists(base_path):
+            file_size = os.path.getsize(base_path)
+            return {
+                "exists": True,
+                "filename": "base.pptx",
+                "size": file_size,
+                "download_url": "/api/local/download-base-pptx",
+                "message": "Файл готов к использованию"
+            }
+        else:
+            return {
+                "exists": False, 
+                "message": "base.pptx не найден",
+                "download_url": "/api/dropbox/download-base-pptx"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения информации о base.pptx: {e}")
+        return {"exists": False, "error": str(e)}
 
-@app.get("/api/dropbox/list-artist-photos")
-def list_artist_photos():
-    return {"photos": dropbox_storage.list_artist_photos()}
+@app.get("/api/local/download-base-pptx")
+async def download_base_pptx():
+    """Скачать base.pptx"""
+    try:
+        base_path = os.path.join(BASE_DIR, "base.pptx")
+        
+        if not os.path.exists(base_path):
+            raise HTTPException(status_code=404, detail="base.pptx не найден")
+        
+        return FileResponse(
+            base_path,
+            filename="base.pptx",
+            media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
+    except Exception as e:
+        logger.error(f"❌ Ошибка скачивания base.pptx: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка скачивания: {str(e)}")
 
-@app.delete("/api/dropbox/delete-artist-photo")
-async def delete_artist_photo(dropbox_path: str = Form(...)):
-    success = dropbox_storage.delete_artist_photo(dropbox_path)
-    return {"success": success}
+@app.get("/api/local/artist-photos")
+async def get_local_artist_photos():
+    """Получить список локальных фото артистов"""
+    try:
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        photos = []
+        
+        if os.path.exists(artists_dir):
+            for filename in os.listdir(artists_dir):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    file_path = os.path.join(artists_dir, filename)
+                    file_size = os.path.getsize(file_path)
+                    artist_name = os.path.splitext(filename)[0].replace('_', ' ')
+                    photos.append({
+                        "filename": filename,
+                        "artist_name": artist_name,
+                        "file_path": file_path,
+                        "size": file_size,
+                        "url": f"/api/local/artist-photo/{filename}",
+                        "size_mb": f"{(file_size / 1024 / 1024):.2f} MB"
+                    })
+        
+        logger.info(f"📁 Найдено {len(photos)} локальных фото артистов")
+        return {"photos": sorted(photos, key=lambda x: x['artist_name'])}
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения локальных фото: {e}")
+        return {"photos": []}
 
-@app.get("/api/dropbox/list-base-pptx")
-def list_base_pptx():
-    local_path = "temp_base.pptx"
-    success = dropbox_storage.download_base_pptx(local_path)
-    if success:
-        result = dropbox_storage.upload_base_pptx(local_path)
-        Path(local_path).unlink(missing_ok=True)
-        if result and "download_url" in result:
-            return {"success": True, "download_url": result["download_url"]}
-    return {"success": False}
+@app.get("/api/local/artist-photo/{filename}")
+async def get_local_artist_photo(filename: str):
+    """Получить локальное фото артиста"""
+    try:
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        file_path = os.path.join(artists_dir, filename)
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Фото не найдено")
+        
+        # Определяем MIME тип по расширению
+        ext = filename.lower().split('.')[-1]
+        mime_types = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'webp': 'image/webp'
+        }
+        media_type = mime_types.get(ext, 'image/jpeg')
+        
+        return FileResponse(file_path, media_type=media_type)
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения фото {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка получения фото: {str(e)}")
+
+@app.delete("/api/local/artist-photo/{filename}")
+async def delete_local_artist_photo(filename: str):
+    """Удалить фото артиста"""
+    try:
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        file_path = os.path.join(artists_dir, filename)
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Фото не найдено")
+        
+        os.remove(file_path)
+        logger.info(f"🗑️ Удалено фото: {filename}")
+        
+        return {"success": True, "message": "Фото удалено"}
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления фото: {e}")
+        return {"success": False, "error": str(e)}
+
+# =========================
+# DROPBOX DOWNLOAD ENDPOINTS
+# =========================
+
+@app.post("/api/dropbox/download-base-pptx")
+async def download_base_pptx_from_dropbox():
+    """Скачать base.pptx из Dropbox (если локального нет)"""
+    try:
+        base_path = os.path.join(BASE_DIR, "base.pptx")
+        success = dropbox_storage.download_base_pptx(base_path)
+        
+        if success:
+            file_size = os.path.getsize(base_path)
+            return {
+                "success": True,
+                "message": "base.pptx скачан из Dropbox",
+                "size": file_size
+            }
+        else:
+            return {"success": False, "error": "Не удалось скачать base.pptx"}
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка скачивания base.pptx: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/dropbox/download-artist-photos")
+async def download_artist_photos_from_dropbox():
+    """Скачать фото артистов из Dropbox (если локальной папки нет или пустая)"""
+    try:
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        success = dropbox_storage.download_artist_photos(artists_dir)
+        
+        if success:
+            # Получаем список скачанных фото
+            photos = []
+            if os.path.exists(artists_dir):
+                for filename in os.listdir(artists_dir):
+                    if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                        photos.append({
+                            "filename": filename,
+                            "artist_name": os.path.splitext(filename)[0].replace('_', ' ')
+                        })
+            
+            return {
+                "success": True,
+                "message": f"Скачано {len(photos)} фото артистов",
+                "photos": photos
+            }
+        else:
+            return {"success": False, "error": "Не удалось скачать фото артистов"}
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка скачивания фото артистов: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/dropbox/available-photos")
+async def get_available_dropbox_photos():
+    """Получить список фото доступных в Dropbox"""
+    try:
+        photos = dropbox_storage.list_artist_photos()
+        return {"photos": photos}
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения списка фото: {e}")
+        return {"photos": []}
 
 # -------- Health --------
 

@@ -2608,91 +2608,364 @@ async function initPresentationDesigner() {
 
     Designer.loaded = true;
 }
-//DropBox
-async function uploadBasePptx() {
-    const input = document.getElementById('uploadBasePptx');
-    if (!input || !input.files.length) return alert('Выберите файл base.pptx');
+// =========================
+// DROPBOX DOWNLOAD FUNCTIONS (только скачивание)
+// =========================
 
-    const formData = new FormData();
-    formData.append('file', input.files[0]);
+async function downloadBasePptxFromDropbox() {
+    try {
+        showNotification('📥 Скачиваем base.pptx из облака...', 'info');
 
-    const res = await fetch('/api/dropbox/upload-base-pptx', {
-        method: 'POST',
-        body: formData
-    });
+        const response = await fetch('/api/dropbox/download-base-pptx', {
+            method: 'POST'
+        });
 
-    const data = await res.json();
-    if (data.success) {
-        alert('✅ base.pptx загружен!');
-    } else {
-        alert('❌ Ошибка загрузки base.pptx');
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification('✅ base.pptx успешно скачан!', 'success');
+            refreshBasePptx();
+        } else {
+            showNotification(`❌ Ошибка: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Ошибка скачивания base.pptx:', error);
+        showNotification('❌ Ошибка скачивания из облака', 'error');
     }
 }
 
+async function downloadArtistPhotosFromDropbox() {
+    try {
+        showNotification('📥 Скачиваем фото артистов из облака...', 'info');
+
+        const response = await fetch('/api/dropbox/download-artist-photos', {
+            method: 'POST'
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification(`✅ Скачано ${data.photos?.length || 0} фото артистов!`, 'success');
+            refreshArtistPhotos();
+        } else {
+            showNotification(`❌ Ошибка: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Ошибка скачивания фото:', error);
+        showNotification('❌ Ошибка скачивания фото из облака', 'error');
+    }
+}
+
+async function checkDropboxPhotos() {
+    try {
+        const response = await fetch('/api/dropbox/available-photos');
+        const data = await response.json();
+
+        if (data.photos && data.photos.length > 0) {
+            return data.photos;
+        }
+        return [];
+    } catch (error) {
+        console.error('Ошибка проверки Dropbox:', error);
+        return [];
+    }
+}
+
+// =========================
+// LOCAL FILES MANAGEMENT
+// =========================
+
 async function uploadArtistPhotos() {
     const input = document.getElementById('uploadArtistPhotos');
-    if (!input || !input.files.length) return alert('Выберите фото артистов');
-
-    const formData = new FormData();
-    for (const file of input.files) {
-        formData.append('files', file);
+    if (!input || !input.files || input.files.length === 0) {
+        showNotification('❌ Выберите фото для загрузки', 'error');
+        return;
     }
 
-    const res = await fetch('/api/dropbox/upload-artist-photos', {
-        method: 'POST',
-        body: formData
+    const files = Array.from(input.files);
+    console.log('📤 Загрузка фото:', files.map(f => f.name));
+
+    showNotification(`📤 Загружаем ${files.length} фото...`, 'info');
+
+    const formData = new FormData();
+    files.forEach(file => {
+        formData.append('files', file);
     });
 
-    const data = await res.json();
-    if (data.uploaded?.length) {
-        showNotification(`✅ Загружено ${data.uploaded.length} фото`, 'success');
-        refreshArtistPhotos(); // ← обновляем список
-    
-    } else {
-        alert('❌ Ошибка загрузки фото');
+    try {
+        const res = await fetch('/api/local/upload-artist-photos', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await res.json();
+        console.log('📥 Ответ сервера:', data);
+
+        if (data.success) {
+            showNotification(`✅ ${data.message}`, 'success');
+            // Очищаем input
+            input.value = '';
+            // Обновляем список фото
+            refreshArtistPhotos();
+        } else {
+            showNotification(`❌ Ошибка: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('❌ Ошибка загрузки фото:', error);
+        showNotification('❌ Ошибка соединения с сервером', 'error');
     }
 }
 
 async function refreshArtistPhotos() {
-    const res = await fetch('/api/dropbox/list-artist-photos');
-    const data = await res.json();
-    const container = document.getElementById('artistPhotosList');
-    container.innerHTML = '';
+    try {
+        console.log('🔄 Обновление списка фото...');
+        const res = await fetch('/api/local/artist-photos');
+        const data = await res.json();
+        const container = document.getElementById('artistPhotosList');
+        const countElement = document.getElementById('photosCount');
 
-    if (!data.length) {
-        container.innerHTML = '<p>Нет загруженных фото</p>';
+        console.log('📊 Данные фото:', data);
+
+        // Обновляем счетчик
+        if (countElement) {
+            const count = data.photos ? data.photos.length : 0;
+            countElement.textContent = `${count} ${getPhotoWord(count)}`;
+        }
+
+        if (!data.photos || data.photos.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state" style="grid-column: 1 / -1; text-align: center; padding: 40px;">
+                    <div class="icon" style="font-size: 64px; margin-bottom: 16px;">🖼️</div>
+                    <h3 style="margin: 0 0 8px 0; color: var(--text-light);">Нет загруженных фото</h3>
+                    <p style="margin: 0; color: var(--text-muted);">Загрузите фото артистов для использования в презентациях</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = data.photos.map(photo => `
+            <div class="artist-photo-card">
+                <img src="${photo.url}?t=${Date.now()}" 
+                     alt="${photo.artist_name}"
+                     onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE0MCIgdmlld0JveD0iMCAwIDIwMCAxNDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwMCIgaGVpZ2h0PSIxNDAiIGZpbGw9IiMxRjJGMzgiIHJ4PSI4Ii8+PHRleHQgeD0iMTAwIiB5PSI3MCIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE0IiBmaWxsPSIjNkM3MjdCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSI+${photo.artist_name}</dGV4dD48L3N2Zz4='">
+                <div class="filename">${escapeHtml(photo.artist_name)}</div>
+                <div style="font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 12px;">
+                    ${photo.size_mb || ''}
+                </div>
+                <div class="photo-actions">
+                    <a href="${photo.url}" target="_blank" class="download-link" title="Просмотр">
+                        <span class="icon">👁️</span>
+                        Просмотр
+                    </a>
+                    <button class="btn btn-danger btn-small" onclick="deleteArtistPhoto('${photo.filename}')" title="Удалить">
+                        <span class="icon">🗑️</span>
+                        Удалить
+                    </button>
+                </div>
+            </div>
+        `).join('');
+
+    } catch (error) {
+        console.error('❌ Ошибка обновления списка фото:', error);
+        const container = document.getElementById('artistPhotosList');
+        container.innerHTML = `
+            <div class="empty-state" style="grid-column: 1 / -1; text-align: center; padding: 40px;">
+                <div class="icon" style="font-size: 64px; margin-bottom: 16px;">❌</div>
+                <h3 style="margin: 0 0 8px 0; color: var(--error);">Ошибка загрузки</h3>
+                <p style="margin: 0; color: var(--text-muted);">Не удалось загрузить список фото</p>
+            </div>
+        `;
+    }
+}
+
+// Вспомогательная функция для правильного склонения
+function getPhotoWord(count) {
+    if (count % 10 === 1 && count % 100 !== 11) return 'фото';
+    if (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 10 || count % 100 >= 20)) return 'фото';
+    return 'фото';
+}
+
+async function deleteArtistPhoto(filename) {
+    if (!confirm(`Удалить фото ${filename}?`)) return;
+
+    try {
+        const res = await fetch(`/api/local/artist-photo/${filename}`, {
+            method: 'DELETE'
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            showNotification('✅ Фото удалено', 'success');
+            refreshArtistPhotos();
+        } else {
+            showNotification(`❌ Ошибка удаления: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Ошибка удаления фото:', error);
+        showNotification('❌ Ошибка удаления фото', 'error');
+    }
+}
+
+async function uploadBasePptx() {
+    const input = document.getElementById('uploadBasePptx');
+    if (!input || !input.files || input.files.length === 0) {
+        showNotification('❌ Выберите файл base.pptx', 'error');
         return;
     }
 
-    for (const photo of data) {
-        const card = document.createElement('div');
-        card.className = 'artist-photo-card';
-        card.innerHTML = `
-            <img src="${photo.download_url}" alt="${photo.artist_name}">
-            <div class="filename">${photo.artist_name}</div>
-            <a href="${photo.download_url}" target="_blank" class="download-link">📥 Скачать</a>
-        `;
-        container.appendChild(card);
+    const file = input.files[0];
+    console.log('📤 Загрузка base.pptx:', file.name, file.size, file.type);
+
+    showNotification(`📤 Загружаем ${file.name}...`, 'info');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const res = await fetch('/api/local/upload-base-pptx', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await res.json();
+        console.log('📥 Ответ сервера:', data);
+
+        if (data.success) {
+            showNotification(`✅ ${data.message} (${(data.size / 1024 / 1024).toFixed(2)} MB)`, 'success');
+            // Очищаем input
+            input.value = '';
+            // Обновляем информацию
+            refreshBasePptx();
+        } else {
+            showNotification(`❌ Ошибка: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('❌ Ошибка загрузки base.pptx:', error);
+        showNotification('❌ Ошибка соединения с сервером', 'error');
     }
 }
 
 async function refreshBasePptx() {
-    const res = await fetch('/api/dropbox/list-base-pptx');
-    const data = await res.json();
-    const block = document.getElementById('basePptxBlock');
-    block.innerHTML = '';
+    try {
+        console.log('🔄 Обновление информации о base.pptx...');
+        const res = await fetch('/api/local/base-pptx');
+        const data = await res.json();
+        const block = document.getElementById('basePptxBlock');
 
-    if (!data.success || !data.download_url) {
-        block.innerHTML = '<p>Файл base.pptx не найден</p>';
-        return;
+        console.log('📊 Данные base.pptx:', data);
+
+        if (data.exists) {
+            const sizeMB = (data.size / 1024 / 1024).toFixed(2);
+            const statusClass = data.size > 0 ? 'success' : 'warning';
+
+            block.innerHTML = `
+                <div class="base-pptx-info">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+                        <div>
+                            <h4 style="margin: 0 0 8px 0; color: var(--text-light);">📄 base.pptx</h4>
+                            <p style="margin: 0; color: var(--text-muted);">${data.message || 'Шаблон презентации готов к использованию'}</p>
+                        </div>
+                        <span class="status-indicator ${statusClass}">
+                            ${data.size > 0 ? '✅ Готов' : '⚠️ Ошибка'}
+                        </span>
+                    </div>
+                    
+                    <div class="file-info">
+                        <div><strong>Размер:</strong> ${sizeMB} MB</div>
+                        <div><strong>Статус:</strong> Файл найден</div>
+                        <div><strong>Путь:</strong> /base.pptx</div>
+                    </div>
+                    
+                    <div class="pptx-actions">
+                        <a href="${data.download_url}" class="btn btn-primary" download>
+                            <span class="icon">📥</span>
+                            Скачать шаблон
+                        </a>
+                        <button class="btn btn-secondary" onclick="document.getElementById('uploadBasePptx').click()">
+                            <span class="icon">🔄</span>
+                            Заменить файл
+                        </button>
+                        <button class="btn btn-warning" onclick="downloadBasePptxFromDropbox()">
+                            <span class="icon">📥</span>
+                            Скачать из облака
+                        </button>
+                    </div>
+                </div>
+            `;
+        } else {
+            block.innerHTML = `
+                <div class="base-pptx-info">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+                        <div>
+                            <h4 style="margin: 0 0 8px 0; color: var(--text-light);">📄 base.pptx</h4>
+                            <p style="margin: 0; color: var(--text-muted);">${data.message || 'Шаблон презентации не найден'}</p>
+                        </div>
+                        <span class="status-indicator error">❌ Отсутствует</span>
+                    </div>
+                    
+                    <div class="file-info">
+                        <div><strong>Статус:</strong> Файл не найден</div>
+                        <div><strong>Решение:</strong> Загрузите или скачайте шаблон</div>
+                    </div>
+                    
+                    <div class="pptx-actions">
+                        <button class="btn btn-primary" onclick="document.getElementById('uploadBasePptx').click()">
+                            <span class="icon">📤</span>
+                            Загрузить файл
+                        </button>
+                        <button class="btn btn-primary" onclick="downloadBasePptxFromDropbox()">
+                            <span class="icon">📥</span>
+                            Скачать из облака
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('❌ Ошибка обновления информации о base.pptx:', error);
+        const block = document.getElementById('basePptxBlock');
+        block.innerHTML = `
+            <div class="base-pptx-info">
+                <div style="text-align: center; color: var(--error);">
+                    <h4>❌ Ошибка загрузки</h4>
+                    <p>Не удалось получить информацию о base.pptx</p>
+                </div>
+            </div>
+        `;
+    }
+}
+
+// Инициализация файловой системы
+document.addEventListener('DOMContentLoaded', function () {
+    console.log('🎵 Инициализация файловой системы...');
+
+    // Обработчики загрузки файлов
+    const baseInput = document.getElementById('uploadBasePptx');
+    if (baseInput) {
+        baseInput.addEventListener('change', function (e) {
+            console.log('📄 Base PPTX выбран:', e.target.files[0]);
+            if (e.target.files.length > 0) {
+                uploadBasePptx();
+            }
+        });
     }
 
-    block.innerHTML = `
-        <h4>📄 base.pptx</h4>
-        <p>Файл презентации доступен для скачивания:</p>
-        <a href="${data.download_url}" target="_blank">📥 Скачать base.pptx</a>
-    `;
-}
+    const photosInput = document.getElementById('uploadArtistPhotos');
+    if (photosInput) {
+        photosInput.addEventListener('change', function (e) {
+            console.log('🖼️ Фото выбраны:', e.target.files);
+            if (e.target.files.length > 0) {
+                uploadArtistPhotos();
+            }
+        });
+    }
+
+    // Инициализация данных
+    refreshArtistPhotos();
+    refreshBasePptx();
+
+    console.log('✅ Файловая система готова');
+});
 
 
 

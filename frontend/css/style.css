@@ -2130,3 +2130,309 @@ header {
         border-radius: 6px;
         margin-bottom: 8px;
     }
+/* =========================
+   LOCAL FILES STYLES
+   ========================= */
+
+.local-section {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+}
+
+    .local-section h3 {
+        margin: 0 0 20px 0;
+        color: var(--text-light);
+        font-size: 18px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+.download-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+}
+
+    .download-actions .btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 20px;
+        font-weight: 600;
+    }
+
+/* Base PPTX Card */
+.base-pptx-card {
+    margin-top: 20px;
+}
+
+.base-pptx-info {
+    background: linear-gradient(135deg, var(--bg-dark), var(--bg-card));
+    border-radius: 12px;
+    padding: 20px;
+    border: 1px solid var(--border);
+}
+
+.file-info {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 16px;
+    border-radius: 8px;
+    margin: 16px 0;
+    border-left: 4px solid var(--primary);
+}
+
+    .file-info strong {
+        color: var(--text-light);
+        display: inline-block;
+        width: 80px;
+    }
+
+.pptx-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+    .pptx-actions .btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 16px;
+    }
+
+/* Artist Photos Grid */
+.artist-photos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.artist-photo-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    transition: all 0.3s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+    .artist-photo-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+        border-color: var(--primary);
+    }
+
+    .artist-photo-card img {
+        width: 100%;
+        height: 140px;
+        object-fit: cover;
+        border-radius: 8px;
+        margin-bottom: 12px;
+        border: 1px solid var(--border);
+    }
+
+    .artist-photo-card .filename {
+        font-weight: 600;
+        color: var(--text-light);
+        margin-bottom: 12px;
+        text-align: center;
+        font-size: 14px;
+        line-height: 1.3;
+        flex-grow: 1;
+    }
+
+.photo-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+}
+
+    .photo-actions .btn-small {
+        padding: 6px 12px;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+.download-link {
+    background: var(--success);
+    color: white;
+    padding: 6px 12px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.3s ease;
+}
+
+    .download-link:hover {
+        background: #059669;
+        transform: translateY(-1px);
+    }
+
+/* Form Groups for Local Section */
+.local-section .form-group {
+    margin-bottom: 20px;
+}
+
+    .local-section .form-group label {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--text-light);
+        font-weight: 600;
+    }
+
+.local-section .form-input {
+    width: 100%;
+    max-width: 400px;
+}
+
+/* Upload Area Styling */
+.upload-area {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    text-align: center;
+    margin: 20px 0;
+    transition: all 0.3s ease;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+    .upload-area:hover {
+        border-color: var(--primary);
+        background: rgba(255, 255, 255, 0.05);
+    }
+
+    .upload-area .icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.7;
+    }
+
+    .upload-area h4 {
+        margin: 0 0 8px 0;
+        color: var(--text-light);
+    }
+
+    .upload-area p {
+        margin: 0 0 20px 0;
+        color: var(--text-muted);
+        font-size: 14px;
+    }
+
+/* Status Indicators */
+.status-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+    .status-indicator.success {
+        background: rgba(34, 197, 94, 0.1);
+        color: #16a34a;
+        border: 1px solid rgba(34, 197, 94, 0.2);
+    }
+
+    .status-indicator.warning {
+        background: rgba(245, 158, 11, 0.1);
+        color: #d97706;
+        border: 1px solid rgba(245, 158, 11, 0.2);
+    }
+
+    .status-indicator.error {
+        background: rgba(239, 68, 68, 0.1);
+        color: #dc2626;
+        border: 1px solid rgba(239, 68, 68, 0.2);
+    }
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .artist-photos-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 16px;
+    }
+
+    .download-actions {
+        flex-direction: column;
+    }
+
+        .download-actions .btn {
+            justify-content: center;
+        }
+
+    .pptx-actions {
+        flex-direction: column;
+    }
+
+    .local-section {
+        padding: 20px;
+    }
+}
+
+/* Animation for new items */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.artist-photo-card {
+    animation: fadeInUp 0.3s ease;
+}
+/* Дополнительные утилиты */
+.local-header {
+    margin-bottom: 32px;
+}
+
+    .local-header .subtitle {
+        color: var(--text-muted);
+        margin: 8px 0 0 0;
+        font-size: 16px;
+    }
+
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.photos-count {
+    color: var(--text-muted);
+    font-size: 14px;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+.empty-state {
+    text-align: center;
+    padding: 40px 20px;
+}
+
+    .empty-state .icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.5;
+    }

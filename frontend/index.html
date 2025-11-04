@@ -17,7 +17,7 @@
                 <button class="tab-btn active" data-tab="media">📁 Медиатека</button>
                 <button class="tab-btn" data-tab="presentation">🎬 Презентация</button>
                 <button class="tab-btn" data-tab="tickets">🎫 Билеты</button>
-                <button class="tab-btn" data-tab="dropbox">☁️ Dropbox</button>
+                <button class="tab-btn" data-tab="local">💾 Файлы</button>
                 <button class="tab-btn" data-tab="status">📊 Статус</button>
             </nav>
         </header>
@@ -115,31 +115,82 @@ Another Artist - Another Song
 
             <div id="mediaStatus" class="status"></div>
         </div>
-        <!-- Вкладка dropbox -->
-        <div id="dropbox" class="tab-content">
-            <h2>☁️ Управление Dropbox</h2>
-            <!-- Заголовок -->
-            <h3>📂 Загруженные файлы</h3>
-            <div class="form-group">
-                <label>📤 Загрузить новый base.pptx:</label>
-                <input type="file" id="uploadBasePptx" accept=".pptx">
-                <button onclick="uploadBasePptx()">⬆️ Загрузить</button>
-            </div>
-
-            <div class="form-group">
-                <label>📸 Фото артистов:</label>
-                <input type="file" id="uploadArtistPhotos" accept="image/*" multiple>
-                <button onclick="uploadArtistPhotos()">⬆️ Загрузить фото артистов</button>
-            </div>
-
-            <button onclick="refreshArtistPhotos()">🔄 Обновить список фото</button>
-            <div id="artistPhotosList" class="artist-photos-grid">
-                <!-- Фото появятся здесь -->
-            </div>
-            <div id="basePptxBlock" class="base-pptx-card" style="margin-top: 20px;">
-                <!-- Информация о base.pptx появится здесь -->
-            </div>
+        <!-- Вкладка Файлы -->
+<div id="local" class="tab-content">
+    <div class="local-header">
+        <h2>💾 Управление файлами</h2>
+        <p class="subtitle">Работа с базовыми файлами системы</p>
+    </div>
+    
+    <!-- Скачивание из Dropbox -->
+    <div class="local-section">
+        <h3>📥 Быстрое скачивание</h3>
+        <p class="text-muted">Скачайте необходимые файлы из облачного хранилища</p>
+        
+        <div class="download-actions">
+            <button class="btn btn-primary" onclick="downloadBasePptxFromDropbox()">
+                <span class="icon">📄</span>
+                Скачать base.pptx
+            </button>
+            <button class="btn btn-primary" onclick="downloadArtistPhotosFromDropbox()">
+                <span class="icon">🖼️</span>
+                Скачать фото артистов
+            </button>
         </div>
+        
+        <small class="text-muted">Файлы будут сохранены в локальные папки проекта</small>
+    </div>
+
+    <!-- Управление base.pptx -->
+    <div class="local-section">
+        <h3>📂 Шаблон презентации</h3>
+        <p class="text-muted">Основной файл для генерации презентаций</p>
+        
+        <div class="upload-area">
+            <div class="icon">📄</div>
+            <h4>Загрузить новый base.pptx</h4>
+            <p>Выберите файл в формате .pptx для замены текущего шаблона</p>
+            <input type="file" id="uploadBasePptx" accept=".pptx" style="display: none;">
+            <button class="btn btn-secondary" onclick="document.getElementById('uploadBasePptx').click()">
+                <span class="icon">📤</span>
+                Выбрать файл
+            </button>
+        </div>
+        
+        <div id="basePptxBlock" class="base-pptx-card">
+            <!-- Информация о base.pptx -->
+        </div>
+    </div>
+
+    <!-- Управление фото артистов -->
+    <div class="local-section">
+        <h3>🖼️ Фото артистов</h3>
+        <p class="text-muted">Управление фотографиями в папке artists</p>
+        
+        <div class="upload-area">
+            <div class="icon">🖼️</div>
+            <h4>Добавить новые фото</h4>
+            <p>Загрузите изображения артистов для автоматического использования в презентациях</p>
+            <input type="file" id="uploadArtistPhotos" accept="image/*" multiple style="display: none;">
+            <button class="btn btn-secondary" onclick="document.getElementById('uploadArtistPhotos').click()">
+                <span class="icon">📤</span>
+                Выбрать фото
+            </button>
+        </div>
+        
+        <div class="toolbar" style="margin: 20px 0;">
+            <button class="btn btn-secondary" onclick="refreshArtistPhotos()">
+                <span class="icon">🔄</span>
+                Обновить список
+            </button>
+            <div class="photos-count" id="photosCount">0 фото</div>
+        </div>
+        
+        <div id="artistPhotosList" class="artist-photos-grid">
+            <!-- Фото из папки artists -->
+        </div>
+    </div>
+</div>
         <!-- Вкладка Презентация -->
         <div id="presentation" class="tab-content">
             <div class="generator-card simple">
@@ -171,9 +222,8 @@ Another Artist - Another Song
                     <ul style="margin: 10px 0; padding-left: 20px;">
                         <li>Презентация создается в формате PowerPoint (.pptx)</li>
                         <li>Автоматически добавляются фото артистов</li>
-                        <li>Создаются нарезанные аудио-отрезки для каждого трека</li>
-                        <li>Все файлы упаковываются в ZIP архив</li>
-                        <li>Для работы необходимо минимум 1 трек в медиатеке</li>
+                        <li>Создаются нарезанные аудио-отрезки для каждого трека</li>                        
+                        <li>Для корректной работы необходимо ровно 120 трек в медиатеке</li>
                     </ul>
                 </div>
             </div>
