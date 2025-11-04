@@ -1770,148 +1770,142 @@ async def upload_background(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Ошибка загрузки фона: {str(e)}")
 
 # -------- Photo processing helpers --------
-proxy = "https://84.52.125.113:8082"
-async def download_tracks_batch(tracks: list, max_size_mb: int = 40, proxy: str | None = None) -> list:
+
+async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     """
-    Скачивание треков с YouTube по порядку с ограничением размера,
+    Скачивание треков с Hitmotop по порядку с ограничением размера,
     анализом сегмента и поиском фото. ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ.
-    proxy: str = "http://login:password@45.136.21.33:8080"
     """
     import asyncio, os, shutil, tempfile
     from pathlib import Path
-    import yt_dlp
-    from concurrent.futures import ThreadPoolExecutor
+    import aiohttp
+    import json
+    from bs4 import BeautifulSoup
 
     MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
     total = len(tracks)
-    
-    # Создаем директории один раз
-    temp_dir = os.path.join(tempfile.gettempdir(), "youtube_dl_fast")
+
+    # Создаём директории один раз
+    temp_dir = os.path.join(tempfile.gettempdir(), "hitmotop_dl")
     downloads_dir = os.path.join(BASE_DIR, "downloads")
     os.makedirs(temp_dir, exist_ok=True)
     os.makedirs(downloads_dir, exist_ok=True)
-    
-    logger.info(f"🎵 Начинаем параллельное скачивание {total} треков")
+
+    logger.info(f"🎵 Начинаем параллельное скачивание {total} треков с Hitmotop")
+
+    async def fetch_hitmotop_mp3_url(artist: str, title: str) -> str | None:
+        query = f"{artist} {title}".replace(" ", "%20")
+        search_url = f"https://rus.hitmotop.com/search?q={query}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(search_url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.error(f"HTTP error при поиске {artist} - {title}: {resp.status}")
+                    return None
+                text = await resp.text()
+
+        soup = BeautifulSoup(text, "html.parser")
+        li = soup.find("li", class_="tracks__item")
+        if not li:
+            logger.error(f"❌ Трек не найден на Hitmotop: {artist} - {title}")
+            return None
+
+        data_musmeta = li.get("data-musmeta")
+        if not data_musmeta:
+            logger.error(f"❌ Нет data-musmeta в первом <li> для {artist} - {title}")
+            return None
+
+        try:
+            track_data = json.loads(data_musmeta)
+            mp3_url = track_data.get("url")
+            if mp3_url and mp3_url.endswith(".mp3"):
+                return mp3_url
+            else:
+                logger.error(f"❌ В первом <li> нет ссылки на MP3 для {artist} - {title}")
+                return None
+        except Exception as e:
+            logger.error(f"❌ Ошибка парсинга data-musmeta для {artist} - {title}: {e}")
+            return None
 
     async def process_single_track(i: int, track_info: dict) -> dict:
         """Обработка одного трека"""
+        artist = track_info.get("artist", "")
+        title = track_info.get("title", "")
+        logger.info(f"🔍 [{i+1}/{total}] Обработка трека: {artist} - {title}")
+
+        mp3_url = await fetch_hitmotop_mp3_url(artist, title)
+        if not mp3_url:
+            return {"success": False, "error": f"Нет ссылки на MP3 для трека: {track_info}"}
+
+        filename_safe = f"{artist.replace('/', '-').replace('\\', '-')[:50]} - {title.replace('/', '-').replace('\\', '-')[:50]}.mp3"
+        final_path = os.path.join(downloads_dir, filename_safe)
+
         try:
-            query = f"{track_info.get('artist', '')} {track_info.get('title', '')}".strip() or track_info.get("original_line", "")
-            logger.info(f"🔍 [{i+1}/{total}] {query}")
+            # Скачиваем MP3
+            async with aiohttp.ClientSession() as session:
+                async with session.get(mp3_url) as resp:
+                    if resp.status != 200:
+                        logger.error(f"❌ Ошибка скачивания {artist} - {title}: HTTP {resp.status}")
+                        return {"success": False, "error": f"HTTP {resp.status}"}
+                    with open(final_path, "wb") as f:
+                        f.write(await resp.read())
 
-            ydl_opts = {
-                "format": "bestaudio[ext=m4a]/bestaudio/best",
-                "outtmpl": os.path.join(temp_dir, f"{i:03d}_%(id)s.%(ext)s"),
-                "quiet": True,
-                "noplaylist": True,
-                "no_warnings": True,
-                "socket_timeout": 30,
-                "retries": 2,
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio", 
-                    "preferredcodec": "mp3", 
-                    "preferredquality": "192"
-                }],
-                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-            }
+            # Проверка размера
+            if os.path.getsize(final_path) > MAX_SIZE_BYTES:
+                logger.warning(f"⚠️ {artist} - {title} слишком большой, пропуск")
+                os.remove(final_path)
+                return {"success": False, "error": f"Файл слишком большой: {artist} - {title}"}
 
-            # 🔹 Здесь вставляем прокси
-            if proxy:
-                ydl_opts["proxy"] = proxy
-
-            def _download():
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-                        if not info or "entries" not in info or not info["entries"]:
-                            return None
-                        
-                        entry = info["entries"][0]
-                        duration = entry.get('duration', 0)
-                        if duration > 1800:
-                            logger.warning(f"⚠️ Слишком длинное видео: {duration} сек")
-                            return None
-                            
-                        ydl.download([f"ytsearch1:{query}"])
-                        
-                        import glob
-                        pattern = os.path.join(temp_dir, f"{i:03d}_*.*")
-                        files = glob.glob(pattern)
-                        return files[0] if files else None
-                except Exception as e:
-                    logger.error(f"Ошибка загрузки {query}: {e}")
-                    return None
-
-            loop = asyncio.get_event_loop()
-            downloaded_file = await loop.run_in_executor(None, _download)
-            
-            if not downloaded_file:
-                return {"success": False, "error": f"Не удалось скачать: {query}"}
-
-            file_size = os.path.getsize(downloaded_file)
-            if file_size > MAX_SIZE_BYTES:
-                logger.warning(f"⚠️ {query} слишком большой ({file_size//1024//1024} МБ), пропуск")
-                try:
-                    os.remove(downloaded_file)
-                except:
-                    pass
-                return {"success": False, "error": f"Файл слишком большой: {query}"}
-
-            safe_artist = track_info.get("artist", "Unknown").replace('/', '-').replace('\\', '-')[:50]
-            safe_title = track_info.get("title", "Unknown").replace('/', '-').replace('\\', '-')[:50]
-            final_filename = f"{safe_artist} - {safe_title}.mp3"
-            final_path = os.path.join(downloads_dir, final_filename)
-            
-            await loop.run_in_executor(None, shutil.move, downloaded_file, final_path)
-
-            track = media_library.add_track(final_path, final_filename)
+            # Добавляем в медиатеку
+            track = media_library.add_track(final_path, filename_safe)
             if not track:
-                return {"success": False, "error": f"Ошибка добавления {final_filename}"}
+                return {"success": False, "error": f"Ошибка добавления {filename_safe}"}
 
-            # Параллельные задачи
+            # Параллельные задачи: обновление метаданных, анализ сегмента, поиск фото
+            loop = asyncio.get_event_loop()
             tasks = [
                 loop.run_in_executor(None, lambda: media_library.update_track(track["id"], {
-                    "artist": safe_artist,
-                    "title": safe_title,
-                    "metadata": {"source": "internet_download", "query": query}
+                    "artist": artist,
+                    "title": title,
+                    "metadata": {"source": "hitmotop", "url": mp3_url}
                 })),
                 loop.run_in_executor(None, lambda: audio_editor.suggest_best_segment(final_path)),
-                loop.run_in_executor(None, lambda: image_searcher.fetch_artist_png(safe_artist, track["id"]))
+                loop.run_in_executor(None, lambda: image_searcher.fetch_artist_png(artist, track["id"]))
             ]
-
             metadata_result, segment_result, image_result = await asyncio.gather(*tasks, return_exceptions=True)
 
             if not isinstance(segment_result, Exception) and segment_result is not None:
                 media_library.update_track_segment(track["id"], segment_result, 30)
-            
             if not isinstance(image_result, Exception) and image_result:
                 media_library.update_track(track["id"], {"image_path": image_result})
-                logger.info(f"✅ Фото для {safe_artist} добавлено")
+                logger.info(f"✅ Фото для {artist} добавлено")
 
-            return {"success": True, "file_path": final_path, "track_id": track["id"], "artist": safe_artist}
+            return {"success": True, "file_path": final_path, "track_id": track["id"], "artist": artist}
 
         except Exception as e:
-            logger.error(f"❌ Ошибка {track_info.get('original_line', '')}: {e}")
+            logger.error(f"❌ Ошибка скачивания/обработки {artist} - {title}: {e}")
             return {"success": False, "error": str(e)}
 
+    # Параллельная обработка треков
     semaphore = asyncio.Semaphore(3)
-    
     async def limited_download(i, track_info):
         async with semaphore:
             return await process_single_track(i, track_info)
-    
-    tasks = [asyncio.create_task(limited_download(i, track_info)) for i, track_info in enumerate(tracks)]
+
+    tasks = [asyncio.create_task(limited_download(i, t)) for i, t in enumerate(tracks)]
     results = await asyncio.gather(*tasks)
-    
+
+    # Логируем прогресс
     successful = len([r for r in results if r.get('success')])
     logger.info(f"🎉 Параллельное скачивание завершено: {successful}/{total} успешно")
-    
+
+    # Очистка временных файлов
     try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, shutil.rmtree, temp_dir, True)
+        shutil.rmtree(temp_dir, True)
     except Exception as e:
         logger.warning(f"⚠️ Ошибка очистки временных файлов: {e}")
-    
+
     return results
 
 
