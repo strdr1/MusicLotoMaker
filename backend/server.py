@@ -1297,26 +1297,46 @@ async def delete_artist_photo(track_id: int):
         logger.error(f"❌ Ошибка удаления фото: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка удаления фото: {str(e)}")
 
+from fastapi import HTTPException
+from fastapi.responses import FileResponse
+import os
+
 @app.get("/api/tracks/{track_id}/artist-photo")
 async def get_artist_photo(track_id: int):
+    track = media_library.get_track(track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail="Трек не найден")
+
     try:
-        track = media_library.get_track(track_id)
-        if not track:
-            raise HTTPException(status_code=404, detail="Трек не найден")
+        # Проверяем существующее фото
         image_path = track.get('image_path')
         if image_path and os.path.exists(image_path):
-            return FileResponse(image_path,
-                                filename=f"artist_{track['artist']}.png",
-                                media_type='image/png')
-        placeholder_path = await create_placeholder_image(track['artist'], track_id)
-        if placeholder_path and os.path.exists(placeholder_path):
-            return FileResponse(placeholder_path,
-                                filename=f"artist_{track['artist']}_placeholder.png",
-                                media_type='image/png')
+            return FileResponse(
+                image_path,
+                filename=f"artist_{track['artist']}.png",
+                media_type='image/png'
+            )
+
+        # Используем image_searcher для поиска или placeholder
+        image_path = image_searcher.fetch_artist_png(track['artist'], track_id)
+
+        if image_path and os.path.exists(image_path):
+            return FileResponse(
+                image_path,
+                filename=f"artist_{track['artist']}_placeholder.png",
+                media_type='image/png'
+            )
+
+        # Если нет файла, поднимаем 404
         raise HTTPException(status_code=404, detail="Фото артиста не найдено")
+
+    except HTTPException:
+        # Пропускаем HTTPException без изменения
+        raise
     except Exception as e:
-        logger.error(f"❌ Ошибка получения фото: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка получения фото: {str(e)}")
+        # Остальные ошибки логируем и возвращаем 500
+        logger.exception(f"Ошибка получения фото для {track['artist']}: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка получения фото")
 
 # -------- Segments & Timings --------
 
