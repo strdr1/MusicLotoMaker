@@ -29,12 +29,6 @@
                 <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
                     📁 Загрузить треки
                 </button>
-                <button class="btn btn-secondary" onclick="loadTracks()">
-                    🔄 Обновить
-                </button>
-                <button class="btn btn-warning" id="saveTimingsBtn" onclick="saveAllTimings()">
-                    💾 Записать тайминги
-                </button>
                 <button class="btn btn-danger" onclick="clearTracks()">
                     🗑️ Очистить все
                 </button>
@@ -50,9 +44,8 @@
                         <textarea id="trackList" class="form-input" rows="8" placeholder="Формат:
 Исполнитель - Название трека
 Another Artist - Another Song
-Просто название трека
-Название (Исполнитель)"></textarea>
-                        <small class="text-muted">Поддерживаются форматы: "Исполнитель - Название", "Название (Исполнитель)" или просто название</small>
+"></textarea>
+                        <small class="text-muted">Исполнитель - Название</small>
                     </div>
 
                     <div class="list-search-actions">
@@ -306,7 +299,7 @@ Another Artist - Another Song
 
                                     <div class="setting-item">
                                         <label>Позиция имени артиста: <span id="artistPositionValue">90%</span></label>
-                                        <input id="t_artist_position" type="range" class="form-slider" min="7" max="90" value="90">
+                                        <input id="t_artist_position" type="range" class="form-slider" min="7" max="80" value="80">
                                         <small>Сверху: 0% ↓ Снизу: 100%</small>
                                     </div>
 
@@ -320,6 +313,7 @@ Another Artist - Another Song
                                 <div class="generate-section">
                                     <button id="generateTicketsBtn" class="btn btn-large btn-primary">🎫 Сгенерировать билеты</button>
                                     <div id="ticketsDownloadSection" style="display: none; margin-top: 10px;">
+
                                         <p>📁 Папка с билетами: <span id="ticketsFolderPath"></span></p>
                                         <a id="ticketsDownloadLink" class="btn btn-success" download>📥 Скачать билеты</a>
                                     </div>

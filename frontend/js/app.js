@@ -64,8 +64,7 @@ document.addEventListener('DOMContentLoaded', function () {
     updateTracksCount();
     loadSystemStatus();
     setupEventListeners();
-    addTimingsButton();
-    addDebugButton(); // Добавляем кнопку дебага
+ 
     refreshArtistPhotos();
     refreshBasePptx();
 

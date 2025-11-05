@@ -1,28 +1,28 @@
 ﻿// static/js/tickets.js
-// Исправленная версия с автоматическим обновлением треков
+// Исправленная версия: превью стабильно после получения >= 36 треков
 
 const API_BASE_URL = '/api';
 const TRACKS_ENDPOINTS = ['/api/tracks'];
 
 const TICKETS_API = `/api/tickets/generate`;
 let allTracks = [];
-let previewTracks = [];
+let previewTracks = []; // фиксированный кэш для превью (36 элементов)
 let autoRefreshInterval = null;
 let lastTrackCount = 0;
+let previewCells = []; // Массив DOM-элементов ячеек для быстрого доступа
 
 /** Установка значений по умолчанию */
 function setDefaultTicketSettings() {
     console.log('🎨 Установка настроек билетов по умолчанию...');
 
-    // Устанавливаем значения по умолчанию
     const elements = {
         't_text_color': '#666666',
         't_accent_color': '#000000',
         't_title_position': 0,
         't_artist_position': 90,
         't_vertical_padding': 5,
-        't_bold': true, // чекбокс включен по умолчанию
-        't_upper': false // чекбокс выключен по умолчанию
+        't_bold': true,
+        't_upper': false
     };
 
     Object.entries(elements).forEach(([id, value]) => {
@@ -73,45 +73,38 @@ function updatePreviewStats() {
     }
 }
 
-/** Генерация случайного набора треков для превью */
-function generateRandomPreviewTracks() {
+/**
+ * Формирование фиксированного набора превью.
+ * Вызывается ТОЛЬКО когда allTracks изменился (количество или состав).
+ * НЕ вызывается при изменении дизайна.
+ */
+function generateFixedPreviewTracks() {
     if (!allTracks || allTracks.length < 36) {
-        return [];
+        previewTracks = [];
+        console.log('❌ Недостаточно треков для фиксированного превью.');
+        return;
     }
 
-    // Всегда генерируем новый случайный набор при обновлении
-    const shuffled = [...allTracks].sort(() => Math.random() - 0.5);
-    previewTracks = shuffled.slice(0, 36);
-    console.log('🎲 Сгенерирован новый набор превью треков');
-
-    return previewTracks;
+    // Генерируем новый фиксированный набор (берем первые 36 из allTracks)
+    // Или можно сделать shuffle и взять первые 36, если хочется рандом, но фиксированный
+    // Для полной фиксации используем первые 36
+    previewTracks = allTracks.slice(0, 36);
+    console.log('✅ Фиксированный набор превью обновлён (первые 36 треков из allTracks).');
 }
 
-/** Перегенерировать превью треки */
-function regeneratePreviewTracks() {
-    if (allTracks && allTracks.length >= 36) {
-        const shuffled = [...allTracks].sort(() => Math.random() - 0.5);
-        previewTracks = shuffled.slice(0, 36);
-        console.log('🔄 Превью треки перегенерированы');
-        updateTicketPreview();
-    }
-}
-
-/** Загрузка треков для билетов с принудительным обновлением */
+/** Загрузка треков для билетов */
 async function loadTracksForTickets(forceRefresh = false) {
     let lastErr = null;
 
-    // Сбрасываем preview если принудительное обновление
     if (forceRefresh) {
-        previewTracks = [];
-        console.log('🔄 Принудительное обновление треков...');
+        previewTracks = []; // Сбрасываем кэш при принудительном обновлении
+        console.log('🔄 Принудительное обновление треков (сброс кэша превью)...');
     }
 
     for (const url of TRACKS_ENDPOINTS) {
         try {
             console.log('[tickets] попытка fetch', url);
 
-            // Добавляем timestamp для избежания кеширования
             const timestamp = Date.now();
             const fetchUrl = `${url}?t=${timestamp}&force=${forceRefresh}`;
 
@@ -132,12 +125,10 @@ async function loadTracksForTickets(forceRefresh = false) {
             const data = await resp.json();
             console.log('[tickets] raw tracks data:', data);
 
-            // Универсальное извлечение массива треков
             const arr = (() => {
                 if (Array.isArray(data)) return data;
                 if (Array.isArray(data.tracks)) return data.tracks;
                 if (Array.isArray(data.data)) return data.data;
-                // ищем первый массив в объекте
                 for (const key in data) {
                     if (Array.isArray(data[key])) return data[key];
                 }
@@ -150,7 +141,6 @@ async function loadTracksForTickets(forceRefresh = false) {
                 continue;
             }
 
-            // Проверяем, изменилось ли количество треков
             const newTrackCount = arr.length;
             const tracksChanged = newTrackCount !== lastTrackCount;
 
@@ -159,11 +149,16 @@ async function loadTracksForTickets(forceRefresh = false) {
 
             console.log(`[tickets] загружено треков: ${allTracks.length} из ${url}, изменилось: ${tracksChanged}`);
 
-            // Всегда сбрасываем preview при обновлении треков
-            previewTracks = [];
+            // Обновляем previewTracks ТОЛЬКО если треки изменились
+            if (tracksChanged) {
+                console.log('🔄 Кэш превью обновляется из-за изменения треков.');
+                generateFixedPreviewTracks(); // Обновляем фиксированный набор
+                updateTicketPreview(); // Пересоздаем превью, т.к. треки изменились
+            } else {
+                console.log('♻️ Кэш превью оставлен без изменений (tracks не изменились).');
+            }
 
             updatePreviewStats();
-            updateTicketPreview();
 
             return; // успешно загрузили, выходим
         } catch (err) {
@@ -180,6 +175,7 @@ async function loadTracksForTickets(forceRefresh = false) {
     console.error('[tickets] все попытки неудачны', lastErr);
     setPreviewDebug(msg);
     updatePreviewStats();
+    updateTicketPreview(); // Обновляем превью, чтобы показать ошибку
 }
 
 /** Автоматическое обновление треков каждые 10 секунд */
@@ -189,12 +185,11 @@ function startAutoRefresh() {
     }
 
     autoRefreshInterval = setInterval(() => {
-        // Обновляем только если вкладка активна
         if (!document.hidden) {
             console.log('🔄 Авто-обновление треков...');
-            loadTracksForTickets(true).catch(console.error);
+            loadTracksForTickets(false).catch(console.error); // Не forceRefresh, только если изменились
         }
-    }, 10000); // 10 секунд
+    }, 10000);
 
     console.log('✅ Авто-обновление треков запущено (каждые 10 сек)');
 }
@@ -212,14 +207,13 @@ function stopAutoRefresh() {
 function setupVisibilityHandler() {
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) {
-            // При возвращении на вкладку сразу обновляем треки
             console.log('📱 Возврат на вкладку - обновляем треки');
-            loadTracksForTickets(true).catch(console.error);
+            loadTracksForTickets(true).catch(console.error); // forceRefresh при возврате
         }
     });
 }
 
-/** Чтение настроек UI с новыми названиями */
+/** Чтение настроек UI */
 function readTicketDesignFromUI() {
     return {
         font_family: document.getElementById('t_font')?.value || 'Helvetica',
@@ -235,9 +229,13 @@ function readTicketDesignFromUI() {
     };
 }
 
-/** Обновление увеличенного превью 6x6 с белым фоном */
+/**
+ * Создание или обновление превью.
+ * Если previewTracks изменился, пересоздаем ячейки.
+ * Если изменился только дизайн, обновляем стиль существующих ячеек.
+ */
 function updateTicketPreview() {
-    console.log('🔄 Обновление превью билета...');
+    console.log('🔄 Обновление превью билета (дизайн)...');
 
     const cfg = readTicketDesignFromUI();
     const previewCard = document.getElementById('ticketPreviewCard');
@@ -249,129 +247,179 @@ function updateTicketPreview() {
         return;
     }
 
-    // Заголовок (Билет №)
-    titleEl.style.color = '#000000';
-    titleEl.style.fontFamily = cfg.font_family;
-    titleEl.style.textTransform = cfg.uppercase ? 'uppercase' : 'none';
-    titleEl.style.fontWeight = cfg.bold ? '700' : '600';
+    // Обновляем заголовок (Билет №)
+    titleEl.style.cssText = `
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        font-weight: 700;
+        margin-bottom: 20px;
+        font-size: 24px;
+        padding: 12px;
+        border-radius: 10px;
+        text-align: center;
+    `;
+    titleEl.textContent = 'БИЛЕТ №1 — МУЗЫКАЛЬНОЕ ЛОТО';
 
     updatePreviewStats();
 
-    if (!allTracks || allTracks.length < 36) {
-        const needed = 36 - (allTracks ? allTracks.length : 0);
+    if (!previewTracks || previewTracks.length < 36) {
+        const needed = 36 - (previewTracks ? previewTracks.length : 0);
         setPreviewDebug(`❗ Для генерации билета требуется минимум 36 треков.\n\n` +
-            `Найдено треков: ${allTracks ? allTracks.length : 0}\n` +
+            `Найдено треков: ${previewTracks ? previewTracks.length : 0}\n` +
             `Необходимо ещё: ${needed} треков\n\n` +
             `Загрузите треки во вкладке "📁 Медиатека"`);
         return;
     }
 
-    grid.innerHTML = '';
-    grid.style.display = 'grid';
-    grid.style.gridTemplateColumns = 'repeat(6, 1fr)';
-    grid.style.gap = '8px';
-    grid.style.padding = '15px';
-    grid.style.background = '#ffffff';
+    // --- КЛЮЧЕВАЯ ЛОГИКА: ---
+    // Если ячейки еще не созданы или previewTracks изменился, создаем их заново.
+    if (grid.childElementCount !== 36) { // Простая проверка, нет ли уже 36 ячеек
+        console.log('🆕 Пересоздание ячеек превью...');
+        grid.innerHTML = '';
+        grid.style.display = 'grid';
+        grid.style.gridTemplateColumns = 'repeat(6, 1fr)';
+        grid.style.gap = '6px';
+        grid.style.padding = '20px';
+        grid.style.background = '#ffffff';
+        grid.style.borderRadius = '12px';
 
-    // Всегда генерируем новый случайный набор
-    const currentPreviewTracks = generateRandomPreviewTracks();
+        for (let i = 0; i < 36; i++) {
+            const track = previewTracks[i] || { title: `Трек ${i + 1}`, artist: 'Артист' };
+            const titleText = cfg.uppercase ? (track.title || `Трек ${i + 1}`).toUpperCase() : (track.title || `Трек ${i + 1}`);
+            const artistText = cfg.uppercase ? (track.artist || 'Артист').toUpperCase() : (track.artist || 'Артист');
 
-    for (let i = 0; i < 36; i++) {
-        const track = currentPreviewTracks[i] || { title: `Трек ${i + 1}`, artist: 'Артист' };
-        const titleText = cfg.uppercase ? (track.title || `Трек ${i + 1}`).toUpperCase() : (track.title || `Трек ${i + 1}`);
-        const artistText = cfg.uppercase ? (track.artist || 'Артист').toUpperCase() : (track.artist || 'Артист');
+            const cell = document.createElement('div');
+            cell.style.cssText = `
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-start;
+                align-items: center;
+                background: #ffffff;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                padding: ${cfg.vertical_padding}px;
+                min-height: 70px;
+                box-sizing: border-box;
+                position: relative;
+                overflow: hidden;
+            `;
 
-        const cell = document.createElement('div');
-        cell.style.cssText = [
-            'display:flex', 'flex-direction:column', 'justify-content:flex-start',
-            'align-items:center', 'border-radius:8px', 'background:#ffffff',
-            'padding:' + cfg.vertical_padding + 'px', 'border:2px solid #e0e0e0',
-            'min-height:80px', 'box-sizing:border-box', 'overflow:hidden',
-            'position:relative', 'transition:all 0.3s ease', 'cursor:pointer'
-        ].join(';');
+            const textContainer = document.createElement('div');
+            textContainer.style.cssText = `
+                position: absolute;
+                top: 0; left: 0; right: 0; bottom: 0;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                padding: ${cfg.vertical_padding}px;
+                box-sizing: border-box;
+            `;
 
-        cell.onmouseover = () => {
-            cell.style.background = '#f8f9fa';
-            cell.style.borderColor = cfg.accent_color;
-            cell.style.transform = 'translateY(-2px) scale(1.02)';
-            cell.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
-        };
-        cell.onmouseout = () => {
-            cell.style.background = '#ffffff';
-            cell.style.borderColor = '#e0e0e0';
-            cell.style.transform = 'translateY(0) scale(1)';
-            cell.style.boxShadow = 'none';
-        };
+            const titleNode = document.createElement('div');
+            titleNode.textContent = titleText;
+            titleNode.style.cssText = `
+                font-family: ${cfg.font_family};
+                font-size: ${Math.max(6, cfg.title_size)}px;
+                font-weight: ${cfg.bold ? '700' : '400'};
+                color: ${cfg.accent_color};
+                text-align: center;
+                line-height: 1.1;
+                white-space: normal;
+                word-wrap: break-word;
+                margin-top: ${cfg.title_position}%;
+            `;
 
-        const textContainer = document.createElement('div');
-        textContainer.style.cssText = [
-            'position:absolute', 'top:0', 'left:0', 'right:0', 'bottom:0',
-            'display:flex', 'flex-direction:column', 'justify-content:space-between',
-            'padding:' + cfg.vertical_padding + 'px', 'box-sizing:border-box'
-        ].join(';');
+            const artistNode = document.createElement('div');
+            artistNode.textContent = artistText;
+            artistNode.style.cssText = `
+                font-family: ${cfg.font_family};
+                font-size: ${Math.max(6, cfg.artist_size)}px;
+                color: ${cfg.text_color};
+                opacity: 0.9;
+                text-align: center;
+                line-height: 1.1;
+                white-space: normal;
+                word-wrap: break-word;
+                margin-top: auto;
+                margin-bottom: ${100 - cfg.artist_position}%;
+            `;
 
-        const titleNode = document.createElement('div');
-        titleNode.textContent = titleText;
-        titleNode.style.fontFamily = cfg.font_family;
-        titleNode.style.fontSize = Math.max(6, cfg.title_size) + 'px';
-        titleNode.style.fontWeight = cfg.bold ? '700' : '400';
-        titleNode.style.color = cfg.accent_color;
-        titleNode.style.textAlign = 'center';
-        titleNode.style.textTransform = cfg.uppercase ? 'uppercase' : 'none';
-        titleNode.style.lineHeight = '1.1';
-        titleNode.style.whiteSpace = 'normal';
-        titleNode.style.wordWrap = 'break-word';
-        titleNode.style.marginTop = cfg.title_position + '%';
+            textContainer.appendChild(titleNode);
+            textContainer.appendChild(artistNode);
+            cell.appendChild(textContainer);
+            grid.appendChild(cell);
+        }
+    } else {
+        // Ячейки уже созданы и previewTracks не изменился — обновляем только стиль
+        console.log('🎨 Обновление стиля существующих ячеек...');
+        const cells = grid.children; // Получаем коллекцию ячеек
+        for (let i = 0; i < 36; i++) {
+            const cell = cells[i];
+            const track = previewTracks[i] || { title: `Трек ${i + 1}`, artist: 'Артист' };
+            const titleText = cfg.uppercase ? (track.title || `Трек ${i + 1}`).toUpperCase() : (track.title || `Трек ${i + 1}`);
+            const artistText = cfg.uppercase ? (track.artist || 'Артист').toUpperCase() : (track.artist || 'Артист');
 
-        const artistNode = document.createElement('div');
-        artistNode.textContent = artistText;
-        artistNode.style.fontFamily = cfg.font_family;
-        artistNode.style.fontSize = Math.max(6, cfg.artist_size) + 'px';
-        artistNode.style.color = cfg.text_color;
-        artistNode.style.opacity = '0.9';
-        artistNode.style.textAlign = 'center';
-        artistNode.style.textTransform = cfg.uppercase ? 'uppercase' : 'none';
-        artistNode.style.lineHeight = '1.1';
-        artistNode.style.whiteSpace = 'normal';
-        artistNode.style.wordWrap = 'break-word';
-        artistNode.style.marginTop = 'auto';
-        artistNode.style.marginBottom = (100 - cfg.artist_position) + '%';
+            // Обновляем стиль ячейки
+            cell.style.padding = `${cfg.vertical_padding}px`;
 
-        textContainer.appendChild(titleNode);
-        textContainer.appendChild(artistNode);
-        cell.appendChild(textContainer);
-        grid.appendChild(cell);
+            // Обновляем текст и стиль внутри
+            const textContainer = cell.firstChild;
+            const titleNode = textContainer.firstChild;
+            const artistNode = textContainer.lastChild;
+
+            titleNode.textContent = titleText;
+            titleNode.style.cssText = `
+                font-family: ${cfg.font_family};
+                font-size: ${Math.max(6, cfg.title_size)}px;
+                font-weight: ${cfg.bold ? '700' : '400'};
+                color: ${cfg.accent_color};
+                text-align: center;
+                line-height: 1.1;
+                white-space: normal;
+                word-wrap: break-word;
+                margin-top: ${cfg.title_position}%;
+            `;
+
+            artistNode.textContent = artistText;
+            artistNode.style.cssText = `
+                font-family: ${cfg.font_family};
+                font-size: ${Math.max(6, cfg.artist_size)}px;
+                color: ${cfg.text_color};
+                opacity: 0.9;
+                text-align: center;
+                line-height: 1.1;
+                white-space: normal;
+                word-wrap: break-word;
+                margin-top: auto;
+                margin-bottom: ${100 - cfg.artist_position}%;
+            `;
+        }
     }
 
-    console.log('✅ Превью билета обновлено');
+    console.log('✅ Превью билета (дизайн) обновлено');
 }
 
 /** Показать уведомление */
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
-    notification.style.cssText = [
-        'position:fixed',
-        'top:20px',
-        'right:20px',
-        'padding:15px 20px',
-        'border-radius:8px',
-        'color:white',
-        'font-weight:bold',
-        'z-index:10000',
-        'max-width:400px',
-        'box-shadow:0 4px 12px rgba(0,0,0,0.3)',
-        'transition:all 0.3s ease',
-        'transform:translateX(100%)',
-        'opacity:0'
-    ].join(';');
-
-    if (type === 'success') {
-        notification.style.background = 'linear-gradient(135deg, #10b981, #059669)';
-    } else if (type === 'error') {
-        notification.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
-    } else {
-        notification.style.background = 'linear-gradient(135deg, #3b82f6, #2563eb)';
-    }
+    notification.style.cssText = `
+        position:fixed;
+        top:20px;
+        right:20px;
+        padding:15px 20px;
+        border-radius:8px;
+        color:white;
+        font-weight:bold;
+        z-index:10000;
+        max-width:400px;
+        box-shadow:0 4px 12px rgba(0,0,0,0.3);
+        transition:all 0.3s ease;
+        transform:translateX(100%);
+        opacity:0;
+        background: ${type === 'success' ? 'linear-gradient(135deg, #10b981, #059669)' :
+            type === 'error' ? 'linear-gradient(135deg, #ef4444, #dc2626)' :
+                'linear-gradient(135deg, #3b82f6, #2563eb)'};
+    `;
 
     notification.textContent = message;
     document.body.appendChild(notification);
@@ -428,49 +476,37 @@ async function generateTickets() {
         if (resp.ok && result.success && result.download_url) {
             showNotification(`✅ ${result.message}`, 'success');
 
-            // --- НОВАЯ ЛОГИКА: Автоматическое скачивание ---
             const fullUrl = result.download_url.startsWith('/')
                 ? `${window.location.origin}${result.download_url}`
                 : result.download_url;
 
-            // Создаем временную ссылку для скачивания
             const link = document.createElement('a');
             link.href = fullUrl;
-            link.download = result.zip_file; // Указываем имя файла
+            link.download = result.zip_file;
 
-            // Добавляем в DOM, кликаем и удаляем
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
 
             console.log('✅ Автоматическое скачивание запущено:', result.zip_file);
 
-            // --- НОВАЯ ЛОГИКА: Показать блок загрузки с информацией ---
             const downloadSection = document.getElementById('downloadSection');
             if (downloadSection) {
-                // Заполняем информацию о скачивании
                 document.getElementById('downloadFileName').textContent = result.zip_file || '-';
-                // API не возвращает tickets_count и tracks_used, используем переданные значения
                 document.getElementById('downloadTicketsCount').textContent = result.tickets_count || count;
-                document.getElementById('downloadTracksUsed').textContent = result.tracks_used || '36'; // Или длина allTracks
+                document.getElementById('downloadTracksUsed').textContent = allTracks.length || 36;
 
-                // Показываем блок
                 downloadSection.style.display = 'block';
 
-                // Привязываем событие к кнопке скачивания на случай, если пользователь захочет снова скачать
-                const downloadBtn = document.getElementById('downloadTicketsBtn');
-                if (downloadBtn) {
-                    downloadBtn.onclick = function () {
-                        console.log('🎫 Повторное нажатие кнопки скачивания');
-                        // Повторяем логику скачивания
-                        const link = document.createElement('a');
-                        link.href = fullUrl;
-                        link.download = result.zip_file;
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                    };
-                }
+                document.getElementById('downloadTicketsBtn').onclick = function () {
+                    console.log('🎫 Повторное нажатие кнопки скачивания');
+                    const link = document.createElement('a');
+                    link.href = fullUrl;
+                    link.download = result.zip_file;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                };
             }
 
         } else {
@@ -484,56 +520,6 @@ async function generateTickets() {
         if (btn) {
             btn.disabled = false;
             btn.textContent = originalText;
-        }
-    }
-}
-
-
-/** Простая функция скачивания (теперь используется только для повторного скачивания) */
-function downloadFile(downloadUrl, filename) {
-    console.log('🎫 downloadFile вызвана:', downloadUrl, filename);
-
-    try {
-        // Проверяем входные параметры
-        if (!downloadUrl || !filename) {
-            throw new Error('Не указан URL или имя файла для скачивания');
-        }
-
-        const fullUrl = downloadUrl.startsWith('/')
-            ? `${window.location.origin}${downloadUrl}`
-            : downloadUrl;
-        console.log('🎫 Полный URL для скачивания:', fullUrl);
-
-        // Создаем временную ссылку для скачивания
-        const link = document.createElement('a');
-        link.href = fullUrl;
-        link.download = filename;
-
-        // Добавляем в DOM, кликаем и удаляем
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
-        showNotification(`📦 Файл "${filename}" начал скачивание...`, 'success');
-
-        // Логируем успешное скачивание
-        console.log('🎫 ✅ Скачивание запущено:', {
-            url: fullUrl,
-            filename: filename,
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        console.error('❌ Ошибка скачивания:', error);
-        showNotification(`❌ Ошибка при скачивании файла: ${error.message}`, 'error');
-
-        // Fallback: открываем в новом окне
-        try {
-            const fullUrl = `${API_BASE_URL}${downloadUrl}`;
-            window.open(fullUrl, '_blank');
-            showNotification('📦 Файл открывается в новом окне...', 'info');
-        } catch (fallbackError) {
-            console.error('❌ Fallback также не сработал:', fallbackError);
         }
     }
 }
@@ -564,45 +550,45 @@ function setupSliderValueDisplays() {
 
         updateValue();
         slider.addEventListener('input', updateValue);
-        slider.addEventListener('change', updateValue);
     });
 }
 
-/** Привязка событий */
+/**
+ * Привязка событий.
+ * Теперь updateTicketPreview вызывается при изменении дизайна, но она не пересоздает ячейки, а обновляет их стиль.
+ */
 function attachTicketSettingsEvents() {
-    const ids = [
-        't_font', 't_title_size', 't_artist_size', 't_text_color', 't_accent_color',
-        't_bold', 't_upper', 't_title_position', 't_artist_position', 't_vertical_padding'
+    const designIds = [
+        't_font', 't_title_size', 't_artist_size', 't_text_color',
+        't_accent_color', 't_bold', 't_upper'
     ];
 
-    ids.forEach(id => {
+    designIds.forEach(id => {
         const el = document.getElementById(id);
-        if (!el) {
-            console.warn(`❌ Элемент не найден: ${id}`);
-            return;
+        if (el) {
+            el.addEventListener('input', updateTicketPreview); // Обновляем превью (стиль) при изменении
         }
+    });
 
-        if (id.includes('position') || id.includes('padding')) {
+    // Слайдеры — обновляют preview с debounce, НО ТОЛЬКО СТИЛЬ
+    ['t_title_position', 't_artist_position', 't_vertical_padding'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
             let timeout;
             el.addEventListener('input', () => {
                 clearTimeout(timeout);
-                timeout = setTimeout(updateTicketPreview, 100);
+                timeout = setTimeout(updateTicketPreview, 150); // 150ms debounce
             });
-            el.addEventListener('change', updateTicketPreview);
-        } else {
-            el.addEventListener('input', updateTicketPreview);
-            el.addEventListener('change', updateTicketPreview);
         }
     });
 
     const genBtn = document.getElementById('generateTicketsBtn');
     if (genBtn) genBtn.addEventListener('click', generateTickets);
 
-    // Кнопка обновления треков
     const refreshBtn = document.getElementById('refreshTracksBtn');
     if (refreshBtn) {
         refreshBtn.addEventListener('click', () => {
-            loadTracksForTickets(true).catch(console.error);
+            loadTracksForTickets(true).catch(console.error); // Принудительно обновляет треки и превью
             showNotification('🔄 Обновление треков...', 'info');
         });
     }
@@ -620,21 +606,15 @@ function attachTicketSettingsEvents() {
 document.addEventListener('DOMContentLoaded', () => {
     console.log('🎫 Инициализация модуля билетов...');
 
-    // Устанавливаем настройки по умолчанию
     setDefaultTicketSettings();
-
     attachTicketSettingsEvents();
     setupSliderValueDisplays();
 
-    // Пытаемся загрузить треки
     loadTracksForTickets().catch(e => {
         console.warn('[tickets] Ошибка загрузки треков:', e);
     });
 
-    // Запускаем авто-обновление
     startAutoRefresh();
-
-    // Настраиваем обработчик видимости вкладки
     setupVisibilityHandler();
 
     // Начальное обновление превью
@@ -653,14 +633,6 @@ window.ticketsDebug = {
         console.log('📊 Треков в системе:', allTracks ? allTracks.length : 0);
         return allTracks ? allTracks.length : 0;
     },
-    regeneratePreview: () => {
-        console.log('🔄 Перегенерация превью...');
-        regeneratePreviewTracks();
-    },
-    startAutoRefresh: () => {
-        startAutoRefresh();
-    },
-    stopAutoRefresh: () => {
-        stopAutoRefresh();
-    }
+    startAutoRefresh,
+    stopAutoRefresh
 };
