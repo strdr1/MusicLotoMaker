@@ -1048,20 +1048,39 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                 logger.error(f"❌ {msg}")
                 continue
 
-            # --- Читаем метаданные ---
-            metadata = metadata_processor.process(file_path)
+            # --- Читаем метаданные ИЗ ИМЕНИ ФАЙЛА, а не из пути к файлу ---
+            metadata = metadata_processor.process(file.filename) # <-- Передаём только имя файла
             logger.debug(f"📄 Метаданные для {file.filename}: {metadata}")
 
+            # --- Очистка artist и title от суффиксов в скобках ---
+            # Эта очистка необходима, если metadata_processor.process НЕ гарантирует очистку
+            raw_artist = metadata.get('artist', 'Неизвестный исполнитель')
+            raw_title = metadata.get('title', 'Без названия')
+
+            # Убираем всё, что в скобках в конце строки
+            import re
+            cleaned_artist = re.sub(r'\s*\([^)]*\)$', '', raw_artist).strip()
+            cleaned_title = re.sub(r'\s*\([^)]*\)$', '', raw_title).strip()
+
+            # Обновляем метаданные
+            metadata['artist'] = cleaned_artist
+            metadata['title'] = cleaned_title
+
+            logger.debug(f"📄 Очищенные метаданные: {metadata}")
+
             # --- Добавляем в медиатеку ---
-            track = media_library.add_track(file_path, file.filename)
+            track = media_library.add_track(file_path, file.filename) # <-- original_filename = file.filename
             if not track:
                 msg = f"Не удалось добавить трек в медиатеку: {file.filename}"
                 errors.append(msg)
                 logger.error(f"❌ {msg}")
                 continue
 
-            artist_name = metadata.get('artist', 'Неизвестный исполнитель')
-            title = metadata.get('title', 'Без названия')
+            # Извлекаем artist и title из очищенных результатов парсинга
+            artist_name = cleaned_artist
+            title = cleaned_title
+
+            # Обновляем трек в медиатеке с корректными artist и title
             update_data = {'artist': artist_name, 'title': title, 'metadata': metadata}
             media_library.update_track(track['id'], update_data)
 
@@ -1102,7 +1121,6 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
     logger.info(f"📊 Итог загрузки: {response_message}")
 
     return {"message": response_message, "tracks": saved_tracks, "errors": errors}
-
 
 
 

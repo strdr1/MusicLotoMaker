@@ -194,32 +194,38 @@ class SmartAIMusicParser:
             logger.warning(f"⚠️ Имя артиста выглядит как путь, возвращаем 'Неизвестный': {artist}")
             return "Неизвестный исполнитель"
 
-        artist_lower = artist.lower()
+        # Убираем суффиксы в скобках
+        artist_cleaned = re.sub(r'\s*\([^)]*\)$', '', artist).strip()
+
+        artist_lower = artist_cleaned.lower()
 
         # Автоматическое определение языка
         has_cyrillic = any(c in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя' for c in artist_lower)
         has_translit = any(p in artist_lower for p in ['sh', 'ch', 'zh', 'yu', 'ya', 'iy', 'ij'])
 
         if has_cyrillic:
-            return artist.title()
+            return artist_cleaned.title()
         elif has_translit:
-            return self._transliterate_russian(artist)
+            return self._transliterate_russian(artist_cleaned)
         else:
-            return artist.upper()
+            return artist_cleaned.upper()
 
     def _normalize_title(self, title):
         """Нормализация названия"""
-        title_lower = title.lower()
+        # Убираем суффиксы в скобках
+        title_cleaned = re.sub(r'\s*\([^)]*\)$', '', title).strip()
+
+        title_lower = title_cleaned.lower()
 
         has_cyrillic = any(c in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя' for c in title_lower)
         has_translit = any(p in title_lower for p in ['sh', 'ch', 'zh', 'yu', 'ya', 'iy', 'ij'])
 
         if has_cyrillic:
-            return title.capitalize()
+            return title_cleaned.capitalize()
         elif has_translit:
-            return self._transliterate_russian(title)
+            return self._transliterate_russian(title_cleaned)
         else:
-            return title
+            return title_cleaned
 
     def _transliterate_russian(self, text):
         """Транслитерация русских слов"""
@@ -330,13 +336,17 @@ class SmartAIMusicParser:
 
             # 4. АВТОМАТИЧЕСКАЯ НОРМАЛИЗАЦИЯ (ПОСЛЕДНИЙ ВАРИАНТ)
             explanation += "\n\n3. 🤖 АВТОМАТИЧЕСКАЯ НОРМАЛИЗАЦИЯ:"
-            artist = self._normalize_artist(artist_raw)
-            title = self._normalize_title(title_raw)
+            # Убираем скобки ДО нормализации
+            artist_cleaned_before_norm = re.sub(r'\s*\([^)]*\)$', '', artist_raw).strip()
+            title_cleaned_before_norm = re.sub(r'\s*\([^)]*\)$', '', title_raw).strip()
+            
+            artist = self._normalize_artist(artist_cleaned_before_norm)
+            title = self._normalize_title(title_cleaned_before_norm)
             result = {"artist": artist, "title": title}
 
-            explanation += f"\n- Артист: '{artist_raw}' → '{artist}'"
-            explanation += f"\n- Название: '{title_raw}' → '{title}'"
-            explanation += "\n- Логика: автоматическое определение языка и транслитерация"
+            explanation += f"\n- Артист: '{artist_raw}' → '{artist_cleaned_before_norm}' → '{artist}'"
+            explanation += f"\n- Название: '{title_raw}' → '{title_cleaned_before_norm}' → '{title}'"
+            explanation += "\n- Логика: удаление скобок, затем автоматическое определение языка и транслитерация"
 
         explanation += f"\n\n🎯 ФИНАЛЬНОЕ РЕШЕНИЕ: {json.dumps(result, ensure_ascii=False)}"
 

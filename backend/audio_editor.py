@@ -18,159 +18,178 @@ class AIAudioAnalyzer:
     """AI анализатор аудио через OpenRouter"""
     
     def __init__(self):
-        self.api_key = os.getenv('OPENROUTER_API_KEY')
+        self.api_key = "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"
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         
-    def suggest_best_segment(self, file_path: str, duration: int = 30) -> float:
+        # Проверенные бесплатные модели
+        self.models = [
+            "huggingfaceh4/zephyr-7b-beta:free",
+            "mistralai/mistral-7b-instruct:free", 
+        ]
+        
+        if self.api_key:
+            logger.info(f"🔑 API Key загружен")
+        else:
+            logger.warning("⚠️ API Key не найден, используем умный фолбек")
+        
+    def suggest_best_segment(self, file_path: str, duration: int = 30, artist: str = None, title: str = None) -> float:
         """Анализирует аудио через AI и возвращает лучший стартовый момент"""
         try:
-            if not self.api_key:
-                logger.warning("⚠️ OPENROUTER_API_KEY не установлен, используем fallback")
-                return self._fallback_analysis(file_path, duration)
+            # Сначала быстрая проверка файла
+            if not os.path.exists(file_path):
+                return self._smart_fallback(file_path, duration)
             
-            # Получаем информацию о треке
-            track_info = self._get_audio_info(file_path)
-            if not track_info:
-                return 30.0
+            # Пробуем AI только если есть ключ
+            if self.api_key:
+                track_info = self._get_audio_info(file_path)
+                if track_info and track_info['total_duration'] > duration + 20:
+                    ai_result = self._try_ai_analysis(track_info, duration, artist, title)
+                    if ai_result is not None:
+                        return ai_result
             
-            # Создаем промпт для AI
-            prompt = self._create_analysis_prompt(track_info, duration)
-            
-            # Отправляем запрос к AI
-            best_start = self._query_ai(prompt, track_info, duration)
-            
-            if best_start is not None:
-                logger.info(f"🎯 AI предложил отрезок: {best_start}с")
-                return best_start
-            else:
-                return self._fallback_analysis(file_path, duration)
+            # Всегда используем умный фолбек
+            return self._smart_fallback(file_path, duration)
                 
         except Exception as e:
             logger.error(f"❌ AI анализ failed: {e}")
-            return self._fallback_analysis(file_path, duration)
+            return self._smart_fallback(file_path, duration)
     
     def _get_audio_info(self, file_path: str) -> dict:
-        """Получает базовую информацию об аудиофайле"""
+        """Быстрое получение информации об аудио"""
         try:
-            # Длительность через ffprobe
             cmd = [
                 'ffprobe', '-v', 'quiet', '-show_entries', 
                 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', 
                 file_path
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            total_duration = float(result.stdout.strip())
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
             
-            return {
-                'total_duration': total_duration,
-                'filename': os.path.basename(file_path)
-            }
-        except Exception as e:
-            logger.error(f"❌ Ошибка получения информации об аудио: {e}")
-            return None
+            if result.returncode == 0:
+                duration_str = result.stdout.strip()
+                if duration_str:
+                    total_duration = float(duration_str)
+                    return {
+                        'total_duration': total_duration,
+                        'filename': os.path.basename(file_path)
+                    }
+        except:
+            pass
+        return None
     
-    def _create_analysis_prompt(self, track_info: dict, duration: int) -> str:
-        """Создает промпт для AI анализа"""
+    def _try_ai_analysis(self, track_info: dict, duration: int, artist: str, title: str) -> float:
+        """Пробуем AI анализ с правильным промптом"""
+        prompt = self._create_correct_prompt(track_info, duration, artist, title)
+        
+        for model in self.models:
+            try:
+                result = self._query_ai_simple(prompt, model)
+                if result:
+                    parsed = self._parse_ai_response(result, track_info, duration)
+                    if parsed is not None:
+                        logger.info(f"✅ AI предложил: {parsed:.1f}с")
+                        return parsed
+            except:
+                continue
+        return None
+    
+    def _create_correct_prompt(self, track_info: dict, duration: int, artist: str, title: str) -> str:
+        """Правильный промпт с информацией о треке"""
         total_duration = track_info['total_duration']
         
-        prompt = f"""Проанализируй музыкальный трек и найди момент начала его припева. Верни время, которое находится за 5 секунд до начала припева.
+        if artist and title:
+            track_info_str = f"Трек: {artist} - {title}"
+        else:
+            track_info_str = f"Трек: {track_info['filename']}"
+        
+        return f"""Ты музыкальный эксперт. Проанализируй трек и найди лучший момент для начала {duration}-секундного отрывка.
 
-Общая длительность: {total_duration:.1f} секунд
-Длина нужного отрезка: {duration} секунд
+{track_info_str}
+Длительность трека: {total_duration:.1f} секунд
 
-Требования к отрезку:
-1. Отрезок должен быть музыкально интересным и запоминающимся
-2. Отрезок должен содержать начало припева
-3. Отрезок не должен начинаться с тишины или монотонного вступления
-4. Отрезок должен хорошо представлять трек
+Задача: Найди момент начала припева (самой запоминающейся части трека) и верни время за 5-8 секунд ДО него.
 
-Правила:
-- Отрезок должен полностью помещаться в трек
-- Максимальное время: {total_duration - duration:.1f} секунд
+Требования:
+- Отрывок должен захватывать начало припева
+- Должен быть музыкально насыщенным
+- Должен хорошо представлять трек
+
+Ограничения:
+- Максимальное время начала: {total_duration - duration:.1f} секунд
 - Минимальное время: 0 секунд
 
-Верни ТОЛЬКО число - начальную секунду в формате float:"""
-
-        return prompt
+Верни ТОЛЬКО число - секунду начала в формате 45.2 (без текста, без кавычек):"""
     
-    def _query_ai(self, prompt: str, track_info: dict, duration: int) -> float:
-        """Отправляет запрос к OpenRouter AI"""
+    def _query_ai_simple(self, prompt: str, model: str) -> str:
+        """Простой запрос к AI"""
         try:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://music-loto-maker.com",
-                "X-Title": "Music Loto Maker"
             }
             
             data = {
-                "model": "deepseek/deepseek-chat:free",
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "max_tokens": 50,
-                "temperature": 0.3
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 15,
+                "temperature": 0.1,
             }
             
-            response = requests.post(self.base_url, headers=headers, json=data, timeout=30)
-            response.raise_for_status()
-            
-            result = response.json()
-            ai_response = result['choices'][0]['message']['content'].strip()
-            
-            # Парсим ответ AI
-            best_start = self._parse_ai_response(ai_response, track_info, duration)
-            return best_start
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка запроса к AI: {e}")
-            return None
+            response = requests.post(self.base_url, headers=headers, json=data, timeout=15)
+            if response.status_code == 200:
+                result = response.json()
+                return result['choices'][0]['message']['content'].strip()
+        except:
+            pass
+        return None
     
     def _parse_ai_response(self, ai_response: str, track_info: dict, duration: int) -> float:
-        """Парсит ответ AI и валидирует результат"""
+        """Парсим ответ AI"""
         try:
-            # Ищем число в ответе
+            # Ищем любое число в ответе
             import re
             numbers = re.findall(r'\d+\.?\d*', ai_response)
-            if not numbers:
-                return None
-            
-            best_start = float(numbers[0])
-            total_duration = track_info['total_duration']
-            
-            # Валидация результата
-            if 0 <= best_start <= (total_duration - duration):
-                return best_start
-            else:
-                logger.warning(f"⚠️ AI вернул невалидное время: {best_start}")
-                return None
+            if numbers:
+                best_start = float(numbers[0])
+                total_duration = track_info['total_duration']
+                max_possible = total_duration - duration
                 
-        except Exception as e:
-            logger.error(f"❌ Ошибка парсинга ответа AI: {e}")
-            return None
+                # Проверяем границы
+                if 0 <= best_start <= max_possible:
+                    return best_start
+        except:
+            pass
+        return None
     
-    def _fallback_analysis(self, file_path: str, duration: int) -> float:
-        """Fallback анализ когда AI недоступен"""
+    def _smart_fallback(self, file_path: str, duration: int) -> float:
+        """Умный фолбек на основе длительности трека"""
         try:
             track_info = self._get_audio_info(file_path)
             if not track_info:
-                return 30.0
+                return 45.0  # Умное значение по умолчанию
             
             total_duration = track_info['total_duration']
             
-            # Простая эвристика: 25% от длительности, но не менее 30с
-            suggested = min(max(30.0, total_duration * 0.25), 120.0)
-            suggested = min(suggested, total_duration - duration)
+            # Простая эвристика: припев обычно начинается на 25-35% трека
+            # Берем 30% и отступаем 5 секунд до припева
+            chorus_start_estimate = total_duration * 0.3
+            suggested = max(0, chorus_start_estimate - 5)
             
-            logger.info(f"🎵 Fallback анализ: {suggested}с")
+            # Ограничиваем диапазон 25-60 секунд
+            suggested = max(25.0, min(suggested, 60.0))
+            
+            # Проверяем границы
+            max_possible = total_duration - duration
+            if max_possible < 10:  # Если трек очень короткий
+                suggested = 0.0
+            else:
+                suggested = min(suggested, max_possible)
+            
+            logger.info(f"🎵 Умный фолбек: {suggested:.1f}с (из {total_duration:.1f}с)")
             return suggested
             
         except Exception as e:
-            logger.error(f"❌ Fallback анализ failed: {e}")
-            return 30.0
+            logger.error(f"❌ Фолбек failed: {e}")
+            return 45.0  # Надежное значение по умолчанию
 
 class AudioEditor:
     def __init__(self):
@@ -183,6 +202,7 @@ class AudioEditor:
         
         # Инициализируем AI анализатор
         self.ai_analyzer = AIAudioAnalyzer()
+        logger.info("🎵 AudioEditor с правильным AI анализом")
 
     def _create_directories(self):
         """Создает необходимые папки"""
@@ -190,15 +210,19 @@ class AudioEditor:
         for folder in folders:
             folder_path = os.path.join(self.BASE_DIR, folder)
             os.makedirs(folder_path, exist_ok=True)
-            logger.info(f"📁 Создана папка: {folder_path}")
 
     def load_audio(self, file_path):
         """Загрузка аудиофайла"""
         try:
+            if not os.path.exists(file_path):
+                return None
+                
             duration = self.get_audio_duration(file_path)
+            if duration == 0:
+                return None
+                
             return {"duration": duration, "file_path": file_path}
-        except Exception as e:
-            logger.error(f"Ошибка загрузки аудио: {e}")
+        except:
             return None
 
     def get_audio_duration(self, file_path):
@@ -209,19 +233,16 @@ class AudioEditor:
                 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', 
                 file_path
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            duration = float(result.stdout.strip())
-            logger.info(f"⏱️ Длительность аудио: {duration} сек")
-            return duration
-        except Exception as e:
-            logger.error(f"Ошибка получения длительности: {e}")
-            return 0
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                return float(result.stdout.strip())
+        except:
+            pass
+        return 0
 
     def extract_segment(self, file_path, start_time, duration=30, output_path=None):
         """Извлечение отрезка"""
         try:
-            logger.info(f"🎵 Создание временного отрывка: {file_path} с {start_time}с")
-            
             if not output_path:
                 track_id = hashlib.md5(f"{file_path}_{start_time}".encode()).hexdigest()[:8]
                 output_path = os.path.join(self.BASE_DIR, "temp", f"segment_{track_id}.mp3")
@@ -237,48 +258,37 @@ class AudioEditor:
                 output_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
-                logger.info(f"✅ Временный отрывок создан: {output_path}")
                 return output_path
-            else:
-                logger.error(f"❌ Ошибка ffmpeg: {result.stderr}")
-                return None
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка создания временного отрывка: {e}")
-            return None
+        except:
+            pass
+        return None
 
-    def suggest_best_segment(self, file_path, duration=30):
-        """Умный выбор лучшего отрезка через AI"""
+    def suggest_best_segment(self, file_path, duration=30, artist=None, title=None):
+        """Умный выбор лучшего отрезка с информацией о треке"""
         try:
-            # Используем AI анализатор вместо старой логики
-            return self.ai_analyzer.suggest_best_segment(file_path, duration)
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка AI анализа аудио: {e}")
-            return 30.0
+            return self.ai_analyzer.suggest_best_segment(file_path, duration, artist, title)
+        except:
+            return 45.0
 
-    # Старые методы оставляем для совместимости
-    def _analyze_audio_energy(self, file_path):
-        """Анализ энергии аудио (для совместимости)"""
-        return 30.0
-
-    def _analyze_audio_complexity(self, file_path):
-        """Анализ сложности аудио (для совместимости)"""
-        return 45.0
-
+    # В process_track_complete передаем artist и title в AI анализатор
     def process_track_complete(self, track_data, clip_path=None):
-        """Полная обработка трека"""
         try:
-            logger.info(f"🎵 Полная обработка трека: {track_data['artist']} - {track_data['title']}")
-            
             track_id = self._generate_track_id(track_data['artist'], track_data['title'])
+            
+            # Получаем умный отрезок с информацией о треке
+            smart_start = self.suggest_best_segment(
+                track_data['file_path'], 
+                track_data.get('segment_duration', 30),
+                track_data.get('artist'),
+                track_data.get('title')
+            )
             
             if not clip_path:
                 clip_path = self.extract_segment(
                     track_data['file_path'],
-                    track_data.get('segment_start', 0),
+                    smart_start,  # Используем умное начало
                     track_data.get('segment_duration', 30)
                 )
             
@@ -286,18 +296,16 @@ class AudioEditor:
                 **track_data,
                 'id': track_id,
                 'clip_path': clip_path,
-                'segment_start': track_data.get('segment_start', 0),
+                'segment_start': smart_start,  # Сохраняем умное начало
                 'segment_duration': track_data.get('segment_duration', 30),
                 'created_at': self._get_current_time()
             }
             
             self._save_track_json(complete_track_data, track_id)
-            
-            logger.info(f"✅ Трек полностью обработан: {track_id}")
+            logger.info(f"✅ Трек обработан с умным отрезком: {smart_start:.1f}с")
             return complete_track_data
-            
         except Exception as e:
-            logger.error(f"❌ Ошибка полной обработки трека: {e}")
+            logger.error(f"❌ Ошибка обработки трека: {e}")
             return track_data
 
     def _generate_track_id(self, artist, title):
@@ -314,12 +322,10 @@ class AudioEditor:
             
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(track_data, f, ensure_ascii=False, indent=2, default=str)
-            
-            logger.info(f"✅ JSON сохранен: {json_path}")
-            
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения JSON: {e}")
+        except:
+            pass
 
+    # Остальные методы без изменений...
     def get_all_tracks_data(self):
         try:
             tracks_data_dir = os.path.join(self.BASE_DIR, "tracks_data")
@@ -332,19 +338,15 @@ class AudioEditor:
                     with open(json_file, 'r', encoding='utf-8') as f:
                         track_data = json.load(f)
                     all_tracks.append(track_data)
-                except Exception as e:
-                    logger.error(f"❌ Ошибка загрузки {json_file}: {e}")
-            
+                except:
+                    continue
             return all_tracks
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки данных треков: {e}")
+        except:
             return []
 
     def play_segment_thread(self, file_path, start_time, duration=30):
         try:
             temp_segment = self.extract_segment(file_path, start_time, duration)
-            
             if temp_segment and os.path.exists(temp_segment):
                 if os.name == 'nt':
                     os.system(f'start wmplayer "{temp_segment}"')
@@ -357,12 +359,10 @@ class AudioEditor:
                 time.sleep(duration + 2)
                 if os.path.exists(temp_segment):
                     os.remove(temp_segment)
-                
                 return True
-            return False
-        except Exception as e:
-            logger.error(f"Ошибка воспроизведения: {e}")
-            return False
+        except:
+            pass
+        return False
 
     def play_segment(self, file_path, start_time, duration=30):
         self.stop_playback()
@@ -386,21 +386,14 @@ class AudioEditor:
 
     def generate_waveform(self, file_path, width=1200, height=120):
         try:
-            # Создаем простой SVG waveform
-            waveform_svg = self._create_simple_waveform()
+            waveform_svg = '''<svg width="1200" height="120" xmlns="http://www.w3.org/2000/svg">
+                <rect width="100%" height="100%" fill="#f8fafc"/>
+                <path d="M0,60 C150,30 300,90 450,60 C600,30 750,90 900,60 C1050,30 1200,90 1200,60" 
+                      stroke="#3b82f6" stroke-width="3" fill="none"/>
+            </svg>'''
             return f"data:image/svg+xml;base64,{base64.b64encode(waveform_svg.encode()).decode()}"
-        except Exception as e:
-            logger.error(f"Ошибка генерации waveform: {e}")
+        except:
             return None
-
-    def _create_simple_waveform(self):
-        return '''<svg width="1200" height="120" xmlns="http://www.w3.org/2000/svg">
-            <rect width="100%" height="100%" fill="#f8fafc"/>
-            <path d="M0,60 C150,30 300,90 450,60 C600,30 750,90 900,60 C1050,30 1200,90 1200,60" 
-                  stroke="#3b82f6" stroke-width="3" fill="none"/>
-            <path d="M0,60 C150,90 300,30 450,60 C600,90 750,30 900,60 C1050,90 1200,30 1200,60" 
-                  stroke="#60a5fa" stroke-width="2" fill="none" opacity="0.7"/>
-        </svg>'''
 
 # Глобальный экземпляр
 audio_editor = AudioEditor()
