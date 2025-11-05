@@ -1794,59 +1794,116 @@ async def upload_background(file: UploadFile = File(...)):
 async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     """
     Скачивание треков с Hitmotop по порядку с ограничением размера,
-    анализом сегмента и поиском фото. ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ.
+    анализом сегмента и поиском фото. ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ (обновлённая).
     """
-    import asyncio, os, shutil, tempfile
+    import asyncio, os, shutil, tempfile, json
     from pathlib import Path
     import aiohttp
-    import json
     from bs4 import BeautifulSoup
 
     MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
     total = len(tracks)
 
-    # Создаём директории один раз
+    # Настройки директорий
     temp_dir = os.path.join(tempfile.gettempdir(), "hitmotop_dl")
     downloads_dir = os.path.join(BASE_DIR, "downloads")
     os.makedirs(temp_dir, exist_ok=True)
     os.makedirs(downloads_dir, exist_ok=True)
 
+    # Прокси из переменных окружения (если есть)
+    PROXY = os.getenv("PROXY_URL")
+
     logger.info(f"🎵 Начинаем параллельное скачивание {total} треков с Hitmotop")
 
+    # ------------------ ОБНОВЛЁННАЯ ФУНКЦИЯ ПОИСКА MP3 ------------------
     async def fetch_hitmotop_mp3_url(artist: str, title: str) -> str | None:
-        query = f"{artist} {title}".replace(" ", "%20")
-        search_url = f"https://rus.hitmotop.com/search?q={query}"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        """
+        Ищет MP3-ссылку на Hitmotop. Поддерживает зеркала, User-Agent и прокси.
+        Также поддерживает music.pesni.fm как fallback, берёт ВТОРУЮ ссылку на трек.
+        """
+        async def fetch_from_base(base_url: str):
+            query = f"{artist} {title}".replace(" ", "%20")
+            search_url = f"{base_url}/search?q={query}"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(search_url, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.error(f"HTTP error при поиске {artist} - {title}: {resp.status}")
-                    return None
-                text = await resp.text()
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "ru,en;q=0.9",
+                "Referer": base_url + "/",
+                "Connection": "keep-alive",
+            }
 
-        soup = BeautifulSoup(text, "html.parser")
-        li = soup.find("li", class_="tracks__item")
-        if not li:
-            logger.error(f"❌ Трек не найден на Hitmotop: {artist} - {title}")
-            return None
-
-        data_musmeta = li.get("data-musmeta")
-        if not data_musmeta:
-            logger.error(f"❌ Нет data-musmeta в первом <li> для {artist} - {title}")
-            return None
-
-        try:
-            track_data = json.loads(data_musmeta)
-            mp3_url = track_data.get("url")
-            if mp3_url and mp3_url.endswith(".mp3"):
-                return mp3_url
-            else:
-                logger.error(f"❌ В первом <li> нет ссылки на MP3 для {artist} - {title}")
+            try:
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    async with session.get(search_url, proxy=PROXY, ssl=False, timeout=20) as resp:
+                        if resp.status != 200:
+                            logger.error(f"HTTP error при поиске {artist} - {title}: {resp.status} ({base_url})")
+                            return None
+                        text = await resp.text()
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка запроса к {base_url}: {e}")
                 return None
-        except Exception as e:
-            logger.error(f"❌ Ошибка парсинга data-musmeta для {artist} - {title}: {e}")
-            return None
+
+            # Парсинг HTML
+            soup = BeautifulSoup(text, "html.parser")
+
+            # === Случай: music.pesni.fm ===
+            if "pesni.fm" in base_url:
+                # Находим все кнопки "Скачать" — это <a class="text-white">
+                download_buttons = soup.find_all("a", class_="text-white")
+
+                if len(download_buttons) < 2:
+                    logger.warning(f"❌ На {base_url} найдено меньше 2 кнопок скачивания для {artist} - {title}")
+                    return None
+
+                second_button = download_buttons[1]  # Берём ВТОРУЮ кнопку!
+                mp3_url = second_button.get("href")
+
+                if mp3_url and mp3_url.endswith(".mp3"):
+                    logger.info(f"✅ Найдена MP3 ссылка (music.pesni.fm, 2-я кнопка): {mp3_url}")
+                    return mp3_url
+
+                logger.warning(f"❌ Ссылка не является .mp3 во второй кнопке: {mp3_url}")
+                return None
+
+            # === Случай: hitmotop.com и его зеркала ===
+            else:
+                li = soup.find("li", class_="tracks__item")
+                if not li:
+                    logger.warning(f"❌ Трек не найден на {base_url}: {artist} - {title}")
+                    return None
+
+                data_musmeta = li.get("data-musmeta")
+                if not data_musmeta:
+                    logger.warning(f"❌ Нет data-musmeta для {artist} - {title}")
+                    return None
+
+                try:
+                    track_data = json.loads(data_musmeta)
+                    mp3_url = track_data.get("url")
+                    if mp3_url and mp3_url.endswith(".mp3"):
+                        logger.info(f"✅ Найдена MP3 ссылка (hitmotop): {mp3_url}")
+                        return mp3_url
+                except Exception as e:
+                    logger.error(f"❌ Ошибка парсинга data-musmeta для {artist} - {title}: {e}")
+
+                return None
+
+        # Основной сайт и зеркала
+        bases = [
+            "https://rus.hitmotop.com",
+            "https://hitmotop.net",
+            "https://hitmotop.fm",
+            "https://ru.hitmotop.com",
+            "https://music.pesni.fm",  # <-- Добавлен fallback
+        ]
+
+        for base in bases:
+            mp3 = await fetch_from_base(base)
+            if mp3:
+                return mp3
+        return None
+    # ---------------------------------------------------------------------
 
     async def process_single_track(i: int, track_info: dict) -> dict:
         """Обработка одного трека с безопасным именем файла"""
@@ -1854,12 +1911,10 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
         title = track_info.get("title", "")
         logger.info(f"🔍 [{i+1}/{total}] Обработка трека: {artist} - {title}")
 
-        # Получаем ссылку на MP3 с Hitmotop
         mp3_url = await fetch_hitmotop_mp3_url(artist, title)
         if not mp3_url:
             return {"success": False, "error": f"Нет ссылки на MP3 для трека: {track_info}"}
 
-        # Формируем безопасное имя файла
         safe_artist = artist.replace('/', '-').replace('\\', '-')
         safe_title = title.replace('/', '-').replace('\\', '-')
         filename_safe = f"{safe_artist[:50]} - {safe_title[:50]}.mp3"
@@ -1867,8 +1922,9 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
 
         try:
             # Скачиваем MP3
-            async with aiohttp.ClientSession() as session:
-                async with session.get(mp3_url) as resp:
+            headers_dl = {"User-Agent": "Mozilla/5.0"}
+            async with aiohttp.ClientSession(headers=headers_dl) as session:
+                async with session.get(mp3_url, proxy=PROXY, ssl=False, timeout=60) as resp:
                     if resp.status != 200:
                         logger.error(f"❌ Ошибка скачивания {artist} - {title}: HTTP {resp.status}")
                         return {"success": False, "error": f"HTTP {resp.status}"}
@@ -1914,8 +1970,9 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             logger.error(f"❌ Ошибка скачивания/обработки {artist} - {title}: {e}")
             return {"success": False, "error": str(e)}
 
-    # Параллельная обработка треков с ограничением количества одновременных задач
+    # Параллельная обработка треков
     semaphore = asyncio.Semaphore(3)
+
     async def limited_download(i, track_info):
         async with semaphore:
             return await process_single_track(i, track_info)
@@ -1923,17 +1980,16 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     tasks = [asyncio.create_task(limited_download(i, t)) for i, t in enumerate(tracks)]
     results = await asyncio.gather(*tasks)
 
-    # Логируем прогресс
     successful = len([r for r in results if r.get('success')])
     logger.info(f"🎉 Параллельное скачивание завершено: {successful}/{total} успешно")
 
-    # Очистка временных файлов
     try:
         shutil.rmtree(temp_dir, True)
     except Exception as e:
         logger.warning(f"⚠️ Ошибка очистки временных файлов: {e}")
 
     return results
+
 
 
 
