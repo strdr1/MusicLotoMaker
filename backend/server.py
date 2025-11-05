@@ -1800,6 +1800,7 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
     from pathlib import Path
     import aiohttp
     from bs4 import BeautifulSoup
+    import time
 
     MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
     total = len(tracks)
@@ -1815,13 +1816,13 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
 
     logger.info(f"🎵 Начинаем параллельное скачивание {total} треков с Hitmotop")
 
-    # ------------------ ОБНОВЛЁННАЯ ФУНКЦИЯ ПОИСКА MP3 через Playwright (два источника) ------------------
-    async def fetch_hitmotop_mp3_url(artist: str, title: str) -> str | None:
+    # ------------------ ОБНОВЛЁННАЯ ФУНКЦИЯ ПОИСКА MP3 через Sync Playwright (два источника) ------------------
+    def fetch_hitmotop_mp3_url_sync(artist: str, title: str) -> str | None:
         """
-        Ищет MP3-ссылку на rus.hitmotop.com или music.pesni.fm через Playwright.
+        Ищет MP3-ссылку на rus.hitmotop.com или music.pesni.fm через Sync Playwright.
         Сначала пробует hitmotop.com, затем pesni.fm.
         """
-        from playwright.async_api import async_playwright
+        from playwright.sync_api import sync_playwright
         import logging
         import json
         import subprocess
@@ -1829,13 +1830,13 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
 
         logger = logging.getLogger(__name__)
 
-        # --- Внутренняя асинхронная функция для проверки и установки браузера ---
-        async def ensure_chromium():
+        # --- Внутренняя синхронная функция для проверки и установки браузера ---
+        def ensure_chromium():
             try:
                 # Проверяем, можно ли запустить браузер
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True)
-                    await browser.close()
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    browser.close()
                 logger.info("✅ Chromium уже установлен и работает.")
             except Exception as e:
                 if "Executable doesn't exist" in str(e):
@@ -1852,15 +1853,15 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                     raise
 
         # --- Функция для hitmotop.com ---
-        async def fetch_from_hitmotop():
-            await ensure_chromium()  # <-- await перед вызовом
+        def fetch_from_hitmotop():
+            ensure_chromium()  # Проверяем/устанавливаем перед запуском
 
             query = f"{artist} {title}".replace(" ", "+")
             search_url = f"https://rus.hitmotop.com/search?q={query}"
 
-            async with async_playwright() as p:
+            with sync_playwright() as p:
                 try:
-                    browser = await p.chromium.launch(
+                    browser = p.chromium.launch(
                         headless=True,
                         args=[
                             "--no-sandbox",
@@ -1871,25 +1872,29 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                             "--disable-background-timer-throttling",
                             "--disable-backgrounding-occluded-windows",
                             "--disable-renderer-backgrounding",
+                            "--disable-blink-features=AutomationControlled",
                         ]
                     )
-                    context = await browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                    context = browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+                        # Дополнительно маскируем браузер
+                        bypass_csp=True
                     )
-                    page = await context.new_page()
+                    page = context.new_page()
 
                     logger.info(f"🔍 Открываю {search_url}")
-                    await page.goto(search_url, timeout=20000)
+                    page.goto(search_url, timeout=30000)  # Увеличенный таймаут
 
                     # Ждём появления трека
+                    # Используем селектор, который ты прислал: li.tracks__item
                     track_item = page.locator("li.tracks__item").first
-                    await track_item.wait_for(state="visible", timeout=10000)
+                    track_item.wait_for(state="visible", timeout=30000)  # Увеличенный таймаут
 
                     # Получаем data-musmeta
-                    data_musmeta = await track_item.get_attribute("data-musmeta")
+                    data_musmeta = track_item.get_attribute("data-musmeta", timeout=5000)
                     if not data_musmeta:
                         logger.warning(f"❌ Нет data-musmeta для {artist} - {title} на hitmotop")
-                        await browser.close()
+                        browser.close()
                         return None
 
                     try:
@@ -1897,34 +1902,34 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                         mp3_url = track_data.get("url")
                         if mp3_url and mp3_url.endswith(".mp3"):
                             logger.info(f"✅ Найдена MP3 ссылка (hitmotop, playwright): {mp3_url}")
-                            await browser.close()
+                            browser.close()
                             return mp3_url
                     except json.JSONDecodeError:
                         logger.error(f"❌ Ошибка парсинга data-musmeta для {artist} - {title}")
                     except Exception as e:
                         logger.error(f"❌ Ошибка при обработке data-musmeta для {artist} - {title}: {e}")
 
-                    await browser.close()
+                    browser.close()
                     return None
 
                 except Exception as e:
                     logger.error(f"❌ Ошибка при поиске на hitmotop: {e}")
                     try:
-                        await browser.close()
+                        browser.close()
                     except:
                         pass
                     return None
 
         # --- Функция для pesni.fm ---
-        async def fetch_from_pesni_fm():
-            await ensure_chromium()  # <-- await перед вызовом
+        def fetch_from_pesni_fm():
+            ensure_chromium()  # Проверяем/устанавливаем перед запуском
 
             query = f"{artist} {title}".strip().replace(" ", "%20") + "%20"
             search_url = f"https://music.pesni.fm/search/{query}"
 
-            async with async_playwright() as p:
+            with sync_playwright() as p:
                 try:
-                    browser = await p.chromium.launch(
+                    browser = p.chromium.launch(
                         headless=True,
                         args=[
                             "--no-sandbox",
@@ -1935,53 +1940,55 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                             "--disable-background-timer-throttling",
                             "--disable-backgrounding-occluded-windows",
                             "--disable-renderer-backgrounding",
+                            "--disable-blink-features=AutomationControlled",
                         ]
                     )
-                    context = await browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                    context = browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+                        bypass_csp=True
                     )
-                    page = await context.new_page()
+                    page = context.new_page()
 
                     logger.info(f"🔍 Открываю {search_url}")
-                    await page.goto(search_url, timeout=20000)
+                    page.goto(search_url, timeout=30000)  # Увеличенный таймаут
 
                     # Ждём появления кнопок скачивания (те, у кого есть атрибут download)
                     download_buttons = page.locator("a.text-white[download]")
-                    await download_buttons.first.wait_for(state="visible", timeout=10000)
+                    download_buttons.first.wait_for(state="visible", timeout=30000)  # Увеличенный таймаут
 
-                    count = await download_buttons.count()
+                    count = download_buttons.count()
                     if count < 2:
                         logger.warning(f"❌ На {search_url} меньше 2 кнопок скачивания для {artist} - {title}")
-                        await browser.close()
+                        browser.close()
                         return None
 
                     # Берём вторую кнопку (индекс 1)
                     second_button = download_buttons.nth(1)
-                    href = await second_button.get_attribute("href")
+                    href = second_button.get_attribute("href")
 
                     if href and href.endswith(".mp3"):
                         logger.info(f"✅ Найдена MP3 ссылка (pesni.fm, playwright): {href}")
-                        await browser.close()
+                        browser.close()
                         return href
                     else:
                         logger.warning(f"❌ Вторая кнопка не содержит .mp3 ссылку: {href}")
-                        await browser.close()
+                        browser.close()
                         return None
 
                 except Exception as e:
                     logger.error(f"❌ Ошибка при поиске на pesni.fm: {e}")
                     try:
-                        await browser.close()
+                        browser.close()
                     except:
                         pass
                     return None
 
         # --- Основная логика: сначала hitmotop, потом pesni.fm ---
-        result = await fetch_from_hitmotop()
+        result = fetch_from_hitmotop()
         if result:
             return result
 
-        result = await fetch_from_pesni_fm()
+        result = fetch_from_pesni_fm()
         if result:
             return result
 
@@ -1995,7 +2002,10 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
         title = track_info.get("title", "")
         logger.info(f"🔍 [{i+1}/{total}] Обработка трека: {artist} - {title}")
 
-        mp3_url = await fetch_hitmotop_mp3_url(artist, title)
+        # Вызов синхронной функции через executor
+        loop = asyncio.get_event_loop()
+        mp3_url = await loop.run_in_executor(None, fetch_hitmotop_mp3_url_sync, artist, title)
+
         if not mp3_url:
             return {"success": False, "error": f"Нет ссылки на MP3 для трека: {track_info}"}
 
@@ -2027,24 +2037,34 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
                 return {"success": False, "error": f"Ошибка добавления {filename_safe}"}
 
             # Параллельные задачи: обновление метаданных, анализ сегмента, поиск фото
-            loop = asyncio.get_event_loop()
-            tasks = [
-                loop.run_in_executor(None, lambda: media_library.update_track(track["id"], {
-                    "artist": artist,
-                    "title": title,
-                    "metadata": {"source": "hitmotop", "url": mp3_url}
-                })),
-                loop.run_in_executor(None, lambda: audio_editor.suggest_best_segment(final_path)),
-                loop.run_in_executor(None, lambda: image_searcher.fetch_artist_png(artist, track["id"]))
-            ]
-            metadata_result, segment_result, image_result = await asyncio.gather(*tasks, return_exceptions=True)
+            # tasks = [
+            #     loop.run_in_executor(None, lambda: media_library.update_track(track["id"], {
+            #         "artist": artist,
+            #         "title": title,
+            #         "metadata": {"source": "hitmotop", "url": mp3_url}
+            #     })),
+            #     loop.run_in_executor(None, lambda: audio_editor.suggest_best_segment(final_path)),
+            #     loop.run_in_executor(None, lambda: image_searcher.fetch_artist_png(artist, track["id"]))
+            # ]
+            # metadata_result, segment_result, image_result = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Выполняем задачи по отдельности, чтобы лучше отслеживать ошибки
+            metadata_result = await loop.run_in_executor(None, lambda: media_library.update_track(track["id"], {
+                "artist": artist,
+                "title": title,
+                "metadata": {"source": "hitmotop", "url": mp3_url}
+            }))
+
+            segment_result = await loop.run_in_executor(None, lambda: audio_editor.suggest_best_segment(final_path))
+
+            image_result = await loop.run_in_executor(None, lambda: image_searcher.fetch_artist_png(artist, track["id"]))
 
             # Обновление сегмента
-            if not isinstance(segment_result, Exception) and segment_result is not None:
+            if segment_result is not None:
                 media_library.update_track_segment(track["id"], segment_result, 30)
 
             # Обновление фото
-            if not isinstance(image_result, Exception) and image_result:
+            if image_result:
                 media_library.update_track(track["id"], {"image_path": image_result})
                 logger.info(f"✅ Фото для {artist} добавлено")
 
@@ -2055,7 +2075,11 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             return {"success": False, "error": str(e)}
 
     # Параллельная обработка треков
-    semaphore = asyncio.Semaphore(2)  # Уменьшено количество одновременных браузеров
+    # semaphore = asyncio.Semaphore(2)  # Уменьшено количество одновременных браузеров
+    # Так как теперь fetch_hitmotop_mp3_url_sync запускает браузер синхронно,
+    # и мы используем run_in_executor, то semaphore можно увеличить или убрать.
+    # Но лучше оставить, чтобы не открыть 10 браузеров одновременно.
+    semaphore = asyncio.Semaphore(1)  # Только 1 браузер за раз, чтобы не тратить память
 
     async def limited_download(i, track_info):
         async with semaphore:
