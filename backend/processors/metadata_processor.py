@@ -41,23 +41,53 @@ class SmartAIMusicParser:
             pass
 
     def clean_filename(self, filename):
+        """
+        Очищает имя файла: убирает расширение и конечные числа (например, ID трека).
+        Не убирает timestamp в начале - это делает _parse_filename_structure.
+        """
         clean = re.sub(r'\.(mp3|wav|flac|m4a|aac)$', '', filename, flags=re.IGNORECASE)
         clean = re.sub(r'[_-]?\d+$', '', clean)
         return clean.strip(' _-')
 
     def _parse_filename_structure(self, clean_name):
-        """Парсинг структуры файла"""
-        if '-' in clean_name:
+        """
+        Парсинг структуры файла, учитывая возможный timestamp в начале.
+        """
+        # Паттерн для timestamp: YYYYMMDD_HHMMSS (или похожий)
+        # Убираем его в начале, если он есть
+        name_without_timestamp = re.sub(r'^\d{8}_\d{6}_?', '', clean_name)
+        clean_name = name_without_timestamp
+
+        # Теперь парсим по структуре
+        if ' - ' in clean_name:
+            parts = clean_name.split(' - ', 1)
+            artist_raw = parts[0].replace('_', ' ').strip()
+            title_raw = parts[1].replace('_', ' ').strip()
+            separator = "' - '"
+        elif '-' in clean_name:
+            # Если только один '-', не пробел
             parts = clean_name.split('-', 1)
             artist_raw = parts[0].replace('_', ' ').strip()
             title_raw = parts[1].replace('_', ' ').strip()
             separator = "'-'"
-        else:
+        elif '_' in clean_name:
+            # Если нет '-', пробуем '_'
             parts = clean_name.rsplit('_', 1)
-            artist_raw = parts[0].replace('_', ' ').strip()
-            title_raw = parts[1].replace('_', ' ').strip() if len(parts) > 1 else "Без названия"
-            separator = "последнее '_'"
-        
+            if len(parts) > 1:
+                artist_raw = parts[0].replace('_', ' ').strip()
+                title_raw = parts[1].replace('_', ' ').strip()
+                separator = "последнее '_'"
+            else:
+                # Если ни один из разделителей не найден, возвращаем всё как артиста
+                artist_raw = clean_name.replace('_', ' ').strip()
+                title_raw = "Без названия"
+                separator = "нет"
+        else:
+            # Если нет разделителей, возвращаем всё как артиста
+            artist_raw = clean_name.replace('_', ' ').strip()
+            title_raw = "Без названия"
+            separator = "нет"
+
         return artist_raw, title_raw, separator
 
     def _check_known_cases(self, artist_raw, title_raw):
@@ -88,7 +118,7 @@ class SmartAIMusicParser:
             'vintage': 'Vintage',
             'diskoteka avariya': 'Дискотека Авария'
         }
-        
+
         # База известных треков
         known_tracks = {
             'vladimirskij central': 'Владимирский централ',
@@ -115,7 +145,7 @@ class SmartAIMusicParser:
             'ochen horosho': 'Очень хорошо',
             'koroleva krasoty': 'Королева красоты'
         }
-        
+
         # Брендовые имена (оставляем как есть)
         brand_artists = {
             'instasamka': 'INSTASAMKA',
@@ -129,10 +159,10 @@ class SmartAIMusicParser:
             'taylor swift': 'Taylor Swift',
             'ed sheeran': 'Ed Sheeran'
         }
-        
+
         artist_lower = artist_raw.lower()
         title_lower = title_raw.lower()
-        
+
         # Сначала проверяем известных артистов
         for key, value in known_artists.items():
             if key in artist_lower:
@@ -143,28 +173,33 @@ class SmartAIMusicParser:
                 # Если трек не найден, используем базовую нормализацию
                 title = self._normalize_title(title_raw)
                 return value, title, f"Известный артист '{key}'"
-        
+
         # Проверяем брендовые имена
         for key, value in brand_artists.items():
             if key in artist_lower:
                 return value, title_raw, f"Брендовое имя артиста '{key}'"
-        
+
         # Проверяем известные треки (если артист не найден)
         for key, value in known_tracks.items():
             if key in title_lower:
                 artist = self._normalize_artist(artist_raw)
                 return artist, value, f"Известный трек '{key}'"
-        
+
         return None, None, None
 
     def _normalize_artist(self, artist):
         """Нормализация артиста"""
+        # Проверяем, не является ли artist путём
+        if os.path.isabs(artist) or os.path.sep in artist.replace('\\', '/'):
+            logger.warning(f"⚠️ Имя артиста выглядит как путь, возвращаем 'Неизвестный': {artist}")
+            return "Неизвестный исполнитель"
+
         artist_lower = artist.lower()
-        
+
         # Автоматическое определение языка
         has_cyrillic = any(c in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя' for c in artist_lower)
         has_translit = any(p in artist_lower for p in ['sh', 'ch', 'zh', 'yu', 'ya', 'iy', 'ij'])
-        
+
         if has_cyrillic:
             return artist.title()
         elif has_translit:
@@ -175,10 +210,10 @@ class SmartAIMusicParser:
     def _normalize_title(self, title):
         """Нормализация названия"""
         title_lower = title.lower()
-        
+
         has_cyrillic = any(c in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя' for c in title_lower)
         has_translit = any(p in title_lower for p in ['sh', 'ch', 'zh', 'yu', 'ya', 'iy', 'ij'])
-        
+
         if has_cyrillic:
             return title.capitalize()
         elif has_translit:
@@ -197,7 +232,7 @@ class SmartAIMusicParser:
             'r': 'р', 's': 'с', 't': 'т', 'u': 'у', 'f': 'ф',
             'c': 'ц', 'jo': 'ё', 'je': 'е'
         }
-        
+
         special_cases = {
             'yurij': 'юрий', 'yuriy': 'юрий', 'yuri': 'юрий',
             'mikhail': 'михаил', 'mihail': 'михаил',
@@ -212,18 +247,18 @@ class SmartAIMusicParser:
             'tuman': 'туман', 'lesnik': 'лесник',
             'tanec': 'танец', 'zlobnogo': 'злобного', 'geniya': 'гения'
         }
-        
+
         text_lower = text.lower()
-        
+
         # Применяем специальные случаи
         for eng, rus in special_cases.items():
             if eng in text_lower:
                 text_lower = text_lower.replace(eng, rus)
-        
+
         # Применяем общие правила
         for eng, rus in translit_map.items():
             text_lower = text_lower.replace(eng, rus)
-        
+
         # Капитализируем
         words = text_lower.split()
         return ' '.join(word.capitalize() for word in words)
@@ -233,14 +268,14 @@ class SmartAIMusicParser:
         try:
             # Простая эмуляция поиска
             query = f"{artist_raw} {title_raw}"
-            
+
             # Эмуляция проверки в музыкальных базах
             time.sleep(0.5)  # Имитация задержки сети
-            
+
             # Здесь могла бы быть реальная проверка через API
             # Но пока возвращаем None, так как это резервный вариант
             return None, None, "Интернет-поиск"
-            
+
         except Exception as e:
             logger.debug(f"Интернет-поиск: {e}")
             return None, None, None
@@ -248,10 +283,10 @@ class SmartAIMusicParser:
     def _analyze_filename(self, clean_name):
         """Основной анализ файла"""
         logger.info("🔍 Анализ файла...")
-        
+
         # 1. Парсим структуру
         artist_raw, title_raw, separator = self._parse_filename_structure(clean_name)
-        
+
         explanation = f"""🎵 ДЕТАЛЬНЫЙ АНАЛИЗ МУЗЫКАЛЬНОГО ФАЙЛА
 
 📁 ИСХОДНЫЕ ДАННЫЕ:
@@ -268,7 +303,7 @@ class SmartAIMusicParser:
         # 2. ПРОВЕРКА ПО ИЗВЕСТНЫМ СЛУЧАЯМ (ПРИОРИТЕТ)
         explanation += "\n\n1. 🔎 ПРОВЕРКА ПО ИЗВЕСТНЫМ СЛУЧАЯМ:"
         known_artist, known_title, known_reason = self._check_known_cases(artist_raw, title_raw)
-        
+
         if known_artist and known_title:
             result = {"artist": known_artist, "title": known_title}
             explanation += f"\n- ✅ НАЙДЕНО В БАЗЕ ИЗВЕСТНЫХ СЛУЧАЕВ"
@@ -283,7 +318,7 @@ class SmartAIMusicParser:
         # 3. ПРОВЕРКА В ИНТЕРНЕТЕ (РЕЗЕРВНЫЙ ВАРИАНТ)
         explanation += "\n\n2. 🌐 ПРОВЕРКА В ИНТЕРНЕТЕ:"
         internet_artist, internet_title, internet_source = self._search_internet(artist_raw, title_raw)
-        
+
         if internet_artist and internet_title:
             result = {"artist": internet_artist, "title": internet_title}
             explanation += f"\n- ✅ НАЙДЕНО В ИНТЕРНЕТЕ"
@@ -292,19 +327,19 @@ class SmartAIMusicParser:
             explanation += f"\n- Название: '{title_raw}' → '{internet_title}'"
         else:
             explanation += "\n- ❌ НЕ НАЙДЕНО В ИНТЕРНЕТЕ"
-            
+
             # 4. АВТОМАТИЧЕСКАЯ НОРМАЛИЗАЦИЯ (ПОСЛЕДНИЙ ВАРИАНТ)
             explanation += "\n\n3. 🤖 АВТОМАТИЧЕСКАЯ НОРМАЛИЗАЦИЯ:"
             artist = self._normalize_artist(artist_raw)
             title = self._normalize_title(title_raw)
             result = {"artist": artist, "title": title}
-            
+
             explanation += f"\n- Артист: '{artist_raw}' → '{artist}'"
             explanation += f"\n- Название: '{title_raw}' → '{title}'"
             explanation += "\n- Логика: автоматическое определение языка и транслитерация"
 
         explanation += f"\n\n🎯 ФИНАЛЬНОЕ РЕШЕНИЕ: {json.dumps(result, ensure_ascii=False)}"
-        
+
         return explanation, result
 
     def process(self, filename):
@@ -325,7 +360,7 @@ class SmartAIMusicParser:
         with open(path, 'w', encoding='utf-8') as f:
             f.write(f"Файл: {filename}\nОчищено: {clean_name}\n{'='*60}\n")
             f.write(explanation)
-        
+
         logger.info(f"📄 Объяснение сохранено: {path}")
         logger.info(f"✅ Результат: {result}")
 
