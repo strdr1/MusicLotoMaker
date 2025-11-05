@@ -1815,93 +1815,125 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
 
     logger.info(f"🎵 Начинаем параллельное скачивание {total} треков с Hitmotop")
 
-    # ------------------ ОБНОВЛЁННАЯ ФУНКЦИЯ ПОИСКА MP3 ------------------
+    # ------------------ ОБНОВЛЁННАЯ ФУНКЦИЯ ПОИСКА MP3 через Playwright (два источника) ------------------
     async def fetch_hitmotop_mp3_url(artist: str, title: str) -> str | None:
         """
-        Ищет MP3-ссылку на Hitmotop. Поддерживает зеркала, User-Agent и прокси.
-        Также поддерживает music.pesni.fm как fallback, берёт ВТОРУЮ ссылку на трек.
+        Ищет MP3-ссылку на rus.hitmotop.com или music.pesni.fm через Playwright.
+        Сначала пробует hitmotop.com, затем pesni.fm.
         """
-        async def fetch_from_base(base_url: str):
-            query = f"{artist} {title}".replace(" ", "%20")
-            search_url = f"{base_url}/search?q={query}"
+        from playwright.async_api import async_playwright
+        import logging
+        import json
 
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "ru,en;q=0.9",
-                "Referer": base_url + "/",
-                "Connection": "keep-alive",
-            }
+        logger = logging.getLogger(__name__)
 
-            try:
-                async with aiohttp.ClientSession(headers=headers) as session:
-                    async with session.get(search_url, proxy=PROXY, ssl=False, timeout=20) as resp:
-                        if resp.status != 200:
-                            logger.error(f"HTTP error при поиске {artist} - {title}: {resp.status} ({base_url})")
-                            return None
-                        text = await resp.text()
-            except Exception as e:
-                logger.warning(f"⚠️ Ошибка запроса к {base_url}: {e}")
-                return None
+        # --- Функция для hitmotop.com ---
+        async def fetch_from_hitmotop():
+            query = f"{artist} {title}".replace(" ", "+")
+            search_url = f"https://rus.hitmotop.com/search?q={query}"
 
-            # Парсинг HTML
-            soup = BeautifulSoup(text, "html.parser")
-
-            # === Случай: music.pesni.fm ===
-            if "pesni.fm" in base_url:
-                # Находим все кнопки "Скачать" — это <a class="text-white">
-                download_buttons = soup.find_all("a", class_="text-white")
-
-                if len(download_buttons) < 2:
-                    logger.warning(f"❌ На {base_url} найдено меньше 2 кнопок скачивания для {artist} - {title}")
-                    return None
-
-                second_button = download_buttons[1]  # Берём ВТОРУЮ кнопку!
-                mp3_url = second_button.get("href")
-
-                if mp3_url and mp3_url.endswith(".mp3"):
-                    logger.info(f"✅ Найдена MP3 ссылка (music.pesni.fm, 2-я кнопка): {mp3_url}")
-                    return mp3_url
-
-                logger.warning(f"❌ Ссылка не является .mp3 во второй кнопке: {mp3_url}")
-                return None
-
-            # === Случай: hitmotop.com и его зеркала ===
-            else:
-                li = soup.find("li", class_="tracks__item")
-                if not li:
-                    logger.warning(f"❌ Трек не найден на {base_url}: {artist} - {title}")
-                    return None
-
-                data_musmeta = li.get("data-musmeta")
-                if not data_musmeta:
-                    logger.warning(f"❌ Нет data-musmeta для {artist} - {title}")
-                    return None
-
+            async with async_playwright() as p:
                 try:
-                    track_data = json.loads(data_musmeta)
-                    mp3_url = track_data.get("url")
-                    if mp3_url and mp3_url.endswith(".mp3"):
-                        logger.info(f"✅ Найдена MP3 ссылка (hitmotop): {mp3_url}")
-                        return mp3_url
+                    browser = await p.chromium.launch(headless=True)
+                    context = await browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                    )
+                    page = await context.new_page()
+
+                    logger.info(f"🔍 Открываю {search_url}")
+                    await page.goto(search_url, timeout=20000)
+
+                    # Ждём появления трека
+                    track_item = page.locator("li.tracks__item").first
+                    await track_item.wait_for(state="visible", timeout=10000)
+
+                    # Получаем data-musmeta
+                    data_musmeta = await track_item.get_attribute("data-musmeta")
+                    if not data_musmeta:
+                        logger.warning(f"❌ Нет data-musmeta для {artist} - {title} на hitmotop")
+                        await browser.close()
+                        return None
+
+                    try:
+                        track_data = json.loads(data_musmeta)
+                        mp3_url = track_data.get("url")
+                        if mp3_url and mp3_url.endswith(".mp3"):
+                            logger.info(f"✅ Найдена MP3 ссылка (hitmotop, playwright): {mp3_url}")
+                            await browser.close()
+                            return mp3_url
+                    except json.JSONDecodeError:
+                        logger.error(f"❌ Ошибка парсинга data-musmeta для {artist} - {title}")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка при обработке data-musmeta для {artist} - {title}: {e}")
+
+                    await browser.close()
+                    return None
+
                 except Exception as e:
-                    logger.error(f"❌ Ошибка парсинга data-musmeta для {artist} - {title}: {e}")
+                    logger.error(f"❌ Ошибка при поиске на hitmotop: {e}")
+                    try:
+                        await browser.close()
+                    except:
+                        pass
+                    return None
 
-                return None
+        # --- Функция для pesni.fm ---
+        async def fetch_from_pesni_fm():
+            query = f"{artist} {title}".strip().replace(" ", "%20") + "%20"
+            search_url = f"https://music.pesni.fm/search/{query}" # Убраны лишние пробелы
 
-        # Основной сайт и зеркала
-        bases = [
-            "https://rus.hitmotop.com",
-            "https://hitmotop.net",
-            "https://hitmotop.fm",
-            "https://ru.hitmotop.com",
-            "https://music.pesni.fm",  # <-- Добавлен fallback
-        ]
+            async with async_playwright() as p:
+                try:
+                    browser = await p.chromium.launch(headless=True)
+                    context = await browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                    )
+                    page = await context.new_page()
 
-        for base in bases:
-            mp3 = await fetch_from_base(base)
-            if mp3:
-                return mp3
+                    logger.info(f"🔍 Открываю {search_url}")
+                    await page.goto(search_url, timeout=20000)
+
+                    # Ждём появления кнопок скачивания (те, у кого есть атрибут download)
+                    download_buttons = page.locator("a.text-white[download]")
+                    await download_buttons.first.wait_for(state="visible", timeout=10000)
+
+                    count = await download_buttons.count()
+                    if count < 2:
+                        logger.warning(f"❌ На {search_url} меньше 2 кнопок скачивания для {artist} - {title}")
+                        await browser.close()
+                        return None
+
+                    # Берём вторую кнопку (индекс 1)
+                    second_button = download_buttons.nth(1)
+                    href = await second_button.get_attribute("href")
+
+                    if href and href.endswith(".mp3"):
+                        logger.info(f"✅ Найдена MP3 ссылка (pesni.fm, playwright): {href}")
+                        await browser.close()
+                        return href
+                    else:
+                        logger.warning(f"❌ Вторая кнопка не содержит .mp3 ссылку: {href}")
+                        await browser.close()
+                        return None
+
+                except Exception as e:
+                    logger.error(f"❌ Ошибка при поиске на pesni.fm: {e}")
+                    try:
+                        await browser.close()
+                    except:
+                        pass
+                    return None
+
+        # --- Основная логика: сначала hitmotop, потом pesni.fm ---
+        result = await fetch_from_hitmotop()
+        if result:
+            return result
+
+        result = await fetch_from_pesni_fm()
+        if result:
+            return result
+
+        logger.error(f"❌ Не удалось найти MP3 для {artist} - {title} ни на hitmotop.com, ни на pesni.fm")
         return None
     # ---------------------------------------------------------------------
 
@@ -1924,7 +1956,7 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             # Скачиваем MP3
             headers_dl = {"User-Agent": "Mozilla/5.0"}
             async with aiohttp.ClientSession(headers=headers_dl) as session:
-                async with session.get(mp3_url, proxy=PROXY, ssl=False, timeout=60) as resp:
+                async with session.get(mp3_url, proxy=PROXY, timeout=60) as resp:  # убран ssl=False
                     if resp.status != 200:
                         logger.error(f"❌ Ошибка скачивания {artist} - {title}: HTTP {resp.status}")
                         return {"success": False, "error": f"HTTP {resp.status}"}
@@ -1971,7 +2003,7 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
             return {"success": False, "error": str(e)}
 
     # Параллельная обработка треков
-    semaphore = asyncio.Semaphore(3)
+    semaphore = asyncio.Semaphore(2)  # Уменьшено количество одновременных браузеров
 
     async def limited_download(i, track_info):
         async with semaphore:
