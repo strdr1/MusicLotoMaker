@@ -1824,17 +1824,55 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
         from playwright.async_api import async_playwright
         import logging
         import json
+        import subprocess
+        import sys
 
         logger = logging.getLogger(__name__)
 
+        # --- Внутренняя асинхронная функция для проверки и установки браузера ---
+        async def ensure_chromium():
+            try:
+                # Проверяем, можно ли запустить браузер
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    await browser.close()
+                logger.info("✅ Chromium уже установлен и работает.")
+            except Exception as e:
+                if "Executable doesn't exist" in str(e):
+                    logger.warning("❌ Chromium не установлен. Запускаю playwright install chromium...")
+                    try:
+                        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+                        logger.info("✅ Chromium успешно установлен через код.")
+                    except subprocess.CalledProcessError:
+                        logger.error("❌ Не удалось установить Chromium через код.")
+                        raise RuntimeError("Playwright Chromium installation failed.")
+                else:
+                    # Неизвестная ошибка
+                    logger.error(f"❌ Неизвестная ошибка при запуске Playwright: {e}")
+                    raise
+
         # --- Функция для hitmotop.com ---
         async def fetch_from_hitmotop():
+            await ensure_chromium()  # <-- await перед вызовом
+
             query = f"{artist} {title}".replace(" ", "+")
             search_url = f"https://rus.hitmotop.com/search?q={query}"
 
             async with async_playwright() as p:
                 try:
-                    browser = await p.chromium.launch(headless=True)
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu",
+                            "--disable-extensions",
+                            "--disable-background-timer-throttling",
+                            "--disable-backgrounding-occluded-windows",
+                            "--disable-renderer-backgrounding",
+                        ]
+                    )
                     context = await browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
                     )
@@ -1879,12 +1917,26 @@ async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
 
         # --- Функция для pesni.fm ---
         async def fetch_from_pesni_fm():
+            await ensure_chromium()  # <-- await перед вызовом
+
             query = f"{artist} {title}".strip().replace(" ", "%20") + "%20"
-            search_url = f"https://music.pesni.fm/search/{query}" # Убраны лишние пробелы
+            search_url = f"https://music.pesni.fm/search/{query}"
 
             async with async_playwright() as p:
                 try:
-                    browser = await p.chromium.launch(headless=True)
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu",
+                            "--disable-extensions",
+                            "--disable-background-timer-throttling",
+                            "--disable-backgrounding-occluded-windows",
+                            "--disable-renderer-backgrounding",
+                        ]
+                    )
                     context = await browser.new_context(
                         user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
                     )
