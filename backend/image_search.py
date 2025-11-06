@@ -222,53 +222,56 @@ class SimpleArtistImageSearch:
     def _find_local_artist_photo(self, artist_name: str) -> Optional[str]:
         if not os.path.exists(self.artists_dir):
             return None
-        
-        logger.info(f"🔍 Ультра-умный поиск локального фото для: '{artist_name}'")
-        
-        # Генерируем умные варианты
-        search_names = generate_smart_variants(artist_name)
-        logger.info(f"🔍 Варианты поиска ({len(search_names)}): {search_names[:8]}")
-        
-        supported_extensions = ['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif']
+
+        logger.info(f"🔍 Поиск локального фото для: '{artist_name}'")
+
+        # Упрощённые варианты имён
+        search_names = set()
+        base = normalize_artist_name(artist_name)
+        search_names.add(base)
+        search_names.add(base.replace(' ', ''))
+        search_names.add(base.replace(' ', '_'))
+        search_names.add(artist_name.strip())
+        search_names.add(artist_name.lower())
+        search_names.add(artist_name.title())
+
+        supported_ext = ['.jpg', '.jpeg', '.png', '.webp']
         all_files = list(Path(self.artists_dir).glob("*"))
-        
-        # Сначала ищем точные совпадения
-        for search_name in search_names:
-            for ext in supported_extensions:
-                # Прямое совпадение
-                direct_path = os.path.join(self.artists_dir, f"{search_name}{ext}")
-                if os.path.exists(direct_path):
-                    logger.info(f"📁 Найдено точное совпадение: {direct_path}")
-                    return direct_path
-                
-                # Совпадение без учета регистра
-                for file_path in all_files:
-                    if file_path.stem.lower() == search_name.lower() and file_path.suffix.lower() in supported_extensions:
-                        logger.info(f"📁 Найдено совпадение (регистр): {file_path}")
-                        return str(file_path)
-        
-        # Затем ищем по схожести
-        best_match = None
-        best_similarity = 0.7  # Минимальная схожесть
-        
-        for file_path in all_files:
-            if file_path.suffix.lower() not in supported_extensions:
+
+        # 1️⃣ Прямое совпадение по имени файла
+        for name in search_names:
+            for ext in supported_ext:
+                path = Path(self.artists_dir) / f"{name}{ext}"
+                if path.exists():
+                    logger.info(f"📁 Найдено точное совпадение: {path}")
+                    return str(path)
+
+        # 2️⃣ Совпадение без учёта регистра
+        for f in all_files:
+            if f.suffix.lower() not in supported_ext:
                 continue
-                
-            filename = file_path.stem
-            for search_name in search_names:
-                sim = similarity(filename, search_name)
-                if sim > best_similarity:
-                    best_similarity = sim
-                    best_match = str(file_path)
-                    logger.info(f"📁 Найдено по схожести {sim:.2f}: {filename} ~ {search_name}")
-        
+            if f.stem.lower() in [n.lower() for n in search_names]:
+                logger.info(f"📁 Найдено совпадение (регистр): {f}")
+                return str(f)
+
+        # 3️⃣ Поиск по схожести (немного проще)
+        best_match = None
+        best_ratio = 0.66
+        for f in all_files:
+            if f.suffix.lower() not in supported_ext:
+                continue
+            sim = similarity(f.stem, artist_name)
+            if sim > best_ratio:
+                best_ratio = sim
+                best_match = str(f)
+
         if best_match:
-            logger.info(f"✅ Выбрано лучшее совпадение: {best_match} (схожесть: {best_similarity:.2f})")
+            logger.info(f"✅ Лучшее совпадение: {best_match} ({best_ratio:.2f})")
             return best_match
-        
-        logger.info(f"🔍 Локальное фото для '{artist_name}' не найдено")
+
+        logger.info(f"🚫 Фото для '{artist_name}' не найдено")
         return None
+
 
     def _search_yandex_music_smart(self, artist_name: str) -> Optional[str]:
         """Умный поиск в Яндекс.Музыке с выбором лучшего фото"""
