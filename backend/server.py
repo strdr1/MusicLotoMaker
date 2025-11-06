@@ -7,7 +7,6 @@ from fastapi.responses import FileResponse, JSONResponse
 # === SYSTEM & PATHS ===
 import os
 import sys
-import shutil
 from pathlib import Path
 from datetime import datetime
 import tempfile
@@ -18,16 +17,11 @@ from logging.handlers import TimedRotatingFileHandler
 
 # === UTILS & LIBS ===
 import json
-import glob
 import requests
 from PIL import Image
 import io
-import random
-import inspect
-import yt_dlp
 import asyncio
 import aiohttp
-from urllib.parse import quote
 import re
 from typing import List
 
