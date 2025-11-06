@@ -1,7 +1,6 @@
 ﻿// frontend/js/app.js
 const API_BASE = '/api';
 
-
 // Глобальные переменные
 let currentTracks = [];
 let currentEditingTrack = null;
@@ -13,30 +12,18 @@ let isPlaying = false;
 let playbackInterval = null;
 let audioElement = null;
 let isGeneratingWaveform = false;
-let isUploading = false;
-// === Upload queue & progress (многопоточная загрузка) ===
-const MAX_FILES_TOTAL = 120;           // верхний предел выбранных файлов
-const MAX_CONCURRENT_UPLOADS = 6;      // параллельно грузим до 6
 
-let uploadQueue = [];                  // очередь File объектов
-let activeUploads = 0;                 // сколько сейчас в полёте
-let currentUploads = new Map();        // id -> { xhr, file, rowEl }
-let uploadCounter = 0;                 // для уникальных id строк
+// Upload queue
+const MAX_FILES_TOTAL = 120;
+const MAX_CONCURRENT_UPLOADS = 6;
+let uploadQueue = [];
+let activeUploads = 0;
+let currentUploads = new Map();
+let uploadCounter = 0;
 
-// элементы панели прогресса
-const uploadPanel = () => document.getElementById('uploadProgressPanel');
-const uploadRows = () => document.getElementById('uploadRows');
-const uploadSummary = () => document.getElementById('uploadSummary');
-const cancelAllBtn = () => document.getElementById('cancelAllUploadsBtn');
 // Volume Control
 let currentVolume = 50;
 let isMuted = false;
-
-// Drag & Drop для отрезка
-let isDragging = false;
-let dragType = null;
-let dragStartX = 0;
-let initialSegmentStart = 0;
 
 // Photo Management
 let currentPhotoTrackId = null;
@@ -44,10 +31,19 @@ let currentPhotoUrls = [];
 let currentPhotoIndex = 0;
 let isSearchingPhotos = false;
 
-// Track Download
-let isDownloading = false;
+// Download Progress
+let downloadProgress = {
+    total: 0,
+    current: 0,
+    currentTrack: '',
+    isDownloading: false,
+    results: []
+};
 
-// ===== helpers (селекторы и генератор кнопки) =====
+// Опрос статуса скачивания
+let statusPollInterval = null;
+
+// ===== helpers =====
 const $ = (sel) =>
     document.querySelector(sel) ||
     document.querySelector(`[data-id="${sel.replace('#', '').replace('.', '')}"]`);
@@ -64,9 +60,6 @@ document.addEventListener('DOMContentLoaded', function () {
     updateTracksCount();
     loadSystemStatus();
     setupEventListeners();
- 
-    refreshArtistPhotos();
-    refreshBasePptx();
 
     // авто-обновление счётчика каждые 10 сек
     setInterval(updateTracksCount, 10000);
@@ -75,28 +68,9 @@ document.addEventListener('DOMContentLoaded', function () {
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) updateTracksCount();
     });
-
-    // если сразу открыта вкладка презентации — инициализируем превью
-    const activeTab = document.querySelector('.tab-btn.active')?.dataset?.tab;
-    if (activeTab === 'presentation') {
-        initPresentationDesigner();
-    }
 });
 
 function setupEventListeners() {
-    // Отмена всех загрузок
-    const cancelAll = document.getElementById('cancelAllUploadsBtn');
-    if (cancelAll) {
-        cancelAll.addEventListener('click', cancelAllUploads);
-    }
-
-    // предупреждать, если есть активные загрузки
-    window.addEventListener('beforeunload', (e) => {
-        if (activeUploads > 0 || uploadQueue.length > 0) {
-            e.preventDefault();
-            e.returnValue = '';
-        }
-    });
     // Обработчик загрузки файлов
     const fileInput = document.getElementById('fileInput');
     if (fileInput) fileInput.addEventListener('change', handleFileUpload);
@@ -130,6 +104,17 @@ function setupEventListeners() {
             segmentStart = parseInt(e.target.value);
             updateTimelineDisplay();
         });
+    }
+
+    // Обработчики для вкладки файлов
+    const uploadBasePptx = document.getElementById('uploadBasePptx');
+    if (uploadBasePptx) {
+        uploadBasePptx.addEventListener('change', handleBasePptxUpload);
+    }
+
+    const uploadArtistPhotos = document.getElementById('uploadArtistPhotos');
+    if (uploadArtistPhotos) {
+        uploadArtistPhotos.addEventListener('change', handleArtistPhotosUpload);
     }
 
     // Горячие клавиши
@@ -190,122 +175,43 @@ function setupEventListeners() {
 }
 
 // =========================
-// DEBUG FUNCTIONS
-// =========================
-
-function addDebugButton() {
-    const toolbar = document.querySelector('.toolbar');
-    if (toolbar && !document.getElementById('debugBtn')) {
-        const debugBtn = document.createElement('button');
-        debugBtn.id = 'debugBtn';
-        debugBtn.className = 'btn btn-warning';
-        debugBtn.innerHTML = '🐛 Debug';
-        debugBtn.onclick = debugCurrentButton;
-        debugBtn.title = 'Отладочная информация о текущей кнопке';
-        toolbar.appendChild(debugBtn);
-    }
-}
-
-async function debugCurrentButton() {
-    try {
-        showNotification('🔍 Проверяем текущую кнопку...', 'info');
-
-        // Проверяем конфигурацию
-        const configResponse = await fetch(`${API_BASE}/debug/current-config`);
-        const configData = await configResponse.json();
-
-        console.log('🔧 DEBUG CONFIG:', configData);
-
-        let debugInfo = `📋 Конфигурация:\n`;
-        debugInfo += `- Файл конфига: ${configData.config_exists ? '✅ существует' : '❌ не существует'}\n`;
-        debugInfo += `- Путь к кнопке: ${configData.custom_button_path || '❌ не установлен'}\n`;
-        debugInfo += `- Background: ${JSON.stringify(configData.background_config || {})}\n`;
-
-        // Если есть путь к кнопке, проверяем файл
-        if (configData.custom_button_path) {
-            const filename = configData.custom_button_path.split('/').pop();
-            const fileResponse = await fetch(`${API_BASE}/debug/check-file/${filename}`);
-            const fileData = await fileResponse.json();
-
-            console.log('📁 DEBUG FILE:', fileData);
-
-            debugInfo += `\n📁 Проверка файла "${filename}":\n`;
-            fileData.results.forEach(result => {
-                debugInfo += `- ${result.path}: ${result.exists ? `✅ существует (${result.size} байт)` : '❌ не существует'}\n`;
-            });
-
-            if (fileData.dir_contents && fileData.dir_contents.length > 0) {
-                debugInfo += `\n📂 Содержимое custom_buttons:\n`;
-                fileData.dir_contents.forEach(file => {
-                    debugInfo += `- ${file}\n`;
-                });
-            }
-        }
-
-        // Проверяем фоновые изображения
-        if (configData.background_config && configData.background_config.imageURL) {
-            const bgFilename = configData.background_config.imageURL.split('/').pop();
-            const bgResponse = await fetch(`${API_BASE}/debug/check-file/${bgFilename}`);
-            const bgData = await bgResponse.json();
-
-            debugInfo += `\n🎨 Проверка фона "${bgFilename}":\n`;
-            bgData.results.forEach(result => {
-                debugInfo += `- ${result.path}: ${result.exists ? `✅ существует (${result.size} байт)` : '❌ не существует'}\n`;
-            });
-
-            if (bgData.bg_contents && bgData.bg_contents.length > 0) {
-                debugInfo += `\n📂 Содержимое backgrounds:\n`;
-                bgData.bg_contents.forEach(file => {
-                    debugInfo += `- ${file}\n`;
-                });
-            }
-        }
-
-        // Показываем информацию в alert и в консоли
-        alert(debugInfo);
-        console.log(debugInfo);
-
-    } catch (error) {
-        console.error('❌ Ошибка отладки:', error);
-        showNotification('❌ Ошибка отладки', 'error');
-    }
-}
-
-async function debugCheckButtonFile(filename) {
-    try {
-        const response = await fetch(`${API_BASE}/debug/check-file/${filename}`);
-        const data = await response.json();
-        console.log('🔍 DEBUG FILE CHECK:', data);
-        return data;
-    } catch (error) {
-        console.error('❌ Ошибка проверки файла:', error);
-        return null;
-    }
-}
-
-// =========================
-// INTERNET TRACK DOWNLOAD FUNCTIONS
+// INTERNET TRACK DOWNLOAD FUNCTIONS WITH IMPROVED PROGRESS
 // =========================
 
 async function downloadTrackList() {
-    if (isDownloading) {
-        showNotification('Загрузка уже выполняется', 'warning');
-        return;
-    }
-
     const trackListText = document.getElementById('trackList').value.trim();
     if (!trackListText) {
         showNotification('Введите список треков для скачивания', 'warning');
         return;
     }
 
-    isDownloading = true;
-    showNotification('🔄 Начинаем скачивание треков...', 'info');
+    // Парсим список треков
+    const tracksToDownload = parseTrackList(trackListText);
+    if (tracksToDownload.length === 0) {
+        showNotification('Не удалось распознать список треков', 'warning');
+        return;
+    }
 
-    // Показываем прогресс
-    updateDownloadProgress(0, 1, 'Подготовка...');
+    // Инициализируем прогресс
+    downloadProgress = {
+        total: tracksToDownload.length,
+        current: 0,
+        currentTrack: 'Подготовка к скачиванию...',
+        isDownloading: true,
+        results: [],
+        failedTracks: [],
+        duplicateTracks: [],
+        successfulTracks: []
+    };
+
+    // Показываем прогресс бар
+    showDownloadProgress();
+
+    // Запускаем опрос статуса сразу
+    startStatusPolling();
 
     try {
+        // Запускаем скачивание
         const response = await fetch(`${API_BASE}/tracks/download-from-list`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -323,18 +229,35 @@ async function downloadTrackList() {
         const result = await response.json();
 
         if (result.success) {
-            const successCount = result.downloaded || 0;
-            const totalCount = result.results.length;
+            const successCount = result.downloaded || result.results.filter(r => r.success).length;
+            const duplicateCount = result.duplicates || result.results.filter(r => r.duplicate).length;
+            const errorCount = result.failed || result.results.filter(r => !r.success && !r.duplicate).length;
 
-            showNotification(`✅ Скачано ${successCount} из ${totalCount} треков`, 'success');
+            // Обновляем прогресс до 100%
+            downloadProgress.current = downloadProgress.total;
+            downloadProgress.currentTrack = `Завершено: ${successCount} успешно, ${duplicateCount} дубликатов, ${errorCount} ошибок`;
+            downloadProgress.results = result.results || [];
 
-            // Показываем детали результатов
+            // Классифицируем результаты
+            downloadProgress.successfulTracks = result.results.filter(r => r.success);
+            downloadProgress.duplicateTracks = result.results.filter(r => r.duplicate);
+            downloadProgress.failedTracks = result.results.filter(r => !r.success && !r.duplicate);
+
+            downloadProgress.isDownloading = false;
+
+            updateDownloadProgress();
+
+            let message = `✅ Скачано ${successCount} из ${downloadProgress.total} треков`;
+            if (duplicateCount > 0) message += `, ${duplicateCount} дубликатов`;
+            if (errorCount > 0) message += `, ${errorCount} ошибок`;
+
+            showNotification(message, duplicateCount > 0 || errorCount > 0 ? 'warning' : 'success');
+
+            // Показываем детальные результаты
             showDownloadResults(result.results);
 
             // Обновляем список треков
             await loadTracks();
-
-            // Обновляем счетчик треков
             updateTracksCount();
         } else {
             throw new Error(result.message || 'Ошибка скачивания');
@@ -342,349 +265,496 @@ async function downloadTrackList() {
 
     } catch (error) {
         console.error('❌ Ошибка скачивания треков:', error);
+        downloadProgress.isDownloading = false;
+        updateDownloadProgress();
         showNotification(`❌ Ошибка: ${error.message}`, 'error');
     } finally {
-        isDownloading = false;
-        updateDownloadProgress(0, 0, 'Завершено');
+        // Останавливаем опрос через 3 секунды после завершения
+        setTimeout(() => {
+            stopStatusPolling();
+        }, 3000);
     }
 }
 
-function showDownloadResults(results) {
-    const progressDetails = document.getElementById('progressDetails');
-    if (!progressDetails) return;
-
-    let html = '<div style="max-height: 200px; overflow-y: auto;">';
-
-    results.forEach((result, index) => {
-        const statusClass = result.success ? 'status-found' : 'status-error';
-        const statusIcon = result.success ? '✅' : '❌';
-        const sourceInfo = result.source ? ` (${result.source})` : '';
-
-        html += `
-            <div class="track-status ${statusClass}" style="margin: 4px 0; padding: 6px; border-radius: 4px;">
-                <span style="font-weight: 600;">${index + 1}.</span>
-                ${statusIcon} ${escapeHtml(result.original_line)}${sourceInfo}
-                ${!result.success ? `<br><small style="color: var(--text-muted);">Ошибка: ${result.error}</small>` : ''}
-            </div>
-        `;
-    });
-
-    html += '</div>';
-    progressDetails.innerHTML = html;
-
-    // Показываем статистику
-    const successCount = results.filter(r => r.success).length;
-    const totalCount = results.length;
-
-    const statsHtml = `
-        <div style="margin-top: 10px; padding: 8px; background: var(--bg-dark); border-radius: 4px;">
-            <strong>Статистика:</strong> ${successCount}/${totalCount} успешно
-            (${Math.round((successCount / totalCount) * 100)}%)
-            <br><small style="color: var(--text-muted);">
-                Источник: YouTube Music
-            </small>
-        </div>
-    `;
-
-    progressDetails.insertAdjacentHTML('beforeend', statsHtml);
-}
-
-async function testParseTrackList() {
-    const trackListText = document.getElementById('trackList').value.trim();
-    if (!trackListText) {
-        showNotification('Введите список треков для проверки', 'warning');
-        return;
-    }
-
-    try {
-        const tracks = parseTrackListClient(trackListText);
-
-        showNotification(`🔍 Распознано ${tracks.length} треков`, 'info');
-
-        // Показываем детали в блоке прогресса
-        const progressDetails = document.getElementById('progressDetails');
-        if (progressDetails) {
-            let html = '<div style="max-height: 200px; overflow-y: auto;">';
-
-            tracks.forEach((track, i) => {
-                const artistDisplay = track.artist || '<span style="color: var(--warning)">Не указан</span>';
-                html += `
-                    <div style="margin: 4px 0; padding: 6px; background: var(--bg-dark); border-radius: 4px;">
-                        <strong>${i + 1}.</strong> 
-                        <span style="color: var(--primary)">${escapeHtml(artistDisplay)}</span> - 
-                        <strong>${escapeHtml(track.title)}</strong>
-                    </div>
-                `;
-            });
-
-            html += '</div>';
-            progressDetails.innerHTML = html;
-        }
-
-    } catch (error) {
-        console.error('❌ Ошибка парсинга списка:', error);
-        showNotification('Ошибка анализа списка треков', 'error');
-    }
-}
-
-function parseTrackListClient(text) {
+function parseTrackList(trackListText) {
     const tracks = [];
-    const lines = text.split('\n');
+    const lines = trackListText.trim().split('\n');
 
-    lines.forEach(line => {
+    for (let line of lines) {
         line = line.trim();
-        if (!line) return;
+        if (!line) continue;
+
+        // УДАЛЯЕМ РАЗЛИЧНЫЕ ФОРМАТЫ НУМЕРАЦИИ
+        line = line
+            .replace(/^\d+\.\s*/, '')     // "1. ", "2. ", "123. "
+            .replace(/^\d+\)\s*/, '')     // "1) ", "2) "  
+            .replace(/^-\s*/, '')         // "- ", "— "
+            .replace(/^•\s*/, '')         // "• "
+            .replace(/^\*\s*/, '');       // "* "
+
+        // Убираем лишние символы
+        line = line.replace(/[\(\)\[\]\{\}]/g, '').trim();
 
         let artist = '', title = '';
 
-        // Пробуем разные форматы
+        // Пробуем разные разделители
         const separators = [' - ', ' – ', ' — ', ' | '];
         let found = false;
 
-        for (const sep of separators) {
+        for (let sep of separators) {
             if (line.includes(sep)) {
-                const parts = line.split(sep);
-                if (parts.length >= 2) {
+                const parts = line.split(sep, 2);
+                if (parts.length === 2) {
                     artist = parts[0].trim();
-                    title = parts.slice(1).join(sep).trim();
+                    title = parts[1].trim();
                     found = true;
                     break;
                 }
             }
         }
 
-        // Формат "Название (Исполнитель)"
+        // Если разделитель не найден, пробуем другие форматы
         if (!found) {
-            const match = line.match(/(.+?)\s+\((.+?)\)$/);
+            // Формат: "Название (Артист)"
+            const match = line.match(/^(.+?)\s+\((.+?)\)$/);
             if (match) {
                 title = match[1].trim();
                 artist = match[2].trim();
                 found = true;
+            } else {
+                // Если ничего не помогло, анализируем содержимое
+                const words = line.split(' ');
+                if (words.length >= 2) {
+                    // Пробуем разные точки разделения
+                    for (let i = 1; i < words.length; i++) {
+                        const possibleArtist = words.slice(0, i).join(' ');
+                        const possibleTitle = words.slice(i).join(' ');
+
+                        if (looksLikeReasonableSplit(possibleArtist, possibleTitle)) {
+                            artist = possibleArtist;
+                            title = possibleTitle;
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Если всё ещё не нашли, используем всю строку как название
+                if (!found) {
+                    title = line;
+                    artist = 'Неизвестный исполнитель';
+                }
             }
         }
 
-        // Если формат не распознан, считаем всю строку названием
-        if (!found) {
-            title = line;
-            artist = '';
+        if (artist || title) {
+            tracks.push({
+                original_line: line,
+                artist: artist,
+                title: title,
+                search_query: artist && title ? `${artist} ${title}` : line
+            });
+        }
+    }
+
+    console.log(`🎵 Распознано ${tracks.length} треков из списка`);
+    return tracks;
+}
+
+
+function startStatusPolling() {
+    // Очищаем предыдущий интервал
+    stopStatusPolling();
+
+    statusPollInterval = setInterval(async () => {
+        try {
+            const response = await fetch(`${API_BASE}/download/status`);
+            if (response.ok) {
+                const status = await response.json();
+
+                // Обновляем прогресс
+                downloadProgress.current = status.current || 0;
+                downloadProgress.total = status.total || downloadProgress.total;
+                downloadProgress.currentTrack = status.current_track || downloadProgress.currentTrack;
+                downloadProgress.results = status.results || downloadProgress.results;
+                downloadProgress.isDownloading = status.is_running !== false;
+
+                // Автоматически классифицируем результаты для отображения
+                if (downloadProgress.results.length > 0) {
+                    downloadProgress.successfulTracks = downloadProgress.results.filter(r => r.success);
+                    downloadProgress.duplicateTracks = downloadProgress.results.filter(r => r.duplicate);
+                    downloadProgress.failedTracks = downloadProgress.results.filter(r => !r.success && !r.duplicate);
+                }
+
+                updateDownloadProgress();
+
+                console.log(`📊 Прогресс: ${downloadProgress.current}/${downloadProgress.total} - ${downloadProgress.currentTrack}`);
+
+                // Если скачивание завершено, останавливаем опрос
+                if (!downloadProgress.isDownloading && downloadProgress.current >= downloadProgress.total) {
+                    console.log('✅ Скачивание завершено, останавливаем опрос');
+                    stopStatusPolling();
+                }
+            }
+        } catch (error) {
+            console.error('Ошибка опроса статуса:', error);
+        }
+    }, 1500); // Опрашиваем каждые 1.5 секунды
+}
+
+function stopStatusPolling() {
+    if (statusPollInterval) {
+        clearInterval(statusPollInterval);
+        statusPollInterval = null;
+    }
+}
+
+function showDownloadProgress() {
+    const progressSection = document.getElementById('listSearchProgress');
+    if (progressSection) {
+        progressSection.style.display = 'block';
+    }
+    updateDownloadProgress();
+}
+
+function updateDownloadProgress() {
+    const progressStatus = document.getElementById('progressStatus');
+    const progressCount = document.getElementById('progressCount');
+    const progressFill = document.getElementById('progressFill');
+    const progressDetails = document.getElementById('progressDetails');
+
+    if (!progressStatus || !progressCount || !progressFill) return;
+
+    const percent = downloadProgress.total > 0 ?
+        Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0;
+
+    progressStatus.textContent = downloadProgress.currentTrack || 'Подготовка к скачиванию...';
+    progressCount.textContent = `${downloadProgress.current}/${downloadProgress.total}`;
+    progressFill.style.width = `${percent}%`;
+
+    if (downloadProgress.isDownloading) {
+        // Добавляем анимацию пульсации
+        progressFill.classList.add('pulsing');
+
+        // Меняем цвет в зависимости от прогресса
+        if (percent < 30) {
+            progressFill.style.background = 'linear-gradient(90deg, #ef4444, #f59e0b)';
+        } else if (percent < 70) {
+            progressFill.style.background = 'linear-gradient(90deg, #f59e0b, #3b82f6)';
+        } else {
+            progressFill.style.background = 'linear-gradient(90deg, #3b82f6, #10b981)';
         }
 
-        tracks.push({ artist, title, original_line: line });
-    });
+        // Обновляем детали прогресса в реальном времени
+        updateProgressDetails();
+    } else {
+        progressStatus.textContent = 'Скачивание завершено';
+        progressCount.textContent = `${downloadProgress.current}/${downloadProgress.total}`;
+        progressFill.style.width = '100%';
+        progressFill.style.background = downloadProgress.failedTracks.length > 0 || downloadProgress.duplicateTracks.length > 0 ?
+            'linear-gradient(90deg, #f59e0b, #d97706)' :
+            'linear-gradient(90deg, #10b981, #059669)';
+        progressFill.classList.remove('pulsing');
 
-    return tracks;
+        // Показываем финальные детали
+        updateFinalResults();
+    }
+}
+
+function updateProgressDetails() {
+    const progressDetails = document.getElementById('progressDetails');
+    if (!progressDetails) return;
+
+    let detailsHTML = '<div class="progress-details-current">';
+
+    // Текущий обрабатываемый трек
+    if (downloadProgress.currentTrack && downloadProgress.currentTrack !== 'Подготовка к скачиванию...') {
+        detailsHTML += `<div class="progress-detail-item progress-detail-processing">
+            🔄 ${downloadProgress.currentTrack}
+        </div>`;
+    }
+
+    // Последние 5 результатов с детализацией ошибок
+    const recentResults = downloadProgress.results.slice(-8);
+    if (recentResults.length > 0) {
+        detailsHTML += '<div class="recent-results">';
+        detailsHTML += '<div class="recent-results-title">Последние результаты:</div>';
+
+        recentResults.forEach(result => {
+            let statusClass, statusIcon, statusText;
+
+            if (result.success) {
+                statusClass = 'progress-detail-success';
+                statusIcon = '✅';
+                statusText = `${result.artist || ''} - ${result.title || ''}`;
+            } else if (result.duplicate) {
+                statusClass = 'progress-detail-warning';
+                statusIcon = '⚠️';
+                statusText = `${result.artist || ''} - ${result.title || ''}`;
+                if (result.existing_track_id) {
+                    statusText += ` (ID: ${result.existing_track_id})`;
+                }
+            } else {
+                statusClass = 'progress-detail-error';
+                statusIcon = '❌';
+                statusText = `${result.artist || ''} - ${result.title || ''}`;
+            }
+
+            detailsHTML += `
+                <div class="progress-detail-item ${statusClass}">
+                    ${statusIcon} ${statusText}
+                    ${result.error ? `<br><small class="error-detail">${result.error}</small>` : ''}
+                </div>
+            `;
+        });
+        detailsHTML += '</div>';
+    }
+
+    // Статистика по ходу выполнения
+    const successCount = downloadProgress.results.filter(r => r.success).length;
+    const duplicateCount = downloadProgress.results.filter(r => r.duplicate).length;
+    const errorCount = downloadProgress.results.filter(r => !r.success && !r.duplicate).length;
+
+    if (downloadProgress.results.length > 0) {
+        detailsHTML += `
+            <div class="progress-stats">
+                <div class="stat-item stat-success">✅ ${successCount}</div>
+                <div class="stat-item stat-warning">⚠️ ${duplicateCount}</div>
+                <div class="stat-item stat-error">❌ ${errorCount}</div>
+            </div>
+        `;
+    }
+
+    detailsHTML += '</div>';
+    progressDetails.innerHTML = detailsHTML;
+}
+
+function updateFinalResults() {
+    const progressDetails = document.getElementById('progressDetails');
+    if (!progressDetails) return;
+
+    const successCount = downloadProgress.successfulTracks.length;
+    const duplicateCount = downloadProgress.duplicateTracks.length;
+    const errorCount = downloadProgress.failedTracks.length;
+
+    let detailsHTML = '<div class="final-results">';
+    detailsHTML += '<h4>Итоговые результаты:</h4>';
+
+    // Сводная статистика
+    detailsHTML += `
+        <div class="results-summary">
+            <div class="summary-item success">
+                <span class="summary-icon">✅</span>
+                <span class="summary-count">${successCount}</span>
+                <span class="summary-label">Успешно</span>
+            </div>
+            ${duplicateCount > 0 ? `
+            <div class="summary-item warning">
+                <span class="summary-icon">⚠️</span>
+                <span class="summary-count">${duplicateCount}</span>
+                <span class="summary-label">Дубликаты</span>
+            </div>
+            ` : ''}
+            ${errorCount > 0 ? `
+            <div class="summary-item error">
+                <span class="summary-icon">❌</span>
+                <span class="summary-count">${errorCount}</span>
+                <span class="summary-label">Ошибки</span>
+            </div>
+            ` : ''}
+        </div>
+    `;
+
+    // Детали по дубликатам
+    if (duplicateCount > 0) {
+        detailsHTML += `
+            <div class="results-section">
+                <h5>🚫 Пропущенные дубликаты:</h5>
+                <div class="failed-tracks-list">
+                    ${downloadProgress.duplicateTracks.map(track => `
+                        <div class="failed-track-item">
+                            <span class="track-name">${track.artist || 'Неизвестный исполнитель'} - ${track.title || 'Без названия'}</span>
+                            <span class="track-reason">Уже существует в медиатеке${track.existing_track_id ? ` (ID: ${track.existing_track_id})` : ''}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    // Детали по ошибкам
+    if (errorCount > 0) {
+        detailsHTML += `
+            <div class="results-section">
+                <h5>❌ Треки с ошибками:</h5>
+                <div class="failed-tracks-list">
+                    ${downloadProgress.failedTracks.map(track => `
+                        <div class="failed-track-item">
+                            <span class="track-name">${track.artist || 'Неизвестный исполнитель'} - ${track.title || 'Без названия'}</span>
+                            <span class="track-reason">${track.error || 'Неизвестная ошибка'}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    // Успешные треки (только если их немного)
+    if (successCount > 0 && successCount <= 10) {
+        detailsHTML += `
+            <div class="results-section">
+                <h5>✅ Успешно скачаны:</h5>
+                <div class="success-tracks-list">
+                    ${downloadProgress.successfulTracks.map(track => `
+                        <div class="success-track-item">
+                            ${track.artist || 'Неизвестный исполнитель'} - ${track.title || 'Без названия'}
+                            ${track.track_id ? ` (ID: ${track.track_id})` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    } else if (successCount > 10) {
+        detailsHTML += `
+            <div class="results-section">
+                <h5>✅ Успешно скачаны: ${successCount} треков</h5>
+            </div>
+        `;
+    }
+
+    detailsHTML += '</div>';
+    progressDetails.innerHTML = detailsHTML;
+}
+
+function showDownloadResults(results) {
+    const progressDetails = document.getElementById('progressDetails');
+    if (!progressDetails || !results) return;
+
+    // Классифицируем результаты
+    const successful = results.filter(r => r.success);
+    const duplicates = results.filter(r => r.duplicate);
+    const failed = results.filter(r => !r.success && !r.duplicate);
+
+    let detailsHTML = '<div class="download-results"><h4>Детальные результаты:</h4>';
+
+    // Группируем по статусам
+    if (duplicates.length > 0) {
+        detailsHTML += `
+            <div class="result-group duplicates">
+                <h5>🚫 Дубликаты (${duplicates.length}):</h5>
+                ${duplicates.map((result, index) => `
+                    <div class="result-item duplicate">
+                        <span class="result-icon">⚠️</span>
+                        <span class="result-track">${result.artist || 'Неизвестный исполнитель'} - ${result.title || 'Без названия'}</span>
+                        <span class="result-detail">${result.error || 'Уже существует в медиатеке'}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    if (failed.length > 0) {
+        detailsHTML += `
+            <div class="result-group failed">
+                <h5>❌ Ошибки (${failed.length}):</h5>
+                ${failed.map((result, index) => `
+                    <div class="result-item failed">
+                        <span class="result-icon">❌</span>
+                        <span class="result-track">${result.artist || 'Неизвестный исполнитель'} - ${result.title || 'Без названия'}</span>
+                        <span class="result-detail">${result.error || 'Неизвестная ошибка'}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    if (successful.length > 0) {
+        detailsHTML += `
+            <div class="result-group successful">
+                <h5>✅ Успешно (${successful.length}):</h5>
+                ${successful.slice(0, 10).map((result, index) => `
+                    <div class="result-item success">
+                        <span class="result-icon">✅</span>
+                        <span class="result-track">${result.artist || 'Неизвестный исполнитель'} - ${result.title || 'Без названия'}</span>
+                        ${result.track_id ? `<span class="result-id">ID: ${result.track_id}</span>` : ''}
+                    </div>
+                `).join('')}
+                ${successful.length > 10 ? `<div class="result-more">... и ещё ${successful.length - 10} треков</div>` : ''}
+            </div>
+        `;
+    }
+
+    detailsHTML += '</div>';
+    progressDetails.innerHTML = detailsHTML;
 }
 
 function clearTrackList() {
     document.getElementById('trackList').value = '';
-    const progressDetails = document.getElementById('progressDetails');
-    if (progressDetails) progressDetails.innerHTML = '';
+    showNotification('Список треков очищен', 'info');
 }
 
-function updateDownloadProgress(current, total, status) {
-    const progressFill = document.getElementById('progressFill');
-    const progressStatus = document.getElementById('progressStatus');
-    const progressCount = document.getElementById('progressCount');
-    const progressPanel = document.getElementById('listSearchProgress');
+// Функция для тестирования с разными типами ошибок
+function testDownloadProgressWithErrors() {
+    downloadProgress = {
+        total: 8,
+        current: 0,
+        currentTrack: 'Начинаем тестовое скачивание...',
+        isDownloading: true,
+        results: [],
+        failedTracks: [],
+        duplicateTracks: [],
+        successfulTracks: []
+    };
 
-    if (progressFill && progressStatus && progressCount && progressPanel) {
-        const percent = total > 0 ? (current / total) * 100 : 0;
-        progressFill.style.width = `${percent}%`;
-        progressStatus.textContent = status;
-        progressCount.textContent = total > 0 ? `${current}/${total}` : '';
-        progressPanel.style.display = 'block';
-    }
-}
+    showDownloadProgress();
 
-// =========================
-// DESIGN MANAGEMENT FUNCTIONS
-// =========================
+    const testTracks = [
+        { artist: 'The Beatles', title: 'Yesterday', type: 'success' },
+        { artist: 'Queen', title: 'Bohemian Rhapsody', type: 'duplicate', error: 'Трек уже существует (ID: 5)' },
+        { artist: 'Michael Jackson', title: 'Billie Jean', type: 'error', error: 'Трек не найден в Яндекс.Музыке' },
+        { artist: 'Madonna', title: 'Like a Virgin', type: 'success' },
+        { artist: 'Led Zeppelin', title: 'Stairway to Heaven', type: 'error', error: 'Ошибка сети' },
+        { artist: 'Abba', title: 'Dancing Queen', type: 'duplicate', error: 'Трек уже существует (ID: 12)' },
+        { artist: 'Elvis Presley', title: 'Can\'t Help Falling in Love', type: 'success' },
+        { artist: 'Whitney Houston', title: 'I Will Always Love You', type: 'error', error: 'Файл слишком большой' }
+    ];
 
-async function saveDesignAsDefault() {
-    const saveBtn = document.getElementById('d_save_btn');
-    const statusEl = document.getElementById('d_save_status');
+    let current = 0;
 
-    if (!saveBtn || !statusEl) return;
+    const interval = setInterval(() => {
+        if (current < downloadProgress.total) {
+            const track = testTracks[current];
+            downloadProgress.current = current + 1;
+            downloadProgress.currentTrack = `${track.artist} - ${track.title}`;
 
-    try {
-        saveBtn.disabled = true;
-        statusEl.style.display = 'block';
-        statusEl.textContent = '💾 Сохраняем дизайн...';
-        statusEl.className = 'status loading';
+            const result = {
+                artist: track.artist,
+                title: track.title,
+                success: track.type === 'success',
+                duplicate: track.type === 'duplicate',
+                error: track.error
+            };
 
-        const designConfig = readDesignFromUI();
+            downloadProgress.results.push(result);
 
-        console.log('🎨 DESIGN CONFIG TO SAVE:', designConfig);
+            // Классифицируем для итогов
+            if (track.type === 'success') {
+                downloadProgress.successfulTracks.push(result);
+            } else if (track.type === 'duplicate') {
+                downloadProgress.duplicateTracks.push(result);
+            } else {
+                downloadProgress.failedTracks.push(result);
+            }
 
-        const response = await fetch(`${API_BASE}/config/presentation`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(designConfig)
-        });
-
-        if (!response.ok) {
-            throw new Error('Ошибка сохранения');
-        }
-
-        const result = await response.json();
-        console.log('💾 DESIGN SAVE RESPONSE:', result);
-
-        statusEl.textContent = '✅ Дизайн сохранен как стандартный!';
-        statusEl.className = 'status success';
-
-        showNotification('Дизайн успешно сохранен как стандартный', 'success');
-
-    } catch (error) {
-        console.error('❌ Ошибка сохранения дизайна:', error);
-        statusEl.textContent = '❌ Ошибка сохранения дизайна';
-        statusEl.className = 'status error';
-        showNotification('Ошибка сохранения дизайна', 'error');
-    } finally {
-        setTimeout(() => {
-            statusEl.style.display = 'none';
-            saveBtn.disabled = false;
-        }, 3000);
-    }
-}
-
-async function loadSavedDesign() {
-    try {
-        console.log('🔄 Загружаем сохраненный дизайн...');
-        const response = await fetch(`${API_BASE}/config/presentation`);
-        if (!response.ok) {
-            console.log('❌ Не удалось загрузить дизайн, статус:', response.status);
-            return;
-        }
-
-        const config = await response.json();
-        console.log('📥 LOADED DESIGN CONFIG:', config);
-        applyDesignConfig(config);
-
-    } catch (error) {
-        console.error('❌ Ошибка загрузки дизайна:', error);
-    }
-}
-
-function applyDesignConfig(config) {
-    if (!config) {
-        console.log('⚠️ Конфигурация дизайна пустая');
-        return;
-    }
-
-    console.log('🎯 APPLYING DESIGN CONFIG:', config);
-
-    setValue('d_font_family', config.fontFamily || config.font_family);
-    setValue('d_title_size', config.titleSize || config.title_size);
-    setValue('d_text_size', config.textSize || config.text_size);
-    setChecked('d_bold_titles', config.boldTitles !== false);
-    setChecked('d_upper_titles', config.upperTitles || false);
-    setValue('d_text_color', config.textColor || config.text_color);
-    setValue('d_accent_color', config.accentColor || config.accent_color);
-
-    setValue('d_layout', config.layout);
-    setValue('d_photo_radius', config.photoRadius || config.photo_radius);
-
-    setChecked('d_show_numbers', config.showNumbers !== false);
-
-    const background = config.background || {};
-    const bgMode = background.mode || 'solid';
-    console.log('🎨 Background mode:', bgMode);
-
-    setRadioValue('bgMode', bgMode);
-    setValue('d_bg_color', background.color || '#121B2F');
-    setValue('d_grad_from', background.gradFrom || '#1A2340');
-    setValue('d_grad_to', background.gradTo || '#0F1623');
-
-    // Восстанавливаем фоновое изображение если есть
-    if (bgMode === 'image' && background.imageURL) {
-        const filename = background.imageURL.split('/').pop();
-        const downloadUrl = `${API_BASE}/download/${filename}`;
-        const bgPreview = document.getElementById('d_bg_preview');
-        if (bgPreview) {
-            bgPreview.src = downloadUrl;
-            bgPreview.style.display = 'block';
-        }
-        console.log('🎯 Восстановлен фон:', downloadUrl);
-    } else {
-        const bgPreview = document.getElementById('d_bg_preview');
-        if (bgPreview) {
-            bgPreview.style.display = 'none';
-            bgPreview.src = '';
-        }
-    }
-
-    // Восстанавливаем кастомную кнопку если есть
-    if (config.custom_button_path) {
-        const filename = config.custom_button_path.split('/').pop();
-        const downloadUrl = `${API_BASE}/download/${filename}`;
-        updateMiniConstructor(downloadUrl);
-        console.log('🎯 Восстановлена кастомная кнопка:', downloadUrl);
-    } else {
-        updateMiniConstructor(null);
-    }
-
-    toggleBgRows();
-    drawDesignPreview();
-
-    console.log('✅ Дизайн применен к UI');
-}
-
-function setValue(id, value) {
-    const element = document.getElementById(id);
-    if (element && value !== undefined) element.value = value;
-}
-
-function setChecked(id, checked) {
-    const element = document.getElementById(id);
-    if (element) element.checked = !!checked;
-}
-
-function setRadioValue(name, value) {
-    const radio = document.querySelector(`input[name="${name}"][value="${value}"]`);
-    if (radio) radio.checked = true;
-}
-
-// =========================
-// TIMING MANAGEMENT FUNCTIONS
-// =========================
-
-async function saveAllTimings() {
-    try {
-        showNotification('💾 Сохраняем все тайминги в основной файл...', 'info');
-
-        const response = await fetch(`${API_BASE}/tracks/save-all-timings`, {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            throw new Error('Ошибка сохранения таймингов');
-        }
-
-        const result = await response.json();
-
-        if (result.success) {
-            showNotification(`✅ ${result.message}`, 'success');
+            updateDownloadProgress();
+            current++;
         } else {
-            throw new Error(result.message || 'Неизвестная ошибка');
+            clearInterval(interval);
+            downloadProgress.isDownloading = false;
+            updateDownloadProgress();
+            showNotification('✅ Тест прогресс бара с ошибками завершен!', 'success');
         }
-
-    } catch (error) {
-        console.error('Ошибка сохранения таймингов:', error);
-        showNotification(`❌ Ошибка: ${error.message}`, 'error');
-    }
-}
-
-function addTimingsButton() {
-    const toolbar = document.querySelector('.toolbar');
-    if (toolbar && !document.getElementById('saveTimingsBtn')) {
-        const timingsBtn = document.createElement('button');
-        timingsBtn.id = 'saveTimingsBtn';
-        timingsBtn.className = 'btn btn-warning';
-        timingsBtn.innerHTML = '💾 Тайминги';
-        timingsBtn.onclick = saveAllTimings;
-        timingsBtn.title = 'Сохранить все тайминги отрезков в основной JSON файл';
-        toolbar.appendChild(timingsBtn);
-    }
+    }, 1000);
 }
 
 // =========================
@@ -696,7 +766,6 @@ async function generatePresentation() {
     const titleInput = document.getElementById("presentation-title");
     const title = titleInput ? titleInput.value.trim() : "";
 
-    // читаем чекбокс (id = "make-bw")
     const makeBWCheckbox = document.getElementById("make-bw");
     const makeBW = !!(makeBWCheckbox && makeBWCheckbox.checked);
 
@@ -708,18 +777,23 @@ async function generatePresentation() {
         return;
     }
 
-    if (status) {
-        status.textContent = "⏳ Генерация презентации...";
-        status.style.color = "#9ca3af";
-    }
+    const generateBtn = document.getElementById('generatePresentationBtn');
+    const originalText = generateBtn.innerHTML;
 
     try {
+        if (status) {
+            status.textContent = "⏳ Генерация презентации...";
+            status.style.color = "#9ca3af";
+        }
+
+        generateBtn.disabled = true;
+        generateBtn.innerHTML = "⏳ Генерация...";
+
         const payload = {
             title,
             design: { make_bw: makeBW }
         };
 
-        // ИСПРАВЛЕНИЕ: используем правильную константу API_BASE вместо API_BASE_URL
         const response = await fetch(`${API_BASE}/generate/presentation`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -730,19 +804,20 @@ async function generatePresentation() {
 
         if (response.ok && data.success) {
             if (status) {
-                status.textContent = "✅ Презентация успешно создана!";
+                status.innerHTML = `✅ Презентация успешно создана!<br>
+                <a href="${data.download_url}" class="download-link" download>
+                    📥 Скачать презентацию
+                </a>`;
                 status.style.color = "#34d399";
-
-                // Если есть ссылка для скачивания, показываем её
-                if (data.download_url) {
-                    status.innerHTML += `<br><a href="${data.download_url}" class="download-link" download>📥 Скачать презентацию</a>`;
-                }
             }
+            showNotification('✅ Презентация успешно создана!', 'success');
         } else {
+            const errorMsg = data.detail || data.message || "Не удалось создать презентацию";
             if (status) {
-                status.textContent = "❌ Ошибка: " + (data.message || data.detail || "Не удалось создать презентацию.");
+                status.textContent = "❌ Ошибка: " + errorMsg;
                 status.style.color = "#f87171";
             }
+            showNotification('❌ ' + errorMsg, 'error');
         }
     } catch (error) {
         console.error("Ошибка при генерации презентации:", error);
@@ -750,71 +825,12 @@ async function generatePresentation() {
             status.textContent = "❌ Ошибка соединения с сервером.";
             status.style.color = "#f87171";
         }
-    }
-}
-
-
-
-// Вспомогательная функция для получения количества треков
-async function getTracksCount() {
-    try {
-        const response = await fetch(`${API_BASE}/tracks/count`);
-        if (response.ok) {
-            const data = await response.json();
-            return data.count || 0;
+        showNotification('❌ Ошибка соединения с сервером', 'error');
+    } finally {
+        if (generateBtn) {
+            generateBtn.disabled = false;
+            generateBtn.innerHTML = originalText;
         }
-    } catch (error) {
-        console.error("Ошибка получения количества треков:", error);
-    }
-    return 0;
-}
-
-async function generateTickets() {
-    const count = parseInt(document.getElementById('ticketsCount').value) || 24;
-
-    if (count < 1 || count > 100) {
-        showNotification('Количество билетов должно быть от 1 до 100', 'warning');
-        return;
-    }
-
-    showStatus('ticketsStatus', '🔄 Генерируем билеты...', 'loading');
-
-    try {
-        const response = await fetch(`${API_BASE}/tickets/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                count: count,
-                template_id: 'tickets_default'
-            })
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || 'Ошибка генерации');
-        }
-
-        const result = await response.json();
-
-        if (result.success) {
-            const downloadHref = `${API_BASE}/download/${result.file}`;
-            showStatus('ticketsStatus',
-                `✅ ${result.message}<br>
-                 <a href="${downloadHref}" class="download-link" download>
-                    📥 Скачать билеты (PDF)
-                 </a>`,
-                'success'
-            );
-
-            showNotification(`Создано ${count} билетов!`, 'success');
-        } else {
-            throw new Error(result.message || 'Ошибка генерации');
-        }
-
-    } catch (error) {
-        console.error('Ошибка генерации билетов:', error);
-        showStatus('ticketsStatus', `❌ Ошибка: ${error.message}`, 'error');
-        showNotification('Ошибка создания билетов', 'error');
     }
 }
 
@@ -832,7 +848,8 @@ function initTabs() {
                 loadSystemStatus();
             } else if (btn.dataset.tab === 'presentation') {
                 updateTracksCount();
-                initPresentationDesigner();
+            } else if (btn.dataset.tab === 'local') {
+                loadLocalFilesInfo();
             }
         });
     });
@@ -919,8 +936,6 @@ async function handleFileUpload(event) {
     const files = Array.from(event.target.files || []);
     if (files.length === 0) return;
 
-    isUploading = false;
-
     const alreadyPlanned = uploadQueue.length + currentUploads.size;
     const allowed = Math.max(0, MAX_FILES_TOTAL - alreadyPlanned);
     const toEnqueue = files.slice(0, allowed);
@@ -938,9 +953,7 @@ async function handleFileUpload(event) {
     });
 
     event.target.value = '';
-
     pumpUploadQueue();
-
     showStatus('mediaStatus', `🔄 План загрузок: ${toEnqueue.length}, активных сейчас: ${activeUploads}`, 'loading');
 }
 
@@ -1285,7 +1298,8 @@ async function saveCurrentPhoto() {
         });
 
         if (!response.ok) {
-            throw new Error('Ошибка сохранения фото');
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || errorData.error || 'Ошибка сохранения фото');
         }
 
         const result = await response.json();
@@ -1297,12 +1311,12 @@ async function saveCurrentPhoto() {
                 loadTracks();
             }, 1500);
         } else {
-            showPhotoStatus('❌ Ошибка сохранения фото', 'error');
+            throw new Error(result.error || 'Неизвестная ошибка');
         }
 
     } catch (error) {
-        console.error('Ошибка сохранения фото:', error);
-        showPhotoStatus('❌ Ошибка сохранения фото', 'error');
+        console.error('❌ Ошибка сохранения фото:', error);
+        showPhotoStatus(`❌ Ошибка: ${error.message}`, 'error');
     }
 }
 
@@ -1332,7 +1346,8 @@ function uploadArtistPhoto() {
             });
 
             if (!response.ok) {
-                throw new Error('Ошибка загрузки фото');
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || errorData.error || 'Ошибка загрузки фото');
             }
 
             const result = await response.json();
@@ -1344,12 +1359,12 @@ function uploadArtistPhoto() {
                     loadTracks();
                 }, 1500);
             } else {
-                showPhotoStatus('❌ Ошибка загрузки фото', 'error');
+                throw new Error(result.error || 'Неизвестная ошибка');
             }
 
         } catch (error) {
-            console.error('Ошибка загрузки фото:', error);
-            showPhotoStatus('❌ Ошибка загрузки фото', 'error');
+            console.error('❌ Ошибка загрузки фото:', error);
+            showPhotoStatus(`❌ Ошибка: ${error.message}`, 'error');
         }
     };
 
@@ -2067,6 +2082,300 @@ function updateVolumeIcon() {
     else icon.textContent = '🔊';
 }
 
+// =========================
+// LOCAL FILES MANAGEMENT FUNCTIONS
+// =========================
+
+async function loadLocalFilesInfo() {
+    await loadBasePptxInfo();
+    await loadArtistPhotos();
+}
+
+// Загрузка информации о base.pptx
+async function loadBasePptxInfo() {
+    try {
+        const response = await fetch(`${API_BASE}/local/base-pptx`);
+        const data = await response.json();
+
+        const basePptxBlock = document.getElementById('basePptxBlock');
+        if (!basePptxBlock) return;
+
+        if (data.exists) {
+            basePptxBlock.innerHTML = `
+                <div class="file-info-card success">
+                    <div class="file-icon">📄</div>
+                    <div class="file-details">
+                        <h4>base.pptx</h4>
+                        <p>Размер: ${(data.size / 1024 / 1024).toFixed(2)} MB</p>
+                        <p class="text-success">✅ Файл готов к использованию</p>
+                    </div>
+                    <div class="file-actions">
+                        <button class="btn btn-small btn-secondary" onclick="downloadBasePptx()">
+                            📥 Скачать
+                        </button>
+                        <button class="btn btn-small btn-danger" onclick="deleteBasePptx()">
+                            🗑️ Удалить
+                        </button>
+                    </div>
+                </div>
+            `;
+        } else {
+            basePptxBlock.innerHTML = `
+                <div class="file-info-card error">
+                    <div class="file-icon">❌</div>
+                    <div class="file-details">
+                        <h4>base.pptx</h4>
+                        <p class="text-error">Файл не найден</p>
+                        <p>Для генерации презентаций необходим файл base.pptx</p>
+                    </div>
+                    <div class="file-actions">
+                        <button class="btn btn-small btn-primary" onclick="downloadBasePptxFromDropbox()">
+                            📥 Скачать из облака
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки информации о base.pptx:', error);
+    }
+}
+
+// Скачать base.pptx
+async function downloadBasePptx() {
+    try {
+        const response = await fetch(`${API_BASE}/local/download-base-pptx`);
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'base.pptx';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showNotification('base.pptx успешно скачан', 'success');
+        } else {
+            throw new Error('Ошибка скачивания');
+        }
+    } catch (error) {
+        console.error('Ошибка скачивания base.pptx:', error);
+        showNotification('Ошибка скачивания base.pptx', 'error');
+    }
+}
+
+// Скачать base.pptx из Dropbox
+async function downloadBasePptxFromDropbox() {
+    try {
+        showNotification('📥 Скачиваем base.pptx из Dropbox...', 'info');
+
+        const response = await fetch(`${API_BASE}/dropbox/download-base-pptx`, {
+            method: 'POST'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification('✅ base.pptx успешно скачан из Dropbox', 'success');
+            await loadBasePptxInfo();
+        } else {
+            throw new Error(result.error || 'Ошибка скачивания');
+        }
+    } catch (error) {
+        console.error('Ошибка скачивания base.pptx из Dropbox:', error);
+        showNotification(`❌ Ошибка: ${error.message}`, 'error');
+    }
+}
+
+// Удалить base.pptx
+async function deleteBasePptx() {
+    if (!confirm('Вы уверены, что хотите удалить base.pptx?')) return;
+
+    try {
+        // В реальном приложении здесь будет вызов API для удаления файла
+        // Пока просто показываем сообщение
+        showNotification('Функция удаления base.pptx будет реализована в будущем', 'info');
+    } catch (error) {
+        console.error('Ошибка удаления base.pptx:', error);
+        showNotification('Ошибка удаления base.pptx', 'error');
+    }
+}
+
+// Загрузка base.pptx
+async function handleBasePptxUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.pptx')) {
+        showNotification('Пожалуйста, выберите файл в формате .pptx', 'warning');
+        return;
+    }
+
+    try {
+        showNotification('📤 Загружаем base.pptx...', 'info');
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${API_BASE}/local/upload-base-pptx`, {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification('✅ base.pptx успешно загружен', 'success');
+            await loadBasePptxInfo();
+        } else {
+            throw new Error(result.error || 'Ошибка загрузки');
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки base.pptx:', error);
+        showNotification(`❌ Ошибка загрузки: ${error.message}`, 'error');
+    }
+
+    // Сбрасываем input
+    event.target.value = '';
+}
+
+// Загрузка фото артистов
+async function handleArtistPhotosUpload(event) {
+    const files = Array.from(event.target.files);
+    if (files.length === 0) return;
+
+    // Проверяем что все файлы - изображения
+    const invalidFiles = files.filter(file => !file.type.startsWith('image/'));
+    if (invalidFiles.length > 0) {
+        showNotification('Пожалуйста, выбирайте только изображения', 'warning');
+        return;
+    }
+
+    try {
+        showNotification(`📤 Загружаем ${files.length} фото...`, 'info');
+
+        const formData = new FormData();
+        files.forEach(file => {
+            formData.append('files', file);
+        });
+
+        const response = await fetch(`${API_BASE}/local/upload-artist-photos`, {
+            method: 'POST',
+            body: formData
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification(`✅ Успешно загружено ${result.uploaded.length} фото`, 'success');
+            await loadArtistPhotos();
+        } else {
+            throw new Error(result.error || 'Ошибка загрузки');
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки фото артистов:', error);
+        showNotification(`❌ Ошибка загрузки: ${error.message}`, 'error');
+    }
+
+    // Сбрасываем input
+    event.target.value = '';
+}
+
+// Загрузка списка фото артистов
+async function loadArtistPhotos() {
+    try {
+        const response = await fetch(`${API_BASE}/local/artist-photos`);
+        const data = await response.json();
+
+        const photosList = document.getElementById('artistPhotosList');
+        const photosCount = document.getElementById('photosCount');
+
+        if (!photosList) return;
+
+        if (data.photos && data.photos.length > 0) {
+            photosList.innerHTML = data.photos.map(photo => `
+                <div class="artist-photo-card">
+                    <div class="photo-preview">
+                        <img src="${API_BASE}/local/artist-photo/${encodeURIComponent(photo.filename)}" 
+                             alt="${photo.artist_name}" 
+                             onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48dGV4dCB4PSI1MCIgeT0iNTAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPs6PzqPOlc6dzp/Oo86ZPC90ZXh0Pjwvc3ZnPg=='">
+                    </div>
+                    <div class="photo-info">
+                        <h5>${escapeHtml(photo.artist_name)}</h5>
+                        <p class="text-muted">${photo.size_mb || 'N/A'}</p>
+                    </div>
+                    <div class="photo-actions">
+                        <button class="btn btn-small btn-danger" onclick="deleteArtistPhoto('${photo.filename}')">
+                            🗑️
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+
+            if (photosCount) {
+                photosCount.textContent = `${data.photos.length} фото`;
+            }
+        } else {
+            photosList.innerHTML = `
+                <div class="empty-state">
+                    <div class="icon">🖼️</div>
+                    <h3>Нет загруженных фото</h3>
+                    <p>Загрузите фото артистов для использования в презентациях</p>
+                </div>
+            `;
+
+            if (photosCount) {
+                photosCount.textContent = '0 фото';
+            }
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки фото артистов:', error);
+    }
+}
+
+// Обновить список фото
+async function refreshArtistPhotos() {
+    await loadArtistPhotos();
+}
+
+// Удалить фото артиста
+async function deleteArtistPhoto(filename) {
+    if (!confirm('Вы уверены, что хотите удалить это фото?')) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/local/artist-photo/${encodeURIComponent(filename)}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            showNotification('Фото успешно удалено', 'success');
+            await loadArtistPhotos();
+        } else {
+            throw new Error(result.error || 'Ошибка удаления');
+        }
+    } catch (error) {
+        console.error('Ошибка удаления фото:', error);
+        showNotification(`❌ Ошибка удаления: ${error.message}`, 'error');
+    }
+}
+
+// Скачать фото артистов из Dropbox
+async function downloadArtistPhotosFromDropbox() {
+    try {
+        showNotification('📥 Скачиваем фото артистов из Dropbox...', 'info');
+
+        // В реальном приложении здесь будет вызов API для скачивания фото из Dropbox
+        // Пока просто показываем сообщение
+        showNotification('Функция скачивания фото из Dropbox будет реализована в будущем', 'info');
+    } catch (error) {
+        console.error('Ошибка скачивания фото из Dropbox:', error);
+        showNotification('Ошибка скачивания фото из Dropbox', 'error');
+    }
+}
+
 // Форматирование времени
 function formatTime(seconds) {
     const mins = Math.floor(seconds / 60);
@@ -2157,6 +2466,12 @@ function getNotificationColor(type) {
     return colors[type] || '#2563eb';
 }
 
+// Вспомогательные функции для upload panel
+function uploadPanel() { return document.getElementById('uploadProgressPanel'); }
+function uploadRows() { return document.getElementById('uploadRows'); }
+function uploadSummary() { return document.getElementById('uploadSummary'); }
+function cancelAllBtn() { return document.getElementById('cancelAllUploadsBtn'); }
+
 // Обработчик ошибок
 window.addEventListener('error', function (e) {
     console.error('Global error:', e.error);
@@ -2168,826 +2483,3 @@ window.addEventListener('unhandledrejection', function (e) {
 });
 
 console.log('🎵 Music Loto Maker frontend загружен!');
-
-/* =======================
-   MINI-DESIGNER (preview)
-   ======================= */
-
-const Designer = {
-    loaded: false,
-    customButtonObjectURL: null,
-    bgObjectURL: null,
-};
-
-(function ensureRoundRectPolyfill() {
-    const p = window.CanvasRenderingContext2D && CanvasRenderingContext2D.prototype;
-    if (p && typeof p.roundRect !== 'function') {
-        p.roundRect = function (x, y, w, h, r = 0) {
-            r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
-            this.beginPath();
-            this.moveTo(x + r, y);
-            this.lineTo(x + w - r, y);
-            this.arcTo(x + w, y, x + w, y + r, r);
-            this.lineTo(x + w, y + h - r);
-            this.arcTo(x + w, y + h, x + w - r, y + h, r);
-            this.lineTo(x + r, y + h);
-            this.arcTo(x, y + h, x, y + h - r, r);
-            this.lineTo(x, y + r);
-            this.arcTo(x, y, x + r, y, r);
-            return this;
-        };
-    }
-})();
-
-let _designResizeObs = null;
-function ensureDesignCanvasSize() {
-    const canvas = document.getElementById('designPreview');
-    const holder = canvas?.parentElement;
-    if (!canvas || !holder) return false;
-
-    const cssW = Math.max(320, holder.clientWidth);
-    const cssH = Math.max(220, Math.floor(holder.clientWidth * 9 / 16));
-    const needResize = canvas.width !== cssW || canvas.height !== cssH;
-    if (needResize) {
-        canvas.width = cssW;
-        canvas.height = cssH;
-    }
-
-    if (!_designResizeObs) {
-        _designResizeObs = new ResizeObserver(() => {
-            const beforeW = canvas.width, beforeH = canvas.height;
-            const ok = ensureDesignCanvasSize();
-            if (ok && (canvas.width !== beforeW || canvas.height !== beforeH)) {
-                drawDesignPreview();
-            }
-        });
-        _designResizeObs.observe(holder);
-    }
-    return true;
-}
-
-function readDesignFromUI() {
-    const design = {
-        fontFamily: document.getElementById("d_font_family").value,
-        titleSize: parseInt(document.getElementById("d_title_size").value),
-        textSize: parseInt(document.getElementById("d_text_size").value),
-        boldTitles: document.getElementById("d_bold_titles").checked,
-        upperTitles: document.getElementById("d_upper_titles").checked,
-        textColor: document.getElementById("d_text_color").value,
-        accentColor: document.getElementById("d_accent_color").value,
-        layout: document.getElementById("d_layout").value,
-        photoRadius: parseInt(document.getElementById("d_photo_radius").value),
-        showNumbers: document.getElementById("d_show_numbers").checked,
-        custom_button_path: null, // Будет установлено ниже
-        background: getBackgroundConfig()
-    };
-
-    // Получаем актуальный путь к кнопке из конфигурации
-    const btnPrev = document.getElementById('d_btn_preview');
-    if (btnPrev && btnPrev.src && btnPrev.style.display !== 'none') {
-        const src = btnPrev.src;
-        if (src.includes('/api/download/')) {
-            const filename = src.split('/api/download/')[1].split('?')[0];
-            design.custom_button_path = `assets/custom_buttons/${filename}`;
-            console.log('🎯 Установлен custom_button_path:', design.custom_button_path);
-        }
-    }
-
-    console.log("🎨 DESIGN OBJ TO SEND:", design);
-    return design;
-}
-
-function drawDesignPreview() {
-    const canvas = document.getElementById('designPreview');
-    if (!canvas) return;
-    ensureDesignCanvasSize();
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const W = canvas.width, H = canvas.height;
-    const cfg = readDesignFromUI();
-
-    if (cfg.background.mode === 'solid') {
-        ctx.fillStyle = cfg.background.color;
-        ctx.fillRect(0, 0, W, H);
-        drawContent();
-    } else if (cfg.background.mode === 'gradient') {
-        const g = ctx.createLinearGradient(0, 0, W, H);
-        g.addColorStop(0, cfg.background.gradFrom);
-        g.addColorStop(1, cfg.background.gradTo);
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, W, H);
-        drawContent();
-    } else {
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, W, H);
-        const url = cfg.background.imageURL;
-        if (url) {
-            const img = new Image();
-            img.onload = () => {
-                const r1 = W / H, r2 = img.width / img.height;
-                let w, h, x, y;
-                if (r2 > r1) { h = H; w = r2 * H; x = (W - w) / 2; y = 0; }
-                else { w = W; h = W / r2; x = 0; y = (H - h) / 2; }
-                ctx.drawImage(img, x, y, w, h);
-                drawContent();
-            };
-            img.onerror = drawContent;
-            img.src = url;
-        } else {
-            drawContent();
-        }
-    }
-
-    function drawContent() {
-        const pad = 32;
-        const photoSize = Math.min(W, H) * 0.35;
-        let photoX = pad, photoY = pad;
-        let textX = photoX + photoSize + pad, textW = W - textX - pad;
-
-        if (cfg.layout === 'photo_right') {
-            photoX = W - pad - photoSize;
-            textX = pad; textW = W - photoSize - pad * 3;
-        } else if (cfg.layout === 'photo_top') {
-            photoX = (W - photoSize) / 2;
-            textX = pad; textW = W - pad * 2;
-            photoY = pad;
-        } else if (cfg.layout === 'photo_only') {
-            photoX = (W - photoSize) / 2;
-            photoY = (H - photoSize) / 2 - 40;
-            textX = pad; textW = W - pad * 2;
-        }
-
-        ctx.fillStyle = 'rgba(255,255,255,0.10)';
-        ctx.strokeStyle = 'rgba(255,255,255,0.28)';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.roundRect(photoX, photoY, photoSize, photoSize, cfg.photoRadius);
-        ctx.fill();
-        ctx.stroke();
-
-        const title = (cfg.upperTitles ? 'БОЛЬШОЕ МУЗЛОТО' : 'Большое МузЛото');
-        ctx.fillStyle = cfg.textColor;
-        ctx.textBaseline = 'top';
-        ctx.font = `${cfg.boldTitles ? '700 ' : ''}${cfg.titleSize}px ${cfg.fontFamily}`;
-        ctx.fillText(title, textX, photoY);
-
-        ctx.font = `400 ${cfg.textSize}px ${cfg.fontFamily}`;
-        ctx.fillStyle = cfg.textColor + 'cc';
-        const sub = 'Юрий Шатунов — Седая ночь';
-        wrapText(ctx, sub, textX, photoY + cfg.titleSize + 8, textW, cfg.textSize + 6);
-
-        const btnW = 160, btnH = 100, bx = W - btnW - pad, by = H - btnH - pad;
-
-        // Используем кастомную кнопку если есть
-        if (cfg.custom_button_path) {
-            const img = new Image();
-            img.onload = () => {
-                ctx.drawImage(img, bx, by, btnW, btnH);
-                if (cfg.showNumbers) drawNumber();
-            };
-            img.onerror = () => drawFallbackButton();
-            const filename = cfg.custom_button_path.split('/').pop();
-            img.src = `${API_BASE}/download/${filename}?t=${Date.now()}`;
-        } else {
-            drawFallbackButton();
-        }
-
-        function drawFallbackButton() {
-            ctx.fillStyle = 'rgba(255,255,255,0.12)';
-            ctx.strokeStyle = cfg.accentColor;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.roundRect(bx, by, btnW, btnH, 12);
-            ctx.fill();
-            ctx.stroke();
-            if (cfg.showNumbers) drawNumber();
-        }
-
-        function drawNumber() {
-            ctx.fillStyle = '#fff';
-            ctx.font = `700 ${Math.floor(btnH * 0.45)}px ${cfg.fontFamily}`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('12', bx + btnW / 2, by + btnH / 2 + 2);
-            ctx.textAlign = 'start';
-            ctx.textBaseline = 'alphabetic';
-        }
-    }
-
-    function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
-        const words = text.split(' ');
-        let line = '';
-        for (let i = 0; i < words.length; i++) {
-            const test = line + words[i] + ' ';
-            const w = ctx.measureText(test).width;
-            if (w > maxWidth && i > 0) {
-                ctx.fillText(line, x, y);
-                line = words[i] + ' ';
-                y += lineHeight;
-            } else {
-                line = test;
-            }
-        }
-        ctx.fillText(line, x, y);
-    }
-}
-
-function bindDesignerEvents() {
-    const root = document.querySelector('#presentation .settings-card');
-    if (!root) return;
-
-    const rerender = () => drawDesignPreview();
-
-    root.querySelectorAll('input, select').forEach(el => {
-        el.addEventListener('input', rerender);
-        el.addEventListener('change', rerender);
-    });
-
-    const radios = root.querySelectorAll('input[name="bgMode"]');
-    const rowSolid = document.getElementById('bgSolidRow');
-    const rowGrad = document.getElementById('bgGradientRow');
-    const rowImg = document.getElementById('bgImageRow');
-    function toggleBgRows() {
-        const mode = root.querySelector('input[name="bgMode"]:checked')?.value || 'solid';
-        rowSolid.style.display = mode === 'solid' ? 'flex' : 'none';
-        rowGrad.style.display = mode === 'gradient' ? 'flex' : 'none';
-        rowImg.style.display = mode === 'image' ? 'flex' : 'none';
-    }
-    radios.forEach(r => r.addEventListener('change', () => { toggleBgRows(); rerender(); }));
-    toggleBgRows();
-
-    // Обработчик загрузки кастомной кнопки
-    const btnUpload = document.getElementById('d_btn_upload');
-    const btnReset = document.getElementById('d_btn_reset');
-
-    if (btnUpload) {
-        btnUpload.addEventListener('change', async () => {
-            const file = btnUpload.files?.[0];
-            if (!file) return;
-
-            showNotification('🔼 Загружаем кнопку...', 'info');
-
-            const formData = new FormData();
-            formData.append('file', file);
-
-            try {
-                const response = await fetch(`${API_BASE}/assets/custom-button`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    throw new Error('Ошибка загрузки');
-                }
-
-                const result = await response.json();
-
-                if (result.success) {
-                    // Обновляем превью
-                    const downloadUrl = `${API_BASE}/download/${result.filename}?t=${Date.now()}`;
-                    updateMiniConstructor(downloadUrl);
-
-                    showNotification('✅ Кнопка загружена!', 'success');
-                    console.log('🎯 Кнопка загружена:', result);
-
-                    // Проверяем файл
-                    await debugCheckButtonFile(result.filename);
-                } else {
-                    throw new Error(result.error || 'Неизвестная ошибка');
-                }
-            } catch (error) {
-                console.error('❌ Ошибка загрузки кнопки:', error);
-                showNotification('❌ Ошибка загрузки кнопки', 'error');
-            }
-        });
-    }
-
-    if (btnReset) {
-        btnReset.addEventListener('click', async () => {
-            try {
-                showNotification('🔄 Сбрасываем кнопку...', 'info');
-
-                // Обновляем конфигурацию
-                const configResponse = await fetch(`${API_BASE}/config/presentation`);
-                if (configResponse.ok) {
-                    const config = await configResponse.json();
-                    config.custom_button_path = null;
-
-                    await fetch(`${API_BASE}/config/presentation`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(config)
-                    });
-                }
-
-                // Обновляем UI
-                updateMiniConstructor(null);
-                showNotification('✅ Кнопка сброшена', 'success');
-
-            } catch (error) {
-                console.error('❌ Ошибка сброса кнопки:', error);
-                showNotification('❌ Ошибка сброса кнопки', 'error');
-            }
-        });
-    }
-
-    const bgUpload = document.getElementById('d_bg_upload');
-    const bgReset = document.getElementById('d_bg_reset');
-    const bgPrev = document.getElementById('d_bg_preview');
-
-    if (bgUpload) {
-        bgUpload.addEventListener('change', async () => {
-            const file = bgUpload.files?.[0];
-            if (!file) return;
-
-            showNotification('🔼 Загружаем фон...', 'info');
-
-            const formData = new FormData();
-            formData.append('file', file);
-
-            try {
-                const response = await fetch(`${API_BASE}/assets/background`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    throw new Error('Ошибка загрузки');
-                }
-
-                const result = await response.json();
-
-                if (result.success) {
-                    // Обновляем превью
-                    const downloadUrl = `${API_BASE}/download/${result.filename}?t=${Date.now()}`;
-                    bgPrev.src = downloadUrl;
-                    bgPrev.style.display = 'inline-block';
-
-                    // Устанавливаем режим "image"
-                    const radio = document.querySelector('input[name="bgMode"][value="image"]');
-                    if (radio) radio.checked = true;
-
-                    // Обновляем строки отображения
-                    document.getElementById('bgSolidRow').style.display = 'none';
-                    document.getElementById('bgGradientRow').style.display = 'none';
-                    document.getElementById('bgImageRow').style.display = 'flex';
-
-                    showNotification('✅ Фон загружен!', 'success');
-                    drawDesignPreview();
-
-                } else {
-                    throw new Error(result.error || 'Неизвестная ошибка');
-                }
-            } catch (error) {
-                console.error('❌ Ошибка загрузки фона:', error);
-                showNotification('❌ Ошибка загрузки фона', 'error');
-            }
-        });
-    }
-
-    if (bgReset) {
-        bgReset.addEventListener('click', () => {
-            // Сбрасываем на сплошной цвет
-            const radio = document.querySelector('input[name="bgMode"][value="solid"]');
-            if (radio) radio.checked = true;
-
-            document.getElementById('bgSolidRow').style.display = 'flex';
-            document.getElementById('bgGradientRow').style.display = 'none';
-            document.getElementById('bgImageRow').style.display = 'none';
-
-            if (bgPrev) {
-                bgPrev.style.display = 'none';
-                bgPrev.src = '';
-            }
-            if (bgUpload) bgUpload.value = '';
-
-            drawDesignPreview();
-            showNotification('Фон сброшен', 'info');
-        });
-    }
-
-    const saveBtn = document.getElementById('d_save_btn');
-    if (saveBtn) {
-        saveBtn.addEventListener('click', saveDesignAsDefault);
-    }
-}
-
-// Глобальная функция обновления мини-конструктора
-window.updateMiniConstructor = function (customButtonPath) {
-    const preview = document.getElementById("d_btn_preview");
-    if (preview) {
-        if (customButtonPath) {
-            preview.src = customButtonPath;
-            preview.style.display = "block";
-            console.log('🎯 Превью кнопки обновлено:', customButtonPath);
-        } else {
-            preview.style.display = "none";
-            preview.src = "";
-            console.log('🎯 Превью кнопки скрыто');
-        }
-    }
-    if (typeof drawDesignPreview === "function") {
-        drawDesignPreview();
-    }
-};
-
-async function initPresentationDesigner() {
-    if (Designer.loaded) {
-        drawDesignPreview();
-        return;
-    }
-
-    bindDesignerEvents();
-    ensureDesignCanvasSize();
-
-    await loadSavedDesign();
-
-    drawDesignPreview();
-
-    Designer.loaded = true;
-}
-// =========================
-// DROPBOX DOWNLOAD FUNCTIONS (только скачивание)
-// =========================
-
-async function downloadBasePptxFromDropbox() {
-    try {
-        showNotification('📥 Скачиваем base.pptx из облака...', 'info');
-
-        const response = await fetch('/api/dropbox/download-base-pptx', {
-            method: 'POST'
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-            showNotification('✅ base.pptx успешно скачан!', 'success');
-            refreshBasePptx();
-        } else {
-            showNotification(`❌ Ошибка: ${data.error}`, 'error');
-        }
-    } catch (error) {
-        console.error('Ошибка скачивания base.pptx:', error);
-        showNotification('❌ Ошибка скачивания из облака', 'error');
-    }
-}
-
-async function downloadArtistPhotosFromDropbox() {
-    try {
-        showNotification('📥 Скачиваем фото артистов из облака...', 'info');
-
-        const response = await fetch('/api/dropbox/download-artist-photos', {
-            method: 'POST'
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-            showNotification(`✅ Скачано ${data.photos?.length || 0} фото артистов!`, 'success');
-            refreshArtistPhotos();
-        } else {
-            showNotification(`❌ Ошибка: ${data.error}`, 'error');
-        }
-    } catch (error) {
-        console.error('Ошибка скачивания фото:', error);
-        showNotification('❌ Ошибка скачивания фото из облака', 'error');
-    }
-}
-
-async function checkDropboxPhotos() {
-    try {
-        const response = await fetch('/api/dropbox/available-photos');
-        const data = await response.json();
-
-        if (data.photos && data.photos.length > 0) {
-            return data.photos;
-        }
-        return [];
-    } catch (error) {
-        console.error('Ошибка проверки Dropbox:', error);
-        return [];
-    }
-}
-
-// =========================
-// LOCAL FILES MANAGEMENT
-// =========================
-
-async function uploadArtistPhotos() {
-    const input = document.getElementById('uploadArtistPhotos');
-    if (!input || !input.files || input.files.length === 0) {
-        showNotification('❌ Выберите фото для загрузки', 'error');
-        return;
-    }
-
-    const files = Array.from(input.files);
-    console.log('📤 Загрузка фото:', files.map(f => f.name));
-
-    showNotification(`📤 Загружаем ${files.length} фото...`, 'info');
-
-    const formData = new FormData();
-    files.forEach(file => {
-        formData.append('files', file);
-    });
-
-    try {
-        const res = await fetch('/api/local/upload-artist-photos', {
-            method: 'POST',
-            body: formData
-        });
-
-        const data = await res.json();
-        console.log('📥 Ответ сервера:', data);
-
-        if (data.success) {
-            showNotification(`✅ ${data.message}`, 'success');
-            // Очищаем input
-            input.value = '';
-            // Обновляем список фото
-            refreshArtistPhotos();
-        } else {
-            showNotification(`❌ Ошибка: ${data.error}`, 'error');
-        }
-    } catch (error) {
-        console.error('❌ Ошибка загрузки фото:', error);
-        showNotification('❌ Ошибка соединения с сервером', 'error');
-    }
-}
-
-async function refreshArtistPhotos() {
-    try {
-        console.log('🔄 Обновление списка фото...');
-        const res = await fetch('/api/local/artist-photos');
-        const data = await res.json();
-        const container = document.getElementById('artistPhotosList');
-        const countElement = document.getElementById('photosCount');
-
-        console.log('📊 Данные фото:', data);
-
-        // Обновляем счетчик
-        if (countElement) {
-            const count = data.photos ? data.photos.length : 0;
-            countElement.textContent = `${count} ${getPhotoWord(count)}`;
-        }
-
-        if (!data.photos || data.photos.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state" style="grid-column: 1 / -1; text-align: center; padding: 40px;">
-                    <div class="icon" style="font-size: 64px; margin-bottom: 16px;">🖼️</div>
-                    <h3 style="margin: 0 0 8px 0; color: var(--text-light);">Нет загруженных фото</h3>
-                    <p style="margin: 0; color: var(--text-muted);">Загрузите фото артистов для использования в презентациях</p>
-                </div>
-            `;
-            return;
-        }
-
-        container.innerHTML = data.photos.map(photo => `
-            <div class="artist-photo-card">
-                <img src="${photo.url}?t=${Date.now()}" 
-                     alt="${photo.artist_name}"
-                     onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjE0MCIgdmlld0JveD0iMCAwIDIwMCAxNDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwMCIgaGVpZ2h0PSIxNDAiIGZpbGw9IiMxRjJGMzgiIHJ4PSI4Ii8+PHRleHQgeD0iMTAwIiB5PSI3MCIgZm9udC1mYW1pbHk9IkFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE0IiBmaWxsPSIjNkM3MjdCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSI+${photo.artist_name}</dGV4dD48L3N2Zz4='">
-                <div class="filename">${escapeHtml(photo.artist_name)}</div>
-                <div style="font-size: 12px; color: var(--text-muted); text-align: center; margin-bottom: 12px;">
-                    ${photo.size_mb || ''}
-                </div>
-                <div class="photo-actions">
-                    <a href="${photo.url}" target="_blank" class="download-link" title="Просмотр">
-                        <span class="icon">👁️</span>
-                        Просмотр
-                    </a>
-                    <button class="btn btn-danger btn-small" onclick="deleteArtistPhoto('${photo.filename}')" title="Удалить">
-                        <span class="icon">🗑️</span>
-                        Удалить
-                    </button>
-                </div>
-            </div>
-        `).join('');
-
-    } catch (error) {
-        console.error('❌ Ошибка обновления списка фото:', error);
-        const container = document.getElementById('artistPhotosList');
-        container.innerHTML = `
-            <div class="empty-state" style="grid-column: 1 / -1; text-align: center; padding: 40px;">
-                <div class="icon" style="font-size: 64px; margin-bottom: 16px;">❌</div>
-                <h3 style="margin: 0 0 8px 0; color: var(--error);">Ошибка загрузки</h3>
-                <p style="margin: 0; color: var(--text-muted);">Не удалось загрузить список фото</p>
-            </div>
-        `;
-    }
-}
-
-// Вспомогательная функция для правильного склонения
-function getPhotoWord(count) {
-    if (count % 10 === 1 && count % 100 !== 11) return 'фото';
-    if (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 10 || count % 100 >= 20)) return 'фото';
-    return 'фото';
-}
-
-async function deleteArtistPhoto(filename) {
-    if (!confirm(`Удалить фото ${filename}?`)) return;
-
-    try {
-        const res = await fetch(`/api/local/artist-photo/${filename}`, {
-            method: 'DELETE'
-        });
-
-        const data = await res.json();
-        if (data.success) {
-            showNotification('✅ Фото удалено', 'success');
-            refreshArtistPhotos();
-        } else {
-            showNotification(`❌ Ошибка удаления: ${data.error}`, 'error');
-        }
-    } catch (error) {
-        console.error('Ошибка удаления фото:', error);
-        showNotification('❌ Ошибка удаления фото', 'error');
-    }
-}
-
-async function uploadBasePptx() {
-    const input = document.getElementById('uploadBasePptx');
-    if (!input || !input.files || input.files.length === 0) {
-        showNotification('❌ Выберите файл base.pptx', 'error');
-        return;
-    }
-
-    const file = input.files[0];
-    console.log('📤 Загрузка base.pptx:', file.name, file.size, file.type);
-
-    showNotification(`📤 Загружаем ${file.name}...`, 'info');
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-        const res = await fetch('/api/local/upload-base-pptx', {
-            method: 'POST',
-            body: formData
-        });
-
-        const data = await res.json();
-        console.log('📥 Ответ сервера:', data);
-
-        if (data.success) {
-            showNotification(`✅ ${data.message} (${(data.size / 1024 / 1024).toFixed(2)} MB)`, 'success');
-            // Очищаем input
-            input.value = '';
-            // Обновляем информацию
-            refreshBasePptx();
-        } else {
-            showNotification(`❌ Ошибка: ${data.error}`, 'error');
-        }
-    } catch (error) {
-        console.error('❌ Ошибка загрузки base.pptx:', error);
-        showNotification('❌ Ошибка соединения с сервером', 'error');
-    }
-}
-
-async function refreshBasePptx() {
-    try {
-        console.log('🔄 Обновление информации о base.pptx...');
-        const res = await fetch('/api/local/base-pptx');
-        const data = await res.json();
-        const block = document.getElementById('basePptxBlock');
-
-        console.log('📊 Данные base.pptx:', data);
-
-        if (data.exists) {
-            const sizeMB = (data.size / 1024 / 1024).toFixed(2);
-            const statusClass = data.size > 0 ? 'success' : 'warning';
-
-            block.innerHTML = `
-                <div class="base-pptx-info">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
-                        <div>
-                            <h4 style="margin: 0 0 8px 0; color: var(--text-light);">📄 base.pptx</h4>
-                            <p style="margin: 0; color: var(--text-muted);">${data.message || 'Шаблон презентации готов к использованию'}</p>
-                        </div>
-                        <span class="status-indicator ${statusClass}">
-                            ${data.size > 0 ? '✅ Готов' : '⚠️ Ошибка'}
-                        </span>
-                    </div>
-                    
-                    <div class="file-info">
-                        <div><strong>Размер:</strong> ${sizeMB} MB</div>
-                        <div><strong>Статус:</strong> Файл найден</div>
-                        <div><strong>Путь:</strong> /base.pptx</div>
-                    </div>
-                    
-                    <div class="pptx-actions">
-                        <a href="${data.download_url}" class="btn btn-primary" download>
-                            <span class="icon">📥</span>
-                            Скачать шаблон
-                        </a>
-                        <button class="btn btn-secondary" onclick="document.getElementById('uploadBasePptx').click()">
-                            <span class="icon">🔄</span>
-                            Заменить файл
-                        </button>
-                        <button class="btn btn-warning" onclick="downloadBasePptxFromDropbox()">
-                            <span class="icon">📥</span>
-                            Скачать из облака
-                        </button>
-                    </div>
-                </div>
-            `;
-        } else {
-            block.innerHTML = `
-                <div class="base-pptx-info">
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
-                        <div>
-                            <h4 style="margin: 0 0 8px 0; color: var(--text-light);">📄 base.pptx</h4>
-                            <p style="margin: 0; color: var(--text-muted);">${data.message || 'Шаблон презентации не найден'}</p>
-                        </div>
-                        <span class="status-indicator error">❌ Отсутствует</span>
-                    </div>
-                    
-                    <div class="file-info">
-                        <div><strong>Статус:</strong> Файл не найден</div>
-                        <div><strong>Решение:</strong> Загрузите или скачайте шаблон</div>
-                    </div>
-                    
-                    <div class="pptx-actions">
-                        <button class="btn btn-primary" onclick="document.getElementById('uploadBasePptx').click()">
-                            <span class="icon">📤</span>
-                            Загрузить файл
-                        </button>
-                        <button class="btn btn-primary" onclick="downloadBasePptxFromDropbox()">
-                            <span class="icon">📥</span>
-                            Скачать из облака
-                        </button>
-                    </div>
-                </div>
-            `;
-        }
-    } catch (error) {
-        console.error('❌ Ошибка обновления информации о base.pptx:', error);
-        const block = document.getElementById('basePptxBlock');
-        block.innerHTML = `
-            <div class="base-pptx-info">
-                <div style="text-align: center; color: var(--error);">
-                    <h4>❌ Ошибка загрузки</h4>
-                    <p>Не удалось получить информацию о base.pptx</p>
-                </div>
-            </div>
-        `;
-    }
-}
-
-// Инициализация файловой системы
-document.addEventListener('DOMContentLoaded', function () {
-    console.log('🎵 Инициализация файловой системы...');
-
-    // Обработчики загрузки файлов
-    const baseInput = document.getElementById('uploadBasePptx');
-    if (baseInput) {
-        baseInput.addEventListener('change', function (e) {
-            console.log('📄 Base PPTX выбран:', e.target.files[0]);
-            if (e.target.files.length > 0) {
-                uploadBasePptx();
-            }
-        });
-    }
-
-    const photosInput = document.getElementById('uploadArtistPhotos');
-    if (photosInput) {
-        photosInput.addEventListener('change', function (e) {
-            console.log('🖼️ Фото выбраны:', e.target.files);
-            if (e.target.files.length > 0) {
-                uploadArtistPhotos();
-            }
-        });
-    }
-
-    // Инициализация данных
-    refreshArtistPhotos();
-    refreshBasePptx();
-
-    console.log('✅ Файловая система готова');
-});
-
-
-
-// 🔧 Защита от отсутствия функции getBackgroundConfig
-if (typeof getBackgroundConfig === "undefined") {
-    function getBackgroundConfig() {
-        const mode = document.querySelector('input[name="bgMode"]:checked')?.value || "solid";
-        const color = document.getElementById("d_bg_color")?.value || "#121B2F";
-        const gradFrom = document.getElementById("d_grad_from")?.value || "#1A2340";
-        const gradTo = document.getElementById("d_grad_to")?.value || "#0F1623";
-
-        // Получаем URL фонового изображения из превью
-        let imageURL = null;
-        const bgPreview = document.getElementById('d_bg_preview');
-        if (mode === 'image' && bgPreview && bgPreview.style.display !== 'none' && bgPreview.src) {
-            imageURL = bgPreview.src;
-        }
-
-        return { mode, color, gradFrom, gradTo, imageURL };
-    }
-    console.warn("⚠️ getBackgroundConfig was missing — added fallback implementation.");
-}
-
-// ============================================================
-// --- FIX --- КОНЕЦ блока исправлений
-// ============================================================

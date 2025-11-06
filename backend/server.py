@@ -30,10 +30,12 @@ import aiohttp
 from urllib.parse import quote
 import re
 from typing import List
+
 # === INTERNAL MODULES ===
 from backend.dropbox_storage import DropboxStorage
 dropbox_storage = DropboxStorage()
 PORT = int(os.environ.get("PORT", 8000))
+
 # === LOGGING CONFIGURATION ===
 LOG_DIR = r"E:\1\MusicLotoMaker\MusicLotoMaker\logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -55,21 +57,19 @@ root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
 logger = logging.getLogger(__name__)
-# === END LOGGING CONFIGURATION ===
 
 # === FASTAPI APP INITIALIZATION ===
 app = FastAPI(title="Music Loto Maker", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Можно указать конкретные домены
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# === ADDED: frontend logging endpoint ===
-from fastapi import Request
+# === frontend logging endpoint ===
 @app.post("/api/log/frontend")
 async def frontend_log(request: Request):
     try:
@@ -87,7 +87,6 @@ async def frontend_log(request: Request):
     except Exception as e:
         logger.error(f"Ошибка при логировании с фронта: {e}")
         return JSONResponse({"logged": False, "error": str(e)})
-
 
 # Добавляем путь к процессорам
 current_dir = os.path.dirname(__file__)
@@ -122,7 +121,7 @@ if current_dir not in sys.path:
     sys.path.append(current_dir)
 
 try:
-    from media_library import MediaLibrary
+    from media_library import MediaLibrary, normalize_track_string
     logger.info("✅ MediaLibrary imported successfully")
 except ImportError as e:
     logger.error(f"❌ Ошибка импорта MediaLibrary: {e}")
@@ -190,20 +189,26 @@ except ImportError as e:
                 return True
             return False
 
+        def track_exists(self, artist, title):
+            return False
+
+        def find_duplicate_tracks(self, artist, title):
+            return []
+
+        def get_track_by_artist_title(self, artist, title):
+            return None
+
     logger.info("✅ Используется заглушка MediaLibrary")
 
 # Импорт современных генераторов
-# === ИМПОРТ ГЕНЕРАТОРОВ - ОБНОВЛЕННАЯ ВЕРСИЯ ===
-
 try:
     from presentation import ModernPresentationGenerator
     logger.info("✅ ModernPresentationGenerator imported successfully")
 except ImportError as e:
     logger.warning(f"⚠️ ModernPresentationGenerator import error: {e}")
-    # Заглушка ModernPresentationGenerator остается без изменений
     class ModernPresentationGenerator:
         def generate_presentation_by_template(self, tracks, output_path, **kwargs):
-            logger.info(f"🎲 Генерация презентации по шаблону для {len(tracks)} треков (fallback). Design keys: {list(kwargs.keys())}")
+            logger.info(f"🎲 Генерация презентации по шаблону для {len(tracks)} треков (fallback).")
             try:
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write("Presentation by PDF Template - Placeholder")
@@ -231,33 +236,29 @@ except ImportError as e:
                 f.write("Modern PDF Placeholder")
             return output_path
 
-# ОТДЕЛЬНЫЙ ИМПОРТ TicketGenerator с поддержкой design
+# ОТДЕЛЬНЫЙ ИМПОРТ TicketGenerator
 try:
     from tickets import TicketGenerator
     logger.info("✅ TicketGenerator imported successfully")
 except ImportError as e:
     logger.warning(f"⚠️ TicketGenerator import error: {e}")
-    # Заглушка TicketGenerator с поддержкой design
     class TicketGenerator:
         def generate_modern_tickets(self, tracks, count=24, design=None):
-            logger.info(f"🎫 Генерация современных билетов: {count} шт. Design: {design}")
-            # Создаем папку для билетов
+            logger.info(f"🎫 Генерация современных билетов: {count} шт.")
             import os
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             tickets_folder = os.path.join("output", f"tickets_{timestamp}")
             os.makedirs(tickets_folder, exist_ok=True)
             
-            # Создаем заглушечные файлы
             for i in range(count):
                 ticket_path = os.path.join(tickets_folder, f"ticket_{i+1:03d}.pdf")
                 with open(ticket_path, 'w', encoding='utf-8') as f:
-                    f.write(f"Ticket {i+1} - Design: {design}")
+                    f.write(f"Ticket {i+1}")
             
-            # Создаем архивный файл
             archive_path = os.path.join(tickets_folder, "all_tickets.pdf")
             with open(archive_path, 'w', encoding='utf-8') as f:
-                f.write(f"All Tickets Archive - Design: {design}")
+                f.write("All Tickets Archive")
                 
             return tickets_folder
 
@@ -295,10 +296,6 @@ except ImportError as e:
             ][:count]
     image_searcher = SimpleImageSearcher()
 
-# Инициализация приложения
-app = FastAPI(title="Music Loto Maker", version="3.0.0")
-
-
 # Директории
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
@@ -315,202 +312,151 @@ else:
     logger.warning(f"⚠️ Папка фронтенда не найдена: {FRONTEND_DIR}")
 
 # =========================
-# TRACK JSON DISCOVERY
-# =========================
-def _find_track_json_path() -> str | None:
-    candidates = [
-        os.path.join(BASE_DIR, "track_data.json"),
-        os.path.join(BASE_DIR, "backend", "track_data.json"),
-        os.path.join(os.path.dirname(__file__), "track_data.json"),
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            logger.info(f"📄 Найден track_data.json: {p}")
-            return p
-    logger.warning("🚫 track_data.json не найден ни в одном из ожидаемых путей")
-    return None
-
-# =========================
 # INITIALIZATION
 # =========================
 
-
 # Инициализация модулей
 media_library = MediaLibrary()
-if not os.path.exists("base.pptx"):
-    dropbox_storage.download_base_pptx("base.pptx")
-# --- Проверка и загрузка фото артистов из Dropbox ---
-artists_dir = "artists"
+
+# ЯВНАЯ ПРОВЕРКА И ЗАГРУЗКА КРИТИЧЕСКИХ ФАЙЛОВ ПРИ СТАРТЕ
+logger.info("🔍 Проверка критических файлов...")
+
+# Проверка base.pptx
+base_path = os.path.join(BASE_DIR, "base.pptx")
+if not os.path.exists(base_path):
+    logger.info("📦 base.pptx не найден, скачиваем из Dropbox...")
+    if dropbox_storage.download_base_pptx(base_path):
+        file_size = os.path.getsize(base_path)
+        logger.info(f"✅ base.pptx успешно скачан ({file_size / 1024 / 1024:.2f} MB)")
+    else:
+        logger.warning("⚠️ Не удалось скачать base.pptx, генерация презентаций будет недоступна")
+else:
+    file_size = os.path.getsize(base_path)
+    logger.info(f"✅ base.pptx найден ({file_size / 1024 / 1024:.2f} MB)")
+
+# Проверка и создание папки artists
+artists_dir = os.path.join(BASE_DIR, "artists")
 if not os.path.exists(artists_dir):
     logger.info(f"📁 Папка {artists_dir} не найдена. Создание папки...")
     os.makedirs(artists_dir, exist_ok=True)
-    logger.info(f"✅ Папка {artists_dir} создана.")
+    logger.info(f"✅ Папка создана: {artists_dir}")
 
-# Проверяем, пуста ли папка
+# Проверка и загрузка фото артистов
 local_files = os.listdir(artists_dir)
 if len(local_files) == 0:
     logger.info(f"📂 Папка {artists_dir} пуста. Попытка загрузки фото из Dropbox...")
     try:
         photos_info = dropbox_storage.list_artist_photos()
         if photos_info:
+            downloaded_count = 0
             for photo_info in photos_info:
                 filename = photo_info['filename']
-                dropbox_path = photo_info['dropbox_path'] # Путь в Dropbox
+                dropbox_path = photo_info['dropbox_path']
                 local_path = os.path.join(artists_dir, filename)
 
-                # Пропускаем, если файл уже существует
                 if os.path.exists(local_path):
-                    logger.info(f"🖼️ Файл {filename} уже существует в {artists_dir}, пропуск.")
+                    logger.debug(f"🖼️ Файл {filename} уже существует, пропуск")
                     continue
 
-                # Скачиваем файл через API Dropbox
                 try:
                     metadata, response = dropbox_storage.dbx.files_download(dropbox_path)
                     with open(local_path, 'wb') as f:
                         f.write(response.content)
-                    logger.info(f"✅ Загружено фото: {filename} в {artists_dir}")
+                    downloaded_count += 1
+                    logger.info(f"✅ Загружено фото: {filename}")
                 except Exception as e:
                     logger.error(f"❌ Ошибка при скачивании фото {filename}: {e}")
-
+            
+            logger.info(f"📸 Загрузка завершена. Скачано {downloaded_count} фото")
         else:
             logger.info("🔍 В Dropbox в папке /artists не найдено фото.")
     except Exception as e:
         logger.error(f"❌ Ошибка при загрузке фото артистов из Dropbox: {e}")
 else:
-    logger.info(f"✅ Папка {artists_dir} содержит {len(local_files)} файлов(а).")
+    # Подсчитываем только изображения
+    image_files = [f for f in local_files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
+    logger.info(f"✅ Папка {artists_dir} содержит {len(image_files)} изображений из {len(local_files)} файлов")
 
-modern_presentation_gen = ModernPresentationGenerator("base.pptx")
-ticket_gen = TicketGenerator()
+# Проверка других необходимых папок
+required_dirs = [
+    "downloads", "uploads", "output", "temp", 
+    "images", "templates", "assets", "config",
+    "assets/custom_buttons", "assets/backgrounds"
+]
 
+for folder in required_dirs:
+    folder_path = os.path.join(BASE_DIR, folder)
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path, exist_ok=True)
+        logger.info(f"📁 Создана папка: {folder_path}")
 
-# =========================
-# TICKETS ROUTER CONNECTION - DEBUG
-# =========================
-
-logger.info("🔧 Проверяем доступность server_tickets_router...")
+# Инициализация генераторов
+try:
+    modern_presentation_gen = ModernPresentationGenerator("base.pptx")
+    logger.info("✅ ModernPresentationGenerator инициализирован")
+except Exception as e:
+    logger.error(f"❌ Ошибка инициализации ModernPresentationGenerator: {e}")
+    modern_presentation_gen = None
 
 try:
-    # Проверим существует ли файл
-    tickets_router_path = os.path.join(os.path.dirname(__file__), "server_tickets_router.py")
-    logger.info(f"📁 Путь к router: {tickets_router_path}")
-    logger.info(f"📁 Файл существует: {os.path.exists(tickets_router_path)}")
-    
-    # Пробуем импортировать
+    ticket_gen = TicketGenerator()
+    logger.info("✅ TicketGenerator инициализирован")
+except Exception as e:
+    logger.error(f"❌ Ошибка инициализации TicketGenerator: {e}")
+    ticket_gen = None
+
+# Проверка доступности медиатеки
+try:
+    tracks_count = media_library.get_tracks_count()
+    logger.info(f"🎵 Медиатека инициализирована, треков: {tracks_count}")
+except Exception as e:
+    logger.error(f"❌ Ошибка инициализации медиатеки: {e}")
+
+# Подключение tickets router
+try:
     from backend.server_tickets_router import router as tickets_router, set_dependencies
     logger.info("✅ server_tickets_router импортирован успешно!")
     
-    # Инициализируем зависимости
+    # Передаем зависимости
     set_dependencies(media_library, ticket_gen)
-    
-    # Подключаем router - ВАЖНО: без prefix, т.к. пути уже полные в router
     app.include_router(tickets_router)
     logger.info("✅ Tickets router подключен!")
-    
 except ImportError as e:
-    logger.error(f"❌ Ошибка импорта: {e}")
-    logger.error(f"❌ Sys.path: {sys.path}")
+    logger.error(f"❌ Ошибка импорта tickets router: {e}")
 except Exception as e:
-    logger.error(f"❌ Другая ошибка: {e}")
-
-logger.info("🎵 Music Loto Maker Server v3.0 initialized")
-
-@app.get("/api/debug/all-routes")
-async def debug_all_routes():
-    """Показать все зарегистрированные routes"""
-    routes = []
-    for route in app.routes:
-        if hasattr(route, 'methods') and hasattr(route, 'path'):
-            routes.append({
-                'path': route.path,
-                'methods': list(route.methods),
-                'name': getattr(route, 'name', '')
-            })
-    
-    return {
-        "total_routes": len(routes),
-        "routes": routes
-    }
-# =========================
-# DEBUG ENDPOINTS
-# =========================
-
-@app.get("/api/debug/check-file/{filename}")
-async def debug_check_file(filename: str):
-    """Отладочный endpoint для проверки существования файлов"""
-    try:
-        possible_paths = [
-            os.path.join(BASE_DIR, "assets", "custom_buttons", filename),
-            os.path.join(BASE_DIR, "assets", "backgrounds", filename),
-            os.path.join(BASE_DIR, "assets", filename),
-            os.path.join(BASE_DIR, "output", filename),
-            os.path.join(BASE_DIR, "temp", filename),
-            os.path.join(BASE_DIR, "uploads", filename),
-            os.path.join(BASE_DIR, "images", filename),
-            os.path.join(BASE_DIR, "downloads", filename),
-            os.path.join(BASE_DIR, filename),
-        ]
-        
-        results = []
-        for path in possible_paths:
-            exists = os.path.exists(path)
-            results.append({
-                "path": path,
-                "exists": exists,
-                "is_file": os.path.isfile(path) if exists else False,
-                "size": os.path.getsize(path) if exists else 0
-            })
-            if exists:
-                logger.info(f"🔍 DEBUG: Файл найден: {path}")
-        
-        custom_buttons_dir = os.path.join(BASE_DIR, "assets", "custom_buttons")
-        dir_contents = []
-        if os.path.exists(custom_buttons_dir):
-            dir_contents = os.listdir(custom_buttons_dir)
-            logger.info(f"📁 DEBUG: Содержимое custom_buttons: {dir_contents}")
-        
-        backgrounds_dir = os.path.join(BASE_DIR, "assets", "backgrounds")
-        bg_contents = []
-        if os.path.exists(backgrounds_dir):
-            bg_contents = os.listdir(backgrounds_dir)
-            logger.info(f"📁 DEBUG: Содержимое backgrounds: {bg_contents}")
-        
-        return {
-            "filename": filename,
-            "results": results,
-            "custom_buttons_dir": custom_buttons_dir,
-            "dir_contents": dir_contents,
-            "backgrounds_dir": backgrounds_dir,
-            "bg_contents": bg_contents,
-            "base_dir": BASE_DIR
-        }
-    except Exception as e:
-        logger.error(f"❌ DEBUG ERROR: {e}")
-        return {"error": str(e)}
-
-@app.get("/api/debug/current-config")
-async def debug_current_config():
-    """Отладочный endpoint для проверки текущей конфигурации"""
-    try:
-        config_path = os.path.join(BASE_DIR, "config", "presentation_config.json")
-        config_exists = os.path.exists(config_path)
-        config_data = {}
-        if config_exists:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-        
-        return {
-            "config_exists": config_exists,
-            "config_path": config_path,
-            "config_data": config_data,
-            "custom_button_path": config_data.get('custom_button_path'),
-            "background_config": config_data.get('background', {})
-        }
-    except Exception as e:
-        return {"error": str(e)}
+    logger.error(f"❌ Другая ошибка при подключении tickets router: {e}")
 
 # =========================
-# INTERNET TRACK DOWNLOAD FUNCTIONS (ТОЛЬКО YOUTUBE)
+# YANDEX MUSIC DOWNLOAD WITH IMPROVED PROGRESS REPORTING
 # =========================
+
+# Глобальная переменная для отслеживания прогресса скачивания
+download_status = {
+    "is_running": False,
+    "total": 0,
+    "current": 0,
+    "current_track": "",
+    "results": [],
+    "failed_tracks": [],
+    "duplicate_tracks": [],
+    "successful_tracks": []
+}
+
+@app.get("/api/download/status")
+async def get_download_status():
+    """Получить текущий статус скачивания"""
+    return download_status
+
+def update_download_status(current: int, current_track: str, results: list = None):
+    """Обновить статус скачивания"""
+    download_status["current"] = current
+    download_status["current_track"] = current_track
+    if results is not None:
+        download_status["results"] = results
+        # Автоматически классифицируем результаты для фронтенда
+        download_status["successful_tracks"] = [r for r in results if r.get('success')]
+        download_status["duplicate_tracks"] = [r for r in results if r.get('duplicate')]
+        download_status["failed_tracks"] = [r for r in results if not r.get('success') and not r.get('duplicate')]
 
 def parse_track_list(track_list_text: str) -> list:
     """Парсит текст со списком треков в структурированный формат"""
@@ -535,6 +481,11 @@ def parse_track_list(track_list_text: str) -> list:
 
 def parse_track_line(line: str) -> tuple:
     """Парсит строку с информацией о треке"""
+    # УДАЛЯЕМ НУМЕРАЦИЮ в начале строки
+    line = re.sub(r'^\d+\.\s*', '', line)  # "1. ", "2. ", "123. "
+    line = re.sub(r'^\d+\)\s*', '', line)  # "1) ", "2) "
+    line = re.sub(r'^-\s*', '', line)      # "- "
+    
     line = re.sub(r'[\(\)\[\]\{\}]', '', line).strip()
     
     separators = [' - ', ' – ', ' — ', ' | ']
@@ -555,366 +506,290 @@ def parse_track_line(line: str) -> tuple:
     
     return "", line
 
-
-async def search_youtube_music(query: str, track_info: dict) -> dict:
-    """Асинхронная функция поиска и скачивания трека с альтернативных источников в формате MP3 (≤ 40 МБ)."""
+async def download_single_track(track_info: dict):
+    """Скачивание одного трека с проверкой дубликатов и улучшенной обработкой ошибок"""
+    artist = track_info.get("artist", "")
+    title = track_info.get("title", "")
+    
+    logger.info(f"🔍 Обработка: {artist} - {title}")
+    
+    # ПРОВЕРКА ДУБЛИКАТА ПЕРЕД СКАЧИВАНИЕМ
+    if media_library.track_exists(artist, title):
+        existing_track = media_library.get_track_by_artist_title(artist, title)
+        logger.warning(f"🚫 Дубликат, пропускаем: {artist} - {title} (ID: {existing_track['id']})")
+        return {
+            "success": False, 
+            "error": f"Трек уже существует в медиатеке (ID: {existing_track['id']})",
+            "artist": artist,
+            "title": title,
+            "duplicate": True,
+            "existing_track_id": existing_track['id']
+        }
+    
     try:
-        def _search_and_download(q, track_info_local):
-            try:
-                MAX_FILE_SIZE_MB = 40
-                MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
-
-                temp_dir = os.path.join(tempfile.gettempdir(), 'music_download')
-                os.makedirs(temp_dir, exist_ok=True)
-
-                # Конфигурация источников (приоритет для русских сервисов)
-                SOURCES_CONFIG = [
-                    {
-                        'name': 'yandex_music', 
-                        'search_template': 'ymsearch:{query}',
-                        'player_clients': ['web'],
-                        'query_modifiers': ['', ' официальный аудио', ' трек'],
-                        'cookies_supported': False
-                    },
-                    {
-                        'name': 'vk_video',
-                        'search_template': 'vksearch:{query}',
-                        'player_clients': ['web'],
-                        'query_modifiers': ['', ' музыка', ' аудио'],
-                        'cookies_supported': True
-                    },
-                    {
-                        'name': 'rutube',
-                        'search_template': 'rutubesearch:{query}',
-                        'player_clients': ['web'],
-                        'query_modifiers': ['', ' музыка', ' audio'],
-                        'cookies_supported': False
-                    },
-                    {
-                        'name': 'soundcloud',
-                        'search_template': 'scsearch:{query}',
-                        'player_clients': ['web'],
-                        'query_modifiers': ['', ' official audio'],
-                        'cookies_supported': False
-                    },
-                    {
-                        'name': 'mail_ru',
-                        'search_template': 'mailru:{query}',
-                        'player_clients': ['web'],
-                        'query_modifiers': ['', ' музыка'],
-                        'cookies_supported': False
-                    }
-                ]
-
-                def try_download_with_source(source_config):
-                    for player_client in source_config['player_clients']:
-                        for query_modifier in source_config['query_modifiers']:
-                            try:
-                                search_query = f"{q}{query_modifier}".strip()
-                                logger.info(f"🔍 Поиск в {source_config['name']}: {search_query}")
-
-                                # Подготовка cookies
-                                cookies_path = None
-                                if source_config['cookies_supported']:
-                                    cookies_path = os.path.join(BASE_DIR, "config", f"{source_config['name']}_cookies.txt")
-                                    if not os.path.exists(cookies_path):
-                                        cookies_path = os.path.join(BASE_DIR, "config", "music_cookies.txt")
-
-                                ydl_opts = {
-                                    'format': 'bestaudio[ext=m4a]/bestaudio/best',
-                                    'outtmpl': os.path.join(temp_dir, f"{source_config['name']}_%(title)s.%(ext)s"),
-                                    'quiet': True,
-                                    'no_warnings': True,
-                                    'noplaylist': True,
-                                    'retries': 2,
-                                    'socket_timeout': 30,
-                                    'sleep_interval': 6,
-                                    'max_sleep_interval': 10,
-                                    'postprocessors': [{
-                                        'key': 'FFmpegExtractAudio',
-                                        'preferredcodec': 'mp3',
-                                        'preferredquality': '192',
-                                    }],
-                                    'http_headers': {
-                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                                        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-                                    },
-                                    'cookiefile': cookies_path if cookies_path and os.path.exists(cookies_path) else None,
-                                }
-
-                                # Настройки для разных источников
-                                if source_config['name'] == 'yandex_music':
-                                    ydl_opts['extractor_args'] = {'yandexmusic': {'player_client': [player_client]}}
-                                elif source_config['name'] == 'vk_video':
-                                    ydl_opts['extractor_args'] = {'vk': {'player_client': [player_client]}}
-                                elif source_config['name'] == 'rutube':
-                                    ydl_opts['extractor_args'] = {'rutube': {'player_client': [player_client]}}
-                                elif source_config['name'] == 'soundcloud':
-                                    ydl_opts['extractor_args'] = {'soundcloud': {'player_client': [player_client]}}
-                                elif source_config['name'] == 'mail_ru':
-                                    ydl_opts['extractor_args'] = {'mailru': {'player_client': [player_client]}}
-
-                                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                                    # Поиск
-                                    try:
-                                        info = ydl.extract_info(source_config['search_template'].format(query=search_query), download=False)
-                                    except Exception as search_error:
-                                        logger.warning(f"⚠️ Ошибка поиска в {source_config['name']}: {search_error}")
-                                        continue
-
-                                    if not info or 'entries' not in info or not info['entries']:
-                                        logger.warning(f"⚠️ В {source_config['name']} ничего не найдено для: {search_query}")
-                                        continue
-
-                                    video_info = info['entries'][0]
-                                    video_url = video_info.get('webpage_url') or video_info.get('url')
-                                    video_title = video_info.get('title') or video_info.get('id')
-                                    logger.info(f"🎵 Найден в {source_config['name']}: {video_title}")
-
-                                    # Оценка размера
-                                    estimated_bytes = None
-                                    try:
-                                        meta = ydl.extract_info(video_url, download=False)
-                                        if meta:
-                                            estimated_bytes = meta.get('filesize') or meta.get('filesize_approx')
-                                            if not estimated_bytes and 'formats' in meta:
-                                                for fmt in sorted(meta['formats'], key=lambda f: f.get('tbr', 0), reverse=True):
-                                                    estimated_bytes = fmt.get('filesize') or fmt.get('filesize_approx')
-                                                    if estimated_bytes:
-                                                        break
-                                    except Exception as e_meta:
-                                        logger.warning(f"⚠️ Не удалось получить metadata из {source_config['name']}: {e_meta}")
-
-                                    if (estimated_bytes or 0) > MAX_FILE_SIZE_BYTES:
-                                        mb = estimated_bytes / (1024 * 1024)
-                                        logger.warning(f"🚫 {video_title} превышает {MAX_FILE_SIZE_MB} МБ ({mb:.1f} МБ)")
-                                        continue
-
-                                    # Скачивание
-                                    logger.info(f"⬇️ Скачивание из {source_config['name']}...")
-                                    download_info = ydl.extract_info(video_url, download=True)
-                                    downloaded_file = ydl.prepare_filename(download_info)
-
-                                    # Корректируем путь на финальный .mp3
-                                    base, _ = os.path.splitext(downloaded_file)
-                                    mp3_path = base + ".mp3"
-                                    if os.path.exists(mp3_path):
-                                        downloaded_file = mp3_path
-                                    elif os.path.exists(downloaded_file):
-                                        logger.warning("⚠️ mp3 не найден, используем исходный файл")
-                                    else:
-                                        logger.error("❌ Файл не найден после скачивания")
-                                        continue
-
-                                    # Проверка размера
-                                    actual_size = os.path.getsize(downloaded_file)
-                                    if actual_size > MAX_FILE_SIZE_BYTES:
-                                        os.remove(downloaded_file)
-                                        mb = actual_size / (1024 * 1024)
-                                        logger.warning(f"🚫 {video_title} превысил лимит ({mb:.1f} МБ)")
-                                        continue
-
-                                    logger.info(f"✅ Готов файл из {source_config['name']}: {downloaded_file}")
-                                    return {
-                                        'success': True, 
-                                        'file_path': downloaded_file, 
-                                        'title': video_title,
-                                        'source': source_config['name']
-                                    }
-
-                            except Exception as e:
-                                logger.warning(f"⚠️ Ошибка в {source_config['name']} с {player_client}: {e}")
-                                continue
-
-                    return {'success': False, 'error': f'Не удалось скачать из {source_config["name"]}'}
-
-                # Пробуем все источники по порядку
-                for source_config in SOURCES_CONFIG:
-                    logger.info(f"🎯 Пробуем источник: {source_config['name']}")
-                    result = try_download_with_source(source_config)
-                    if result['success']:
-                        return result
-
-                # Расширенный fallback поиск с разными вариантами запроса
-                logger.info("🔄 Расширенный поиск с разными вариантами запроса...")
-                search_variants = [
-                    q,
-                    f"{q} audio",
-                    f"{q} трек",
-                    f"{q} музыка",
-                    f"{track_info_local.get('artist', '')} {track_info_local.get('title', '')}",
-                    f"{track_info_local.get('artist', '')} - {track_info_local.get('title', '')}",
-                ]
-
-                # Убираем дубликаты
-                search_variants = list(dict.fromkeys([v.strip() for v in search_variants if v.strip()]))
-
-                for search_variant in search_variants:
-                    for source_config in SOURCES_CONFIG:
-                        logger.info(f"🔄 Пробуем: '{search_variant}' в {source_config['name']}")
-                        result = try_download_with_source({
-                            **source_config,
-                            'query_modifiers': ['']
-                        })
-                        if result['success']:
-                            return result
-
-                return {'success': False, 'error': 'Трек не найден ни в одном источнике'}
-
-            except Exception as e:
-                logger.exception(f"❌ Ошибка в _search_and_download: {e}")
-                return {'success': False, 'error': f'Ошибка загрузки: {e}'}
-
-        # Выполняем в потоке
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _search_and_download, query, track_info)
-        return result
-
-    except Exception as e:
-        logger.exception(f"❌ Критическая ошибка search_youtube_music: {e}")
-        return {'success': False, 'error': f'Ошибка search_youtube_music: {e}'}
-
-
-async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
-    """
-    Скачивание треков с альтернативных источников по порядку с ограничением размера,
-    анализом сегмента и поиском фото.
-    """
-    import asyncio, os, shutil, tempfile
-    from pathlib import Path
-    import yt_dlp
-
-    MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
-    results = []
-    total = len(tracks)
-
-    for i, track_info in enumerate(tracks):
-        try:
-            query = f"{track_info.get('artist', '')} {track_info.get('title', '')}".strip() or track_info.get("original_line", "")
-            logger.info(f"🔍 [{i+1}/{total}] {query}")
-
-            # Используем улучшенную функцию поиска
-            download_result = await search_youtube_music(query, track_info)
-            
-            if not download_result['success']:
-                results.append({
-                    "success": False, 
-                    "error": f"Не удалось скачать: {query} - {download_result.get('error', 'Unknown error')}"
-                })
-                continue
-
-            downloaded_file = download_result['file_path']
-            source_name = download_result.get('source', 'unknown')
-
-            # Проверка размера
-            if os.path.getsize(downloaded_file) > MAX_SIZE_BYTES:
-                logger.warning(f"⚠️ {query} слишком большой (> {max_size_mb} МБ), пропуск")
-                os.remove(downloaded_file)
-                results.append({"success": False, "error": f"Файл слишком большой: {query}"})
-                continue
-
-            # Подготовка имени файла
-            safe_artist = "".join(c for c in track_info.get("artist", "Unknown") if c.isalnum() or c in (" ", "-", "_")).rstrip()
-            safe_title = "".join(c for c in track_info.get("title", "Unknown") if c.isalnum() or c in (" ", "-", "_")).rstrip()
-            final_filename = f"{safe_artist} - {safe_title}.mp3"
-            downloads_dir = os.path.join(BASE_DIR, "downloads")
-            os.makedirs(downloads_dir, exist_ok=True)
-            final_path = os.path.join(downloads_dir, final_filename)
-
-            # Перемещение файла
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, shutil.move, downloaded_file, final_path)
-
-            # Добавление в медиатеку
-            track = media_library.add_track(final_path, final_filename)
-            if not track:
-                results.append({"success": False, "error": f"Ошибка добавления {final_filename}"})
-                continue
-
-            # Обновление метаданных с указанием источника
-            media_library.update_track(track["id"], {
-                "artist": safe_artist,
-                "title": safe_title,
-                "metadata": {
-                    "source": "internet_download", 
-                    "query": query,
-                    "download_source": source_name
-                }
-            })
-
-            # Анализ сегмента
-            best_start = await asyncio.to_thread(audio_editor.suggest_best_segment, final_path)
-            media_library.update_track_segment(track["id"], best_start, 30)
-
-            # Поиск фото артиста
-            local_photo = Path(BASE_DIR) / "artists" / f"{safe_artist}.jpg"
-            if local_photo.exists():
-                image_path = await asyncio.to_thread(process_local_photo, local_photo, track["id"])
-                media_library.update_track(track["id"], {"image_path": image_path})
-                logger.info(f"🖼️ Использовано локальное фото {safe_artist}")
-            else:
-                photo_urls = await asyncio.to_thread(image_searcher.fetch_multiple_artist_photos, safe_artist, 3)
-                if photo_urls:
-                    image_path = await download_and_save_photo(photo_urls[0], track["id"], safe_artist)
-                    if image_path:
-                        media_library.update_track(track["id"], {"image_path": image_path})
-                        logger.info(f"✅ Фото артиста {safe_artist} добавлено")
-
-            results.append({
-                "success": True, 
-                "file_path": final_path, 
-                "track_id": track["id"], 
-                "artist": safe_artist,
-                "source": source_name
-            })
-            logger.info(f"✅ Готово: {final_filename} (источник: {source_name})")
-
-        except Exception as e:
-            logger.error(f"❌ Ошибка {track_info.get('original_line', '')}: {e}")
-            results.append({"success": False, "error": str(e)})
-
-        logger.info(f"📦 Прогресс: {i+1}/{total} ({(i+1)/total*100:.1f}%)")
-
-    return results
-
-
-
-async def auto_search_photos_for_downloaded_tracks(results: list):
-    """Автоматически ищет фото для успешно скачанных треков"""
-    try:
-        successful_tracks = [r for r in results if r.get('success')]
+        # Ищем трек в Яндекс.Музыке
+        from yandex_music import Client as YandexClient
         
-        for track in successful_tracks:
+        def _sync_search():
             try:
-                track_id = track.get('track_id')
-                artist = track.get('artist')
+                YANDEX_MUSIC_TOKEN = "y0__xC-3q2iAxje-AYglImpghUw9pW0kAgCx0SZ5vnWcYWpiGpLqwVPsGWEfg"
+                client = YandexClient(YANDEX_MUSIC_TOKEN).init()
+                search_result = client.search(f"{artist} {title}")
                 
-                if track_id and artist:
-                    logger.info(f"🖼️ Автопоиск фото для: {artist}")
-                    
-                    photo_urls = image_searcher.fetch_multiple_artist_photos(artist, count=3)
-                    if photo_urls:
-                        photo_url = photo_urls[0]
-                        image_path = await download_and_save_photo(photo_url, track_id, artist)
-                        
-                        if image_path:
-                            media_library.update_track(track_id, {'image_path': image_path})
-                            logger.info(f"✅ Авто-фото сохранено для трека {track_id}")
-                        
+                if not search_result or not search_result.best:
+                    return None, "Трек не найден в Яндекс.Музыке"
+                
+                best = search_result.best
+                
+                # ПРОВЕРЯЕМ ТИП РЕЗУЛЬТАТА
+                if not hasattr(best, 'type') or not hasattr(best, 'result'):
+                    return None, "Некорректный результат поиска"
+                
+                result_type = best.type
+                result_obj = best.result
+                
+                logger.info(f"🔍 Тип результата для '{artist} - {title}': {result_type}")
+                
+                # Если это не трек, а артист, альбом и т.д. - это ошибка для нас
+                if result_type != 'track':
+                    if result_type == 'artist':
+                        artist_name = getattr(result_obj, 'name', 'Неизвестный артист')
+                        return None, f"Найден артист '{artist_name}', но не трек '{title}'"
+                    elif result_type == 'album':
+                        album_title = getattr(result_obj, 'title', 'Неизвестный альбом')
+                        return None, f"Найден альбом '{album_title}', но не трек '{title}'"
+                    elif result_type == 'playlist':
+                        return None, f"Найден плейлист, но не трек '{artist} - {title}'"
+                    elif result_type == 'podcast':
+                        return None, f"Найден подкаст, но не трек '{artist} - {title}'"
+                    elif result_type == 'podcast_episode':
+                        return None, f"Найден эпизод подкаста, но не трек '{artist} - {title}'"
+                    else:
+                        return None, f"Найден объект типа '{result_type}', но не трек '{artist} - {title}'"
+                
+                # Теперь точно работаем с треком
+                track = result_obj
+                
+                if not track:
+                    return None, "Трек не найден в Яндекс.Музыке"
+                
+                # Получаем информацию для скачивания
+                download_info_list = track.get_download_info()
+                if not download_info_list:
+                    return None, "Нет доступных ссылок для скачивания"
+                
+                # Ищем подходящий формат для скачивания (предпочтительно MP3)
+                best_download_info = None
+                for download_info in download_info_list:
+                    codec = getattr(download_info, 'codec', '').lower()
+                    # Предпочитаем MP3, но берем любой доступный формат
+                    if not best_download_info or codec == 'mp3':
+                        best_download_info = download_info
+                        if codec == 'mp3':
+                            break
+                
+                if not best_download_info:
+                    return None, "Нет подходящих форматов для скачивания"
+                
+                # Получаем прямую ссылку для скачивания
+                direct_link = best_download_info.get_direct_link()
+                if not direct_link:
+                    return None, "Не удалось получить ссылку для скачивания"
+                
+                return direct_link, None
+                
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка авто-поиска фото для трека {track.get('track_id')}: {e}")
-                continue
-                
-    except Exception as e:
-        logger.error(f"❌ Ошибка в авто-поиске фото: {e}")
+                logger.warning(f"⚠️ Yandex search error for {artist} - {title}: {e}")
+                return None, f"Ошибка поиска: {str(e)}"
 
-# =========================
-# INTERNET TRACK DOWNLOAD API
-# =========================
+        # Ищем трек
+        loop = asyncio.get_event_loop()
+        mp3_url, search_error = await loop.run_in_executor(None, _sync_search)
+        
+        if search_error:
+            return {
+                "success": False, 
+                "error": search_error,
+                "artist": artist,
+                "title": title,
+                "search_query": f"{artist} {title}"
+            }
+
+        if not mp3_url:
+            return {
+                "success": False, 
+                "error": "Трек не найден в Яндекс.Музыке",
+                "artist": artist,
+                "title": title,
+                "search_query": f"{artist} {title}"
+            }
+
+        # Создаем безопасное имя файла
+        safe_artist = "".join(c for c in artist if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
+        filename_safe = f"{safe_artist[:50]} - {safe_title[:50]}.mp3".replace('  ', ' ').replace('__', '_')
+        
+        downloads_dir = os.path.join(BASE_DIR, "downloads")
+        os.makedirs(downloads_dir, exist_ok=True)
+        final_path = os.path.join(downloads_dir, filename_safe)
+
+        # Проверяем, не существует ли уже файл (на случай параллельных загрузок)
+        if os.path.exists(final_path):
+            logger.info(f"📁 Файл уже существует: {filename_safe}")
+            # Проверяем, не добавился ли трек в медиатеку параллельно
+            if media_library.track_exists(artist, title):
+                existing_track = media_library.get_track_by_artist_title(artist, title)
+                return {
+                    "success": False, 
+                    "error": f"Трек уже был добавлен параллельно (ID: {existing_track['id']})",
+                    "artist": artist,
+                    "title": title,
+                    "duplicate": True,
+                    "existing_track_id": existing_track['id']
+                }
+        else:
+            # Скачиваем MP3
+            async with aiohttp.ClientSession() as session:
+                async with session.get(mp3_url, timeout=60) as resp:
+                    if resp.status != 200:
+                        error_msg = f"Ошибка скачивания: HTTP {resp.status}"
+                        if resp.status == 404:
+                            error_msg = "Файл не найден на сервере Яндекс.Музыки"
+                        elif resp.status == 403:
+                            error_msg = "Доступ к треку запрещен"
+                        elif resp.status >= 500:
+                            error_msg = "Ошибка сервера Яндекс.Музыки"
+                            
+                        return {
+                            "success": False, 
+                            "error": error_msg,
+                            "artist": artist,
+                            "title": title
+                        }
+                    
+                    try:
+                        with open(final_path, "wb") as f:
+                            async for chunk in resp.content.iter_chunked(8192):
+                                f.write(chunk)
+                    except IOError as e:
+                        return {
+                            "success": False, 
+                            "error": f"Ошибка записи файла: {str(e)}",
+                            "artist": artist,
+                            "title": title
+                        }
+
+            # Проверяем размер после скачивания
+            MAX_SIZE_BYTES = 40 * 1024 * 1024
+            if os.path.getsize(final_path) > MAX_SIZE_BYTES:
+                os.remove(final_path)
+                return {
+                    "success": False, 
+                    "error": "Файл слишком большой (>40MB)",
+                    "artist": artist,
+                    "title": title
+                }
+
+            # Проверяем, что файл не пустой
+            if os.path.getsize(final_path) == 0:
+                os.remove(final_path)
+                return {
+                    "success": False, 
+                    "error": "Скачанный файл пустой",
+                    "artist": artist,
+                    "title": title
+                }
+
+        # Добавляем в медиатеку
+        result = media_library.add_track(final_path, filename_safe, {
+            "artist": artist,
+            "title": title,
+            "source": "yandex_music"
+        })
+        
+        if not result.get('success'):
+            error_msg = result.get('error', 'Неизвестная ошибка добавления в медиатеку')
+            if result.get('error') == 'duplicate':
+                existing_track = result.get('existing_track')
+                return {
+                    "success": False, 
+                    "error": f"Трек уже существует в медиатеке (ID: {existing_track['id']})",
+                    "artist": artist,
+                    "title": title,
+                    "duplicate": True,
+                    "existing_track_id": existing_track['id']
+                }
+            else:
+                return {
+                    "success": False, 
+                    "error": error_msg,
+                    "artist": artist,
+                    "title": title
+                }
+
+        track = result['track']
+        track_id = track["id"]
+        
+        # Анализ сегмента
+        try:
+            segment_result = audio_editor.suggest_best_segment(final_path)
+            if segment_result is not None:
+                media_library.update_track_segment(track_id, segment_result, 30)
+                logger.info(f"🎵 Установлен умный отрезок для {artist} - {title}: {segment_result}с")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось установить сегмент для {artist} - {title}: {e}")
+
+        # Поиск фото (опционально)
+        try:
+            photo_path = image_searcher.fetch_artist_png(artist, track_id)
+            if photo_path and os.path.exists(photo_path):
+                media_library.update_track(track_id, {"image_path": photo_path})
+                logger.info(f"✅ Фото сохранено для: {artist}")
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка поиска фото для {artist}: {e}")
+
+        logger.info(f"✅ Успешно обработан: {artist} - {title} (ID: {track_id})")
+
+        return {
+            "success": True, 
+            "file_path": final_path, 
+            "track_id": track_id, 
+            "artist": artist,
+            "title": title,
+            "filename": filename_safe,
+            "segment_start": track.get('segment_start', 0)
+        }
+
+    except asyncio.TimeoutError:
+        logger.error(f"⏰ Таймаут при обработке {artist} - {title}")
+        return {
+            "success": False, 
+            "error": "Таймаут при скачивании трека",
+            "artist": artist,
+            "title": title
+        }
+    except aiohttp.ClientError as e:
+        logger.error(f"🌐 Ошибка сети при обработке {artist} - {title}: {e}")
+        return {
+            "success": False, 
+            "error": f"Ошибка сети: {str(e)}",
+            "artist": artist,
+            "title": title
+        }
+    except Exception as e:
+        logger.error(f"❌ Неожиданная ошибка при обработке {artist} - {title}: {e}")
+        return {
+            "success": False, 
+            "error": f"Неожиданная ошибка: {str(e)}",
+            "artist": artist,
+            "title": title
+        }
 
 @app.post("/api/tracks/download-from-list")
 async def download_tracks_from_list(request_data: dict):
-    """Скачивание треков из YouTube по списку названий"""
+    """Скачивание треков из Яндекс.Музыки по списку названий с улучшенной обработкой ошибок"""
+    global download_status
+    
     try:
         track_list_text = request_data.get('track_list', '')
         if not track_list_text.strip():
@@ -924,28 +799,223 @@ async def download_tracks_from_list(request_data: dict):
         if not tracks_to_download:
             raise HTTPException(status_code=400, detail="Не удалось распознать список треков")
         
-        logger.info(f"🎵 Начало скачивания {len(tracks_to_download)} треков с YouTube")
+        logger.info(f"🎵 Начало скачивания {len(tracks_to_download)} треков с Яндекс.Музыки")
         
-        results = await download_tracks_batch(tracks_to_download)
+        # Инициализируем статус скачивания
+        download_status.update({
+            "is_running": True,
+            "total": len(tracks_to_download),
+            "current": 0,
+            "current_track": "Подготовка к скачиванию...",
+            "results": [],
+            "failed_tracks": [],
+            "duplicate_tracks": [],
+            "successful_tracks": []
+        })
         
-        auto_search_photos = request_data.get('auto_search_photos', True)
-        if auto_search_photos:
-            await auto_search_photos_for_downloaded_tracks(results)
+        # Скачиваем треки с обновлением прогресса
+        results = []
+        for i, track_info in enumerate(tracks_to_download):
+            track_name = f"{track_info.get('artist', '')} - {track_info.get('title', '')}".strip(' - ')
+            
+            # Обновляем статус перед началом скачивания каждого трека
+            download_status["current"] = i
+            download_status["current_track"] = f"Обработка: {track_name}"
+            
+            logger.info(f"📊 Прогресс: {i+1}/{len(tracks_to_download)} - {track_name}")
+            
+            # Скачиваем один трек
+            result = await download_single_track(track_info)
+            results.append(result)
+            
+            # Обновляем статус после завершения скачивания
+            download_status["current"] = i + 1
+            download_status["current_track"] = f"Завершено: {track_name}"
+            download_status["results"] = results
+            
+            # Логируем результат
+            if result.get('success'):
+                logger.info(f"✅ Успех: {track_name}")
+            elif result.get('duplicate'):
+                logger.warning(f"🚫 Дубликат: {track_name}")
+            else:
+                logger.error(f"❌ Ошибка: {track_name} - {result.get('error', 'Неизвестная ошибка')}")
+            
+            # Небольшая задержка для стабильности и чтобы не нагружать API
+            await asyncio.sleep(1)
+        
+        # Анализируем результаты
+        successful_count = len([r for r in results if r.get('success')])
+        duplicate_count = len([r for r in results if r.get('duplicate')])
+        failed_count = len([r for r in results if not r.get('success') and not r.get('duplicate')])
+        
+        # Классифицируем результаты для детального отчета
+        successful_tracks = [r for r in results if r.get('success')]
+        duplicate_tracks = [r for r in results if r.get('duplicate')]
+        failed_tracks = [r for r in results if not r.get('success') and not r.get('duplicate')]
+        
+        # Финальный статус
+        download_status.update({
+            "is_running": False,
+            "current": len(tracks_to_download),
+            "current_track": f"Завершено: {successful_count} успешно, {duplicate_count} дубликатов, {failed_count} ошибок",
+            "results": results,
+            "successful_tracks": successful_tracks,
+            "duplicate_tracks": duplicate_tracks,
+            "failed_tracks": failed_tracks
+        })
+        
+        logger.info(f"🎉 Скачивание завершено: {successful_count} успешно, {duplicate_count} дубликатов, {failed_count} ошибок")
+        
+        # Детальный лог ошибок
+        if duplicate_tracks:
+            logger.info("🚫 Пропущенные дубликаты:")
+            for track in duplicate_tracks:
+                logger.info(f"   - {track.get('artist')} - {track.get('title')}")
+        
+        if failed_tracks:
+            logger.info("❌ Треки с ошибками:")
+            for track in failed_tracks:
+                logger.info(f"   - {track.get('artist')} - {track.get('title')}: {track.get('error')}")
         
         return {
             "success": True,
             "message": f"Обработано {len(results)} треков",
             "results": results,
-            "downloaded": len([r for r in results if r.get('success')]),
-            "failed": len([r for r in results if not r.get('success')])
+            "downloaded": successful_count,
+            "duplicates": duplicate_count,
+            "failed": failed_count,
+            "source": "yandex_music",
+            "statistics": {
+                "total": len(tracks_to_download),
+                "successful": successful_count,
+                "duplicates": duplicate_count,
+                "failed": failed_count,
+                "success_rate": round((successful_count / len(tracks_to_download)) * 100, 1) if tracks_to_download else 0
+            }
         }
         
     except Exception as e:
-        logger.error(f"❌ Ошибка скачивания треков: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка скачивания: {str(e)}")
+        logger.error(f"❌ Критическая ошибка скачивания треков: {e}")
+        download_status.update({
+            "is_running": False,
+            "current_track": f"Критическая ошибка: {str(e)}"
+        })
+        raise HTTPException(status_code=500, detail=f"Критическая ошибка скачивания: {str(e)}")
+
+@app.get("/api/download/statistics")
+async def get_download_statistics():
+    """Получить статистику по последнему скачиванию"""
+    try:
+        successful_count = len(download_status.get("successful_tracks", []))
+        duplicate_count = len(download_status.get("duplicate_tracks", []))
+        failed_count = len(download_status.get("failed_tracks", []))
+        total = download_status.get("total", 0)
+        
+        return {
+            "success": True,
+            "statistics": {
+                "total_tracks": total,
+                "successful": successful_count,
+                "duplicates": duplicate_count,
+                "failed": failed_count,
+                "success_rate": round((successful_count / total) * 100, 1) if total > 0 else 0,
+                "last_update": datetime.now().isoformat()
+            },
+            "last_download": {
+                "is_running": download_status.get("is_running", False),
+                "current_track": download_status.get("current_track", ""),
+                "total_results": len(download_status.get("results", []))
+            }
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения статистики: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.post("/api/download/clear-status")
+async def clear_download_status():
+    """Очистить статус скачивания"""
+    global download_status
+    download_status.update({
+        "is_running": False,
+        "total": 0,
+        "current": 0,
+        "current_track": "",
+        "results": [],
+        "failed_tracks": [],
+        "duplicate_tracks": [],
+        "successful_tracks": []
+    })
+    return {"success": True, "message": "Статус скачивания очищен"}
 
 # =========================
-# EXISTING ROUTES (остальные маршруты остаются без изменений)
+# PRESENTATION GENERATION API
+# =========================
+
+@app.post("/api/generate/presentation")
+async def generate_presentation(request_data: dict):
+    """Генерация презентации"""
+    try:
+        logger.info("🎬 Запуск генерации презентации...")
+        
+        # Проверяем наличие base.pptx
+        base_path = os.path.join(BASE_DIR, "base.pptx")
+        if not os.path.exists(base_path):
+            logger.info("📦 base.pptx не найден, скачиваем из Dropbox...")
+            if not dropbox_storage.download_base_pptx(base_path):
+                raise HTTPException(status_code=500, detail="Не удалось скачать base.pptx из облака")
+        
+        # Проверяем наличие треков
+        tracks_count = media_library.get_tracks_count()
+        if tracks_count < 1:
+            raise HTTPException(status_code=400, detail="Недостаточно треков для генерации")
+        
+        title = request_data.get("title", "Музыкальное Лото")
+        make_bw = request_data.get("design", {}).get("make_bw", False)
+        
+        logger.info(f"📊 Параметры генерации: '{title}', ЧБ: {make_bw}, треков: {tracks_count}")
+        
+        generator = ModernPresentationGenerator(base_path)
+        result_path = generator.generate(
+            game_title=title,
+            tracks=None,  # автоматически загрузит из tracks.json
+            make_bw=make_bw,
+            use_parallel=True
+        )
+        
+        # Получаем имя файла для скачивания
+        result_dir = Path(result_path)
+        pptx_files = list(result_dir.glob("*.pptx"))
+        if pptx_files:
+            download_filename = pptx_files[0].name
+            download_url = f"/api/download/{download_filename}"
+            
+            logger.info(f"✅ Презентация создана: {download_filename}")
+            
+            return {
+                "success": True,
+                "message": "Презентация успешно создана",
+                "download_url": download_url,
+                "filename": download_filename,
+                "path": str(result_path)
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Презентация не была создана")
+        
+    except FileNotFoundError as e:
+        logger.error(f"❌ Файл шаблона не найден: {e}")
+        raise HTTPException(status_code=500, detail=f"Шаблон презентации не найден: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Ошибка генерации презентации: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
+
+# =========================
+# BASIC ROUTES
 # =========================
 
 @app.get("/")
@@ -958,17 +1028,19 @@ async def serve_frontend():
         "version": "3.0.0",
         "features": [
             "Musical Loto Game",
-            "Modern presentations",
+            "Modern presentations", 
             "Smart metadata parsing",
             "Audio editing",
             "Ticket generation",
             "JSON export",
             "Artist image search",
-            "YouTube track download",
+            "Yandex Music track download",
         ],
     }
 
-# -------- Media Library API --------
+# =========================
+# TRACK MANAGEMENT API
+# =========================
 
 @app.get("/api/tracks")
 async def get_tracks():
@@ -983,28 +1055,22 @@ async def get_tracks():
 
 @app.get("/api/tracks/count")
 async def get_tracks_count():
+    """Возвращает количество треков"""
     try:
-        path = _find_track_json_path()
-        if not path:
-            logger.warning("⚠️ track_data.json не найден — возвращаем 0")
-            return {"count": 0, "status": "insufficient"}
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        tracks = data.get("tracks", [])
-        count = len(tracks)
-        logger.info(f"🔢 Количество треков из JSON: {count} (файл: {path})")
+        count = media_library.get_tracks_count()
         return {"count": count, "status": "sufficient" if count >= 40 else "insufficient"}
     except Exception as e:
-        logger.error(f"❌ Ошибка чтения track_data.json: {e}")
+        logger.error(f"❌ Ошибка получения количества треков: {e}")
         return {"count": 0, "status": "error"}
 
 @app.post("/api/tracks/upload")
 async def upload_tracks(files: list[UploadFile] = File(...)):
+    """Загрузка треков с локального компьютера с проверкой дубликатов"""
     MAX_SIZE_MB = 40
     MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024
     ALLOWED_EXTENSIONS = {'.mp3', '.wav', '.flac', '.m4a', '.aac'}
 
-    saved_tracks, errors = [], []
+    saved_tracks, errors, duplicates = [], [], []
     logger.info(f"📤 Начало загрузки {len(files)} файлов")
 
     for file in files:
@@ -1012,14 +1078,12 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
             logger.info(f"🔍 Обработка файла: {file.filename}")
             file_extension = Path(file.filename).suffix.lower()
 
-            # --- Проверка расширения ---
             if file_extension not in ALLOWED_EXTENSIONS:
                 msg = f"Неподдерживаемый формат: {file_extension}"
                 errors.append(msg)
                 logger.warning(f"⚠️ {msg}")
                 continue
 
-            # --- Проверка размера ---
             file.file.seek(0, os.SEEK_END)
             file_size = file.file.tell()
             file.file.seek(0)
@@ -1029,7 +1093,18 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                 logger.warning(f"⚠️ {msg}")
                 continue
 
-            # --- Папка downloads ---
+            # Парсим метаданные для проверки дубликата
+            metadata = metadata_processor.process(file.filename)
+            cleaned_artist = re.sub(r'\s*\([^)]*\)$', '', metadata.get('artist', 'Неизвестный исполнитель')).strip()
+            cleaned_title = re.sub(r'\s*\([^)]*\)$', '', metadata.get('title', 'Без названия')).strip()
+
+            # ПРОВЕРКА ДУБЛИКАТА
+            if media_library.track_exists(cleaned_artist, cleaned_title):
+                duplicate_msg = f"Дубликат: {cleaned_artist} - {cleaned_title}"
+                duplicates.append(duplicate_msg)
+                logger.warning(f"🚫 {duplicate_msg}")
+                continue
+
             downloads_dir = os.path.join(BASE_DIR, "downloads")
             os.makedirs(downloads_dir, exist_ok=True)
 
@@ -1037,7 +1112,6 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
             safe_filename = f"{timestamp}_{Path(file.filename).stem.replace(' ', '_')}{file_extension}"
             file_path = os.path.join(downloads_dir, safe_filename)
 
-            # --- Сохраняем файл ---
             with open(file_path, "wb") as buffer:
                 content = await file.read()
                 buffer.write(content)
@@ -1048,66 +1122,39 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
                 logger.error(f"❌ {msg}")
                 continue
 
-            # --- Читаем метаданные ИЗ ИМЕНИ ФАЙЛА, а не из пути к файлу ---
-            metadata = metadata_processor.process(file.filename) # <-- Передаём только имя файла
-            logger.debug(f"📄 Метаданные для {file.filename}: {metadata}")
-
-            # --- Очистка artist и title от суффиксов в скобках ---
-            # Эта очистка необходима, если metadata_processor.process НЕ гарантирует очистку
-            raw_artist = metadata.get('artist', 'Неизвестный исполнитель')
-            raw_title = metadata.get('title', 'Без названия')
-
-            # Убираем всё, что в скобках в конце строки
-            import re
-            cleaned_artist = re.sub(r'\s*\([^)]*\)$', '', raw_artist).strip()
-            cleaned_title = re.sub(r'\s*\([^)]*\)$', '', raw_title).strip()
-
-            # Обновляем метаданные
-            metadata['artist'] = cleaned_artist
-            metadata['title'] = cleaned_title
-
-            logger.debug(f"📄 Очищенные метаданные: {metadata}")
-
-            # --- Добавляем в медиатеку ---
-            track = media_library.add_track(file_path, file.filename) # <-- original_filename = file.filename
-            if not track:
-                msg = f"Не удалось добавить трек в медиатеку: {file.filename}"
-                errors.append(msg)
-                logger.error(f"❌ {msg}")
+            # Добавляем трек в медиатеку
+            result = media_library.add_track(file_path, file.filename, metadata)
+            if not result.get('success'):
+                if result.get('error') == 'duplicate':
+                    duplicate_msg = f"Дубликат при добавлении: {cleaned_artist} - {cleaned_title}"
+                    duplicates.append(duplicate_msg)
+                    logger.warning(f"🚫 {duplicate_msg}")
+                else:
+                    msg = f"Не удалось добавить трек в медиатеку: {file.filename}"
+                    errors.append(msg)
+                    logger.error(f"❌ {msg}")
                 continue
 
-            # Извлекаем artist и title из очищенных результатов парсинга
-            artist_name = cleaned_artist
-            title = cleaned_title
+            track = result['track']
 
-            # Обновляем трек в медиатеке с корректными artist и title
-            update_data = {'artist': artist_name, 'title': title, 'metadata': metadata}
-            media_library.update_track(track['id'], update_data)
-
-            # --- Автоматический отрезок ---
             try:
                 best_start = audio_editor.suggest_best_segment(file_path)
                 media_library.update_track_segment(track['id'], best_start, 30)
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось установить умный отрезок: {e}")
 
-            # --- Автоматический поиск фото артиста (без конвертации) ---
             try:
-                logger.info(f"🖼️ Поиск фото для артиста: {artist_name}")
-                photo_path = image_searcher.fetch_artist_png(artist_name, track['id'])
-
+                logger.info(f"🖼️ Поиск фото для артиста: {cleaned_artist}")
+                photo_path = image_searcher.fetch_artist_png(cleaned_artist, track['id'])
                 if photo_path and os.path.exists(photo_path):
-                    # Просто используем найденный PNG как есть
-                    logger.info(f"✅ Фото артиста сохранено без изменений: {photo_path}")
+                    logger.info(f"✅ Фото артиста сохранено: {photo_path}")
                     media_library.update_track(track['id'], {'image_path': photo_path})
-                    update_data['image_path'] = photo_path
+                    track['image_path'] = photo_path
                 else:
-                    logger.warning(f"⚠️ Фото для {artist_name} не найдено")
-
+                    logger.warning(f"⚠️ Фото для {cleaned_artist} не найдено")
             except Exception as e:
-                logger.warning(f"⚠️ Ошибка при поиске фото артиста {artist_name}: {e}")
+                logger.warning(f"⚠️ Ошибка при поиске фото артиста {cleaned_artist}: {e}")
 
-            track.update(update_data)
             saved_tracks.append(track)
 
         except Exception as e:
@@ -1116,13 +1163,19 @@ async def upload_tracks(files: list[UploadFile] = File(...)):
             logger.error(f"❌ {msg}", exc_info=True)
 
     response_message = f"Успешно загружено {len(saved_tracks)} треков"
+    if duplicates:
+        response_message += f", пропущено дубликатов: {len(duplicates)}"
     if errors:
-        response_message += f". Ошибки: {', '.join(errors)}"
+        response_message += f", ошибок: {len(errors)}"
+        
     logger.info(f"📊 Итог загрузки: {response_message}")
 
-    return {"message": response_message, "tracks": saved_tracks, "errors": errors}
-
-
+    return {
+        "message": response_message, 
+        "tracks": saved_tracks, 
+        "errors": errors,
+        "duplicates": duplicates
+    }
 
 @app.put("/api/tracks/{track_id}")
 async def update_track(track_id: int, track_data: dict):
@@ -1137,9 +1190,9 @@ async def update_track(track_id: int, track_data: dict):
 @app.delete("/api/tracks/{track_id}")
 async def delete_track(track_id: int):
     try:
-        success = media_library.delete_track(track_id)
-        if success:
-            return {"message": "Трек удален"}
+        result = media_library.delete_track(track_id)
+        if result.get('success'):
+            return {"message": "Трек удален", "files_removed": result.get('files_removed', [])}
         raise HTTPException(status_code=404, detail="Трек не найден")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка удаления: {str(e)}")
@@ -1147,12 +1200,150 @@ async def delete_track(track_id: int):
 @app.delete("/api/tracks")
 async def clear_tracks():
     try:
-        media_library.clear()
-        return {"message": "Медиатека очищена"}
+        result = media_library.clear()
+        if result.get('success'):
+            return {
+                "message": "Медиатека очищена", 
+                "tracks_deleted": result.get('tracks_deleted', 0),
+                "files_removed": result.get('files_removed', [])
+            }
+        raise HTTPException(status_code=500, detail="Ошибка очистки медиатеки")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка очистки: {str(e)}")
 
-# -------- Artist photos --------
+# =========================
+# DUPLICATE CHECKING API
+# =========================
+
+@app.post("/api/tracks/check-duplicate")
+async def check_track_duplicate(request_data: dict):
+    """Проверить, есть ли трек в медиатеке"""
+    try:
+        artist = request_data.get('artist', '').strip()
+        title = request_data.get('title', '').strip()
+        
+        if not artist or not title:
+            return {"is_duplicate": False, "error": "Не указаны артист или название"}
+        
+        is_duplicate = media_library.track_exists(artist, title)
+        duplicates = media_library.find_duplicate_tracks(artist, title) if is_duplicate else []
+        
+        return {
+            "is_duplicate": is_duplicate,
+            "artist": artist,
+            "title": title,
+            "existing_tracks": duplicates
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки дубликата: {e}")
+        return {"is_duplicate": False, "error": str(e)}
+
+@app.get("/api/tracks/duplicates")
+async def get_all_duplicates():
+    """Получить все дубликаты в медиатеке"""
+    try:
+        tracks = media_library.get_tracks()
+        seen = {}
+        duplicates = []
+        
+        for track in tracks:
+            key = f"{normalize_track_string(track['artist'])}|{normalize_track_string(track['title'])}"
+            if key in seen:
+                duplicates.append({
+                    'artist': track['artist'],
+                    'title': track['title'],
+                    'tracks': [seen[key], track]
+                })
+            else:
+                seen[key] = track
+        
+        return {
+            "duplicates": duplicates,
+            "total_duplicate_groups": len(duplicates)
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка поиска дубликатов: {e}")
+        return {"duplicates": [], "error": str(e)}
+
+@app.get("/api/tracks/duplicates/detailed")
+async def get_detailed_duplicates():
+    """Получить детальную информацию о дубликатах"""
+    try:
+        tracks = media_library.get_tracks()
+        seen = {}
+        duplicates = []
+        
+        for track in tracks:
+            key = f"{normalize_track_string(track['artist'])}|{normalize_track_string(track['title'])}"
+            if key in seen:
+                # Нашли дубликат
+                original_track = seen[key]
+                duplicate_info = {
+                    'artist': track['artist'],
+                    'title': track['title'],
+                    'tracks': [
+                        {
+                            'id': original_track['id'],
+                            'file_path': original_track['file_path'],
+                            'original_filename': original_track['original_filename'],
+                            'created_at': original_track.get('created_at', ''),
+                            'image_path': original_track.get('image_path')
+                        },
+                        {
+                            'id': track['id'],
+                            'file_path': track['file_path'],
+                            'original_filename': track['original_filename'],
+                            'created_at': track.get('created_at', ''),
+                            'image_path': track.get('image_path')
+                        }
+                    ]
+                }
+                duplicates.append(duplicate_info)
+            else:
+                seen[key] = track
+        
+        return {
+            "duplicates": duplicates,
+            "total_duplicate_groups": len(duplicates),
+            "total_duplicate_tracks": sum(len(group['tracks']) for group in duplicates)
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка поиска дубликатов: {e}")
+        return {"duplicates": [], "error": str(e)}
+
+# =========================
+# ARTIST PHOTOS API
+# =========================
+
+@app.get("/api/tracks/{track_id}/artist-photo")
+async def get_artist_photo(track_id: int):
+    """Получить фото артиста для трека"""
+    try:
+        track = media_library.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Трек не найден")
+
+        image_path = track.get('image_path')
+        
+        # Если путь есть и файл существует - возвращаем фото
+        if image_path and os.path.exists(image_path):
+            logger.info(f"✅ Отдаем фото для трека {track_id}: {image_path}")
+            return FileResponse(
+                image_path,
+                media_type='image/png',
+                filename=f"artist_{track_id}.png"
+            )
+        
+        # Если фото нет, возвращаем 404
+        logger.warning(f"⚠️ Фото не найдено для трека {track_id}")
+        raise HTTPException(status_code=404, detail="Фото артиста не найдено")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения фото для трека {track_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка получения фото: {str(e)}")
 
 @app.post("/api/tracks/{track_id}/search-artist-photo")
 async def search_artist_photo(track_id: int, request_data: dict):
@@ -1178,6 +1369,52 @@ async def search_artist_photo(track_id: int, request_data: dict):
         logger.error(f"❌ Ошибка поиска фото: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка поиска фото: {str(e)}")
 
+@app.post("/api/tracks/{track_id}/upload-artist-photo")
+async def upload_artist_photo(track_id: int, photo: UploadFile = File(...)):
+    """Загрузить фото артиста для конкретного трека"""
+    try:
+        track = media_library.get_track(track_id)
+        if not track:
+            raise HTTPException(status_code=404, detail="Трек не найден")
+
+        if not photo.content_type or not photo.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="Файл должен быть изображением")
+
+        # Создаем папку для изображений если нет
+        images_dir = os.path.join(BASE_DIR, "images")
+        os.makedirs(images_dir, exist_ok=True)
+
+        # Генерируем имя файла
+        file_extension = Path(photo.filename).suffix.lower()
+        image_filename = f"{track_id}_artist{file_extension}"
+        image_path = os.path.join(images_dir, image_filename)
+
+        # Сохраняем файл
+        content = await photo.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+
+        with open(image_path, "wb") as f:
+            f.write(content)
+
+        # Обновляем трек с новым путем к фото
+        media_library.update_track(track_id, {'image_path': image_path})
+
+        logger.info(f"✅ Фото артиста загружено для трека {track_id}: {image_path}")
+
+        return {
+            "success": True,
+            "message": "Фото артиста успешно загружено",
+            "image_path": image_path,
+            "artist": track.get('artist', '')
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки фото артиста: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка загрузки фото: {str(e)}")
+
 @app.post("/api/tracks/{track_id}/save-artist-photo")
 async def save_artist_photo(track_id: int, request_data: dict):
     try:
@@ -1188,8 +1425,20 @@ async def save_artist_photo(track_id: int, request_data: dict):
         artist_name = request_data.get('artist', track.get('artist', ''))
         if not photo_url:
             raise HTTPException(status_code=400, detail="URL фото не указан")
-        image_path = await download_and_save_photo(photo_url, track_id, artist_name)
-        if image_path and os.path.exists(image_path):
+        
+        # Скачиваем и сохраняем фото
+        images_dir = os.path.join(BASE_DIR, "images")
+        os.makedirs(images_dir, exist_ok=True)
+        
+        image_path = os.path.join(images_dir, f"{track_id}_artist.png")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(photo_url) as response:
+                if response.status == 200:
+                    with open(image_path, 'wb') as f:
+                        f.write(await response.read())
+        
+        if os.path.exists(image_path):
             media_library.update_track(track_id, {'image_path': image_path, 'artist': artist_name})
             return {"success": True, "message": "Фото артиста сохранено",
                     "image_path": image_path, "artist": artist_name}
@@ -1198,1092 +1447,9 @@ async def save_artist_photo(track_id: int, request_data: dict):
         logger.error(f"❌ Ошибка сохранения фото: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка сохранения фото: {str(e)}")
 
-@app.post("/api/tracks/{track_id}/upload-artist-photo")
-async def upload_artist_photo(track_id: int, photo: UploadFile = File(...)):
-    """
-    Загружает локальное фото артиста.
-    Старые фото (основное и обработанное) удаляются.
-    Новое сохраняется под временным именем, затем обрабатывается через image_searcher._process_local_photo:
-      - PNG с прозрачностью сохраняется без изменений
-      - JPG / PNG без альфа и др. форматы пытаются пройти через rembg
-    """
-    try:
-        track = media_library.get_track(track_id)
-        if not track:
-            raise HTTPException(status_code=404, detail="Трек не найден")
-
-        if not photo.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="Файл должен быть изображением")
-
-        images_dir = os.path.join(BASE_DIR, "images")
-        os.makedirs(images_dir, exist_ok=True)
-
-        # Финальные пути (чистим их перед загрузкой)
-        final_image_path = os.path.join(images_dir, f"{track_id}_artist.png")
-        processed_image_path = os.path.join(images_dir, f"{track_id}_artist_processed.png")
-
-        # --- Удаляем старые версии ---
-        for path in [final_image_path, processed_image_path]:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                    logger.info(f"🗑️ Удалено старое фото: {path}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Не удалось удалить {path}: {e}")
-
-        # --- Сохраняем новое фото во временный файл ---
-        orig_ext = Path(photo.filename).suffix.lower() or ".png"
-        temp_path = os.path.join(images_dir, f"{track_id}_artist_upload{orig_ext}")
-
-        with open(temp_path, "wb") as buffer:
-            content = await photo.read()
-            buffer.write(content)
-        logger.info(f"🖼️ Загружено новое фото артиста (temp): {temp_path}")
-
-        # --- Обрабатываем файл через image_searcher._process_local_photo ---
-        final_path = None
-        try:
-            loop = asyncio.get_event_loop()
-            # вызываем синхронную обработку в thread pool
-            final_path = await loop.run_in_executor(None, image_searcher._process_local_photo, temp_path, track_id)
-
-            if final_path:
-                logger.info(f"🛠️ Обработанное фото возвращено: {final_path}")
-                # если обработанный путь отличается от temp — удаляем temp
-                try:
-                    if os.path.abspath(final_path) != os.path.abspath(temp_path) and os.path.exists(temp_path):
-                        os.remove(temp_path)
-                except Exception as e:
-                    logger.debug(f"Не удалось удалить временный файл {temp_path}: {e}")
-
-            else:
-                # если обработка вернула None — используем оригинал: переименовываем temp в final
-                final_path = final_image_path
-                try:
-                    # если final уже существует — удалим или добавим суффикс
-                    if os.path.exists(final_path):
-                        try:
-                            os.remove(final_path)
-                        except Exception:
-                            pass
-                    shutil.move(temp_path, final_path)
-                    logger.info(f"ℹ️ Используется оригинал как финал: {final_path}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Не удалось переместить оригинал в финал: {e}")
-                    # fallback: оставляем temp и используем его
-                    final_path = temp_path
-
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка обработки загруженного фото: {e}")
-            # fallback — используем temp_path
-            final_path = temp_path
-
-        # --- Сохраняем путь в медиатеку ---
-        if final_path and os.path.exists(final_path):
-            media_library.update_track(track_id, {'image_path': final_path})
-            return {
-                "success": True,
-                "message": "Фото артиста загружено и обработано",
-                "image_path": final_path
-            }
-
-        # Если ничего не получилось
-        raise HTTPException(status_code=500, detail="Не удалось сохранить/обработать фото")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки фото: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка загрузки фото: {str(e)}")
-
-
-
-
-
-@app.delete("/api/tracks/{track_id}/artist-photo")
-async def delete_artist_photo(track_id: int):
-    try:
-        track = media_library.get_track(track_id)
-        if not track:
-            raise HTTPException(status_code=404, detail="Трек не найден")
-        image_path = track.get('image_path')
-        if image_path and os.path.exists(image_path):
-            os.remove(image_path)
-        media_library.update_track(track_id, {'image_path': None})
-        return {"success": True, "message": "Фото артиста удалено"}
-    except Exception as e:
-        logger.error(f"❌ Ошибка удаления фото: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка удаления фото: {str(e)}")
-
-from fastapi import HTTPException
-from fastapi.responses import FileResponse
-import os
-
-@app.get("/api/tracks/{track_id}/artist-photo")
-async def get_artist_photo(track_id: int):
-    track = media_library.get_track(track_id)
-    if not track:
-        raise HTTPException(status_code=404, detail="Трек не найден")
-
-    try:
-        # Проверяем существующее фото
-        image_path = track.get('image_path')
-        if image_path and os.path.exists(image_path):
-            return FileResponse(
-                image_path,
-                filename=f"artist_{track['artist']}.png",
-                media_type='image/png'
-            )
-
-        # Используем image_searcher для поиска или placeholder
-        image_path = image_searcher.fetch_artist_png(track['artist'], track_id)
-
-        if image_path and os.path.exists(image_path):
-            return FileResponse(
-                image_path,
-                filename=f"artist_{track['artist']}_placeholder.png",
-                media_type='image/png'
-            )
-
-        # Если нет файла, поднимаем 404
-        raise HTTPException(status_code=404, detail="Фото артиста не найдено")
-
-    except HTTPException:
-        # Пропускаем HTTPException без изменения
-        raise
-    except Exception as e:
-        # Остальные ошибки логируем и возвращаем 500
-        logger.exception(f"Ошибка получения фото для {track['artist']}: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка получения фото")
-
-# -------- Segments & Timings --------
-
-@app.put("/api/tracks/{track_id}/segment")
-async def update_track_segment(track_id: int, segment_data: dict):
-    try:
-        start_time = segment_data.get('start_time', 0)
-        duration = segment_data.get('duration', 30)
-        logger.info(f"🔄 Обновление отрезка трека {track_id}: {start_time}с, {duration}с")
-
-        success = media_library.update_track_segment(track_id, start_time, duration)
-        if not success:
-            raise HTTPException(status_code=404, detail="Track not found")
-
-        data_file = os.path.join(BASE_DIR, "track_data.json")
-        if os.path.exists(data_file):
-            with open(data_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            for track in data.get("tracks", []):
-                if track.get('id') == track_id:
-                    track['segment_start'] = start_time
-                    track['segment_duration'] = duration
-                    break
-            with open(data_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-
-        return {"message": "Segment updated",
-                "segment_start": start_time, "segment_duration": duration}
-    except Exception as e:
-        logger.error(f"❌ Ошибка обновления отрезка: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка обновления отрезка: {str(e)}")
-
-@app.post("/api/tracks/save-all-timings")
-async def save_all_timings():
-    try:
-        tracks = media_library.get_tracks()
-        data_file = os.path.join(BASE_DIR, "track_data.json")
-        if os.path.exists(data_file):
-            with open(data_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        else:
-            data = {"tracks": []}
-
-        for track in tracks:
-            existing_idx = None
-            for i, t in enumerate(data["tracks"]):
-                if t.get('id') == track['id']:
-                    existing_idx = i
-                    break
-            if existing_idx is not None:
-                data["tracks"][existing_idx]['segment_start'] = track.get('segment_start', 0)
-                data["tracks"][existing_idx]['segment_duration'] = track.get('segment_duration', 30)
-            else:
-                data["tracks"].append({
-                    'id': track['id'],
-                    'artist': track.get('artist', ''),
-                    'title': track.get('title', ''),
-                    'segment_start': track.get('segment_start', 0),
-                    'segment_duration': track.get('segment_duration', 30),
-                    'image_path': track.get('image_path'),
-                    'file_path': track.get('file_path'),
-                    'original_filename': track.get('original_filename', '')
-                })
-
-        with open(data_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-        return {
-            "success": True,
-            "message": f"Тайминги {len(tracks)} треков сохранены в основной файл",
-            "file_path": data_file,
-            "tracks_count": len(tracks),
-            "tracks_with_images": len([t for t in tracks if t.get('image_path')])
-        }
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения таймингов: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка сохранения таймингов: {str(e)}")
-
-# -------- Presentation build --------
-
-def _extend_to_120(tracks: list[dict]) -> list[dict]:
-    """Если треков < 120 — рандомно дублируем до 120 (с сохранением базовых полей)."""
-    if len(tracks) >= 120:
-        return tracks
-    need = 120 - len(tracks)
-    logger.info(f"🧩 Дополняем треки дубликатами: {len(tracks)} -> 120 (+{need})")
-    base = list(tracks)
-    while need > 0 and tracks:
-        src = random.choice(base)
-        clone = dict(src)
-        clone['id'] = max(t['id'] for t in base) + 1
-        base.append(clone)
-        need -= 1
-    return base[:120]
-
-def _safe_call_generator(func, *args, **kwargs):
-    """Вызывает генератор с поддержкой необязательного параметра design."""
-    try:
-        sig = inspect.signature(func)
-        if 'design' in sig.parameters and 'design' in kwargs:
-            return func(*args, **kwargs)
-        kwargs.pop('design', None)
-        return func(*args, **kwargs)
-    except TypeError:
-        kwargs.pop('design', None)
-        return func(*args, **kwargs)
-
-@app.post("/api/presentation/build")
-async def build_presentation(request_data: dict):
-    """Генерация презентации по шаблону с заменой фото и аудио + упаковка в ZIP."""
-    try:
-        # 1. Получаем треки из медиатеки
-        tracks = media_library.get_tracks()
-        if not tracks:
-            raise HTTPException(status_code=400, detail="Нет треков для генерации презентации")
-
-        # 2. Формируем список из 120 треков
-        tracks_for_gen = _extend_to_120(tracks)
-
-        # 3. Подготовка директорий
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join(BASE_DIR, "output")
-        os.makedirs(output_dir, exist_ok=True)
-
-        # 4. Читаем данные о дизайне
-        design = request_data.get("design")
-        game_title = design.get("game_title", "Музыкальное Лото") if design else "Музыкальное Лото"
-
-        try:
-            # 6. Инициализация нового генератора
-            generator = ModernPresentationGenerator(base_path=os.path.join(BASE_DIR, "base.pptx"))
-
-            # 7. Генерация PPTX и ZIP с нарезанными треками
-            make_bw = request_data.get("design", {}).get("make_bw", False)
-            result_path = generator.generate(
-                game_title=game_title,
-                make_bw=make_bw,
-                tracks=tracks_for_gen,
-                output_dir=output_dir
-            )
-
-            # Ищем созданный файл
-            if result_path and os.path.isdir(result_path):
-                zip_files = list(Path(result_path).glob("*.zip"))
-                if zip_files:
-                    result_path = str(zip_files[0])
-                else:
-                    pptx_files = list(Path(result_path).glob("*.pptx"))
-                    if pptx_files:
-                        result_path = str(pptx_files[0])
-
-            if not result_path or not os.path.exists(result_path):
-                raise HTTPException(status_code=500, detail="Файл не создан")
-
-            filename = os.path.basename(result_path)
-            
-            logger.info(f"✅ Архив успешно создан: {result_path}")
-
-            # 8. Возврат клиенту
-            return {
-                "success": True,
-                "message": "Презентация и аудиотреки успешно сгенерированы",
-                "archive": filename,
-                "archive_path": result_path,
-                "download_url": f"/api/download/{filename}",
-                "tracks_count": len(tracks_for_gen),
-            }
-
-        except Exception as e:
-            logger.exception("❌ Ошибка генерации презентации")
-            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
-
-    except Exception as e:
-        logger.exception("❌ Ошибка в build_presentation")
-        raise HTTPException(status_code=500, detail=f"Ошибка: {str(e)}")
-
-@app.get("/api/templates")
-async def get_available_templates():
-    return {
-        "templates": [
-            {
-                "id": "presentation_default",
-                "name": "Стандартный шаблон (PDF стиль)",
-                "description": "Шаблон в стиле предоставленного PDF файла - 3 раунда по 40 треков",
-                "type": "presentation",
-                "features": [
-                    "Титульный слайд",
-                    "Слайд 'поём'",
-                    "3 раунда с римской нумерацией",
-                    "Слайды с номерами",
-                    "Слайды исполнителей",
-                    "Слайды паузы",
-                    "Финальный слайд",
-                ],
-            }
-        ],
-        "ticket_templates": [
-            {
-                "id": "tickets_default",
-                "name": "Стандартные билеты",
-                "description": "Бланки для игры в музыкальное лото",
-                "type": "tickets",
-            }
-        ],
-    }
-
-@app.get("/api/tracks")
-async def get_tracks():
-    """Возвращает список треков из медиатеки"""
-    try:
-        if not media_library:
-            return {"tracks": []}
-        tracks = media_library.get_tracks()
-        return {"tracks": tracks}
-    except Exception as e:
-        logger.error(f"Ошибка получения треков: {e}")
-        return {"tracks": []}
-
-@app.post("/api/templates/save")
-async def save_template(template_data: dict):
-    try:
-        template_id = template_data.get('id') or f"template_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        templates_dir = os.path.join(BASE_DIR, "templates")
-        os.makedirs(templates_dir, exist_ok=True)
-        template_path = os.path.join(templates_dir, f"{template_id}.json")
-        with open(template_path, 'w', encoding='utf-8') as f:
-            json.dump(template_data, f, ensure_ascii=False, indent=2)
-        logger.info(f"✅ Шаблон сохранен: {template_id}")
-        return {"success": True, "message": "Шаблон сохранен", "template_id": template_id}
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения шаблона: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/templates/{template_id}")
-async def get_template(template_id: str):
-    try:
-        templates_dir = os.path.join(BASE_DIR, "templates")
-        template_path = os.path.join(templates_dir, f"{template_id}.json")
-        if os.path.exists(template_path):
-            with open(template_path, 'r', encoding='utf-8') as f:
-                template_data = json.load(f)
-            return {"success": True, "template": template_data}
-        return {"success": True, "template": {"id": "presentation_default",
-                                              "name": "Стандартный шаблон",
-                                              "type": "presentation"}}
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки шаблона: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# -------- Config --------
-
-@app.get("/api/config/presentation")
-async def get_presentation_config():
-    config_path = os.path.join(BASE_DIR, "config", "presentation_config.json")
-    default_config = {
-        "rounds": 3,
-        "tracks_per_round": 40,
-        "segment_duration": 30,
-        "auto_split_rounds": True,
-        "include_title_slide": True,
-        "include_singing_slide": True,
-        "include_pause_slides": True,
-        "include_final_slide": True,
-        "slide_transition": "random",
-
-        "title_font_family": "Montserrat",
-        "title_font_size": 52,
-        "title_bold": True,
-        "subtitle_font_family": "Montserrat",
-        "subtitle_font_size": 22,
-        "subtitle_italic": False,
-        "artist_font_family": "Montserrat",
-        "artist_font_size": 28,
-        "artist_bold": True,
-        "track_font_family": "Montserrat",
-        "track_font_size": 22,
-
-        "photo_x": 6, "photo_y": 52, "photo_w": 18, "photo_h": 18,
-        "name_x": 27, "name_y": 58,
-        "title_x": 27, "title_y": 66,
-
-        "custom_button_path": None,
-        "button_w": 18,
-        "button_h": 10,
-        "button_x": 76,
-        "button_y": 72,
-        "button_number_overlay": True,
-
-        "background": {
-            "mode": "solid",
-            "color": "#101a2b",
-            "gradFrom": "#2a62ff",
-            "gradTo": "#0b1235",
-            "imageURL": None
-        },
-
-        "text_color": "#ffffff",
-        "font_family": "Arial",
-    }
-    try:
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
-            return {**default_config, **user_config}
-        return default_config
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки конфигурации: {e}")
-        return default_config
-
-@app.post("/api/config/presentation")
-async def save_presentation_config(config_data: dict):
-    try:
-        config_dir = os.path.join(BASE_DIR, "config")
-        os.makedirs(config_dir, exist_ok=True)
-        config_path = os.path.join(config_dir, "presentation_config.json")
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
-        logger.info("✅ Конфигурация презентации сохранена")
-        return {"success": True, "message": "Конфигурация сохранена"}
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения конфигурации: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# -------- Assets upload (custom button, background) --------
-
 # =========================
-# UPLOAD custom BUTTON PNG
+# AUDIO EDITOR API
 # =========================
-# This handler accepts an uploaded image file (preferably PNG), saves it into
-# assets/custom_buttons/ and returns a JSON with a path usable by the frontend.
-from fastapi import UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
-import time
-from PIL import Image
-
-@app.post("/api/assets/custom-button")
-async def upload_custom_button(file: UploadFile = File(...)):
-    """Загрузка кастомной PNG-кнопки в assets/custom_buttons/"""
-    try:
-        logger.info(f"🔼 Начало загрузки кастомной кнопки: {file.filename}")
-        
-        if not file.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="Файл должен быть изображением")
-        
-        # Создаем директорию для кастомных кнопок
-        custom_buttons_dir = os.path.join(BASE_DIR, "assets", "custom_buttons")
-        os.makedirs(custom_buttons_dir, exist_ok=True)
-        
-        # Генерируем уникальное имя файла
-        timestamp = int(time.time() * 1000)
-        safe_filename = f"custom_button_{timestamp}.png"
-        save_path = os.path.join(custom_buttons_dir, safe_filename)
-        
-        # Сохраняем файл
-        with open(save_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
-        logger.info(f"✅ Кнопка сохранена: {save_path}")
-        
-        # Обновляем конфигурацию
-        config_path = os.path.join(BASE_DIR, "config", "presentation_config.json")
-        config_data = {}
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-        
-        # Сохраняем относительный путь для использования в генераторе
-        relative_path = f"assets/custom_buttons/{safe_filename}"
-        config_data['custom_button_path'] = relative_path
-        
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"✅ Конфигурация обновлена: custom_button_path = {relative_path}")
-        
-        return {
-            "success": True, 
-            "path": relative_path,
-            "filename": safe_filename,
-            "download_url": f"/api/download/{safe_filename}"
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки кнопки: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка загрузки кнопки: {str(e)}")
-
-@app.post("/api/assets/background")
-async def upload_background(file: UploadFile = File(...)):
-    """Загрузка фонового изображения в assets/backgrounds/"""
-    try:
-        logger.info(f"🔼 Начало загрузки фона: {file.filename}")
-        
-        if not file.content_type.startswith('image/'):
-            raise HTTPException(status_code=400, detail="Файл должен быть изображением")
-        
-        # Создаем директорию для фонов
-        backgrounds_dir = os.path.join(BASE_DIR, "assets", "backgrounds")
-        os.makedirs(backgrounds_dir, exist_ok=True)
-        
-        # Генерируем уникальное имя файла
-        timestamp = int(time.time() * 1000)
-        safe_filename = f"background_{timestamp}.png"
-        save_path = os.path.join(backgrounds_dir, safe_filename)
-        
-        # Сохраняем файл
-        with open(save_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
-        logger.info(f"✅ Фон сохранен: {save_path}")
-        
-        # Конвертируем в PNG если нужно
-        try:
-            with Image.open(save_path) as img:
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                img.save(save_path, "PNG")
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось конвертировать фон: {e}")
-        
-        # Обновляем конфигурацию
-        config_path = os.path.join(BASE_DIR, "config", "presentation_config.json")
-        config_data = {}
-        if os.path.exists(config_path):
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-        
-        # Сохраняем относительный путь
-        relative_path = f"assets/backgrounds/{safe_filename}"
-        if 'background' not in config_data:
-            config_data['background'] = {}
-        config_data['background']['mode'] = 'image'
-        config_data['background']['imageURL'] = relative_path
-        
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config_data, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"✅ Конфигурация обновлена: background = {relative_path}")
-        
-        return {
-            "success": True, 
-            "path": relative_path,
-            "filename": safe_filename,
-            "download_url": f"/api/download/{safe_filename}"
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки фона: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка загрузки фона: {str(e)}")
-
-# -------- Photo processing helpers --------
-
-async def download_tracks_batch(tracks: list, max_size_mb: int = 40) -> list:
-    """
-    Скачивание треков с Hitmotop по порядку с ограничением размера,
-    анализом сегмента и поиском фото. ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ (обновлённая).
-    Поиск MP3 теперь только через Yandex.Music с токеном.
-    """
-    import asyncio, os, shutil, tempfile, json
-    from pathlib import Path
-    import aiohttp
-    import logging
-    YANDEX_MUSIC_TOKEN = "y0__xC-3q2iAxje-AYglImpghUw9pW0kAgCx0SZ5vnWcYWpiGpLqwVPsGWEfg"
-    MAX_SIZE_BYTES = max_size_mb * 1024 * 1024
-    total = len(tracks)
-
-    # Настройки директорий
-    temp_dir = os.path.join(tempfile.gettempdir(), "hitmotop_dl")
-    downloads_dir = os.path.join(BASE_DIR, "downloads")
-    os.makedirs(temp_dir, exist_ok=True)
-    os.makedirs(downloads_dir, exist_ok=True)
-
-    # Прокси из переменных окружения (если есть)
-    PROXY = os.getenv("PROXY_URL")
-
-    logger.info(f"🎵 Начинаем параллельное скачивание {total} треков с Hitmotop")
-
-    # ------------------ ФУНКЦИЯ ПОИСКА MP3 через Yandex.Music ------------------
-    def fetch_hitmotop_mp3_url_sync(artist: str, title: str) -> str | None:
-        """Ищет MP3 только через Yandex.Music с токеном"""
-        try:
-            from yandex_music import Client as YandexClient
-        except ImportError:
-            logger.warning("⚠️ Библиотека yandex_music не установлена.")
-            return None
-
-        def _sync_search():
-            try:
-                client = YandexClient(YANDEX_MUSIC_TOKEN).init()
-                search = client.search(f"{artist} {title}")
-                best = getattr(search, "best", None)
-                if not best:
-                    return None
-                track = getattr(best, "result", None) or best
-                if not track:
-                    return None
-                download_info = track.get_download_info()
-                if not download_info:
-                    return None
-                return download_info[0].get_direct_link()
-            except Exception as e:
-                logger.warning(f"⚠️ Yandex search error: {e}")
-                return None
-
-        return _sync_search()
-    # ---------------------------------------------------------------------
-
-    async def process_single_track(i: int, track_info: dict) -> dict:
-        """Обработка одного трека с безопасным именем файла"""
-        artist = track_info.get("artist", "")
-        title = track_info.get("title", "")
-        logger.info(f"🔍 [{i+1}/{total}] Обработка трека: {artist} - {title}")
-
-        # Вызов синхронной функции через executor
-        loop = asyncio.get_event_loop()
-        mp3_url = await loop.run_in_executor(None, fetch_hitmotop_mp3_url_sync, artist, title)
-
-        if not mp3_url:
-            return {"success": False, "error": f"Нет ссылки на MP3 для трека: {track_info}"}
-
-        safe_artist = artist.replace('/', '-').replace('\\', '-')
-        safe_title = title.replace('/', '-').replace('\\', '-')
-        filename_safe = f"{safe_artist[:50]} - {safe_title[:50]}.mp3"
-        final_path = os.path.join(downloads_dir, filename_safe)
-
-        try:
-            # Скачиваем MP3
-            headers_dl = {"User-Agent": "Mozilla/5.0"}
-            async with aiohttp.ClientSession(headers=headers_dl) as session:
-                async with session.get(mp3_url, proxy=PROXY, timeout=60) as resp:
-                    if resp.status != 200:
-                        logger.error(f"❌ Ошибка скачивания {artist} - {title}: HTTP {resp.status}")
-                        return {"success": False, "error": f"HTTP {resp.status}"}
-                    with open(final_path, "wb") as f:
-                        f.write(await resp.read())
-
-            # Проверка размера
-            if os.path.getsize(final_path) > MAX_SIZE_BYTES:
-                logger.warning(f"⚠️ {artist} - {title} слишком большой, пропуск")
-                os.remove(final_path)
-                return {"success": False, "error": f"Файл слишком большой: {artist} - {title}"}
-
-            # Добавляем в медиатеку
-            track = media_library.add_track(final_path, filename_safe)
-            if not track:
-                return {"success": False, "error": f"Ошибка добавления {filename_safe}"}
-
-            # Обновление метаданных, анализ сегмента, поиск фото
-            metadata_result = await loop.run_in_executor(None, lambda: media_library.update_track(track["id"], {
-                "artist": artist,
-                "title": title,
-                "metadata": {"source": "yandex", "url": mp3_url}
-            }))
-            segment_result = await loop.run_in_executor(None, lambda: audio_editor.suggest_best_segment(final_path))
-            image_result = await loop.run_in_executor(None, lambda: image_searcher.fetch_artist_png(artist, track["id"]))
-
-            if segment_result is not None:
-                media_library.update_track_segment(track["id"], segment_result, 30)
-            if image_result:
-                media_library.update_track(track["id"], {"image_path": image_result})
-                logger.info(f"✅ Фото для {artist} добавлено")
-
-            return {"success": True, "file_path": final_path, "track_id": track["id"], "artist": artist}
-
-        except Exception as e:
-            logger.error(f"❌ Ошибка скачивания/обработки {artist} - {title}: {e}")
-            return {"success": False, "error": str(e)}
-
-    # Параллельная обработка треков
-    semaphore = asyncio.Semaphore(1)  # Только 1 браузер за раз
-    async def limited_download(i, track_info):
-        async with semaphore:
-            return await process_single_track(i, track_info)
-
-    tasks = [asyncio.create_task(limited_download(i, t)) for i, t in enumerate(tracks)]
-    results = await asyncio.gather(*tasks)
-
-    successful = len([r for r in results if r.get('success')])
-    logger.info(f"🎉 Параллельное скачивание завершено: {successful}/{total} успешно")
-
-    try:
-        shutil.rmtree(temp_dir, True)
-    except Exception as e:
-        logger.warning(f"⚠️ Ошибка очистки временных файлов: {e}")
-
-    return results
-
-
-
-
-
-
-async def auto_search_photos_for_downloaded_tracks(results: list):
-    """Автоматически ищет фото для успешно скачанных треков - ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ"""
-    try:
-        successful_tracks = [r for r in results if r.get('success')]
-        
-        if not successful_tracks:
-            return
-            
-        logger.info(f"🖼️ Параллельный поиск фото для {len(successful_tracks)} треков")
-        
-        # Создаем семафор для ограничения параллельных запросов
-        semaphore = asyncio.Semaphore(5)
-        
-        async def process_photo(track):
-            async with semaphore:
-                try:
-                    track_id = track.get('track_id')
-                    artist = track.get('artist')
-                    
-                    if track_id and artist:
-                        image_path = await download_artist_photo(artist, track_id)
-                        if image_path:
-                            media_library.update_track(track_id, {'image_path': image_path})
-                            logger.info(f"✅ Авто-фото сохранено для {artist}")
-                        return True
-                except Exception as e:
-                    logger.warning(f"⚠️ Ошибка авто-поиска фото для {track.get('artist')}: {e}")
-                return False
-        
-        # Запускаем все задачи параллельно
-        tasks = [process_photo(track) for track in successful_tracks]
-        await asyncio.gather(*tasks)
-        
-        logger.info("✅ Параллельный поиск фото завершен")
-                
-    except Exception as e:
-        logger.error(f"❌ Ошибка в авто-поиске фото: {e}")
-
-# =========================
-# INTERNET TRACK DOWNLOAD API
-# =========================
-
-@app.post("/api/tracks/download-from-list")
-async def download_tracks_from_list(request_data: dict):
-    """Скачивание треков из YouTube по списку названий - ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ"""
-    try:
-        track_list_text = request_data.get('track_list', '')
-        if not track_list_text.strip():
-            raise HTTPException(status_code=400, detail="Список треков пуст")
-        
-        tracks_to_download = parse_track_list(track_list_text)
-        if not tracks_to_download:
-            raise HTTPException(status_code=400, detail="Не удалось распознать список треков")
-        
-        logger.info(f"🎵 Начало ПАРАЛЛЕЛЬНОГО скачивания {len(tracks_to_download)} треков")
-        
-        # Получаем параметры параллелизма из запроса
-        max_workers = request_data.get('max_workers', 3)
-        logger.info(f"⚡ Максимум параллельных загрузок: {max_workers}")
-        
-        # Скачиваем треки (теперь параллельно)
-        results = await download_tracks_batch(tracks_to_download)
-        
-        # Автопоиск фото (тоже параллельно)
-        auto_search_photos = request_data.get('auto_search_photos', True)
-        if auto_search_photos:
-            # Запускаем в фоне, не ждем завершения
-            asyncio.create_task(auto_search_photos_for_downloaded_tracks(results))
-        
-        successful_count = len([r for r in results if r.get('success')])
-        failed_count = len([r for r in results if not r.get('success')])
-        
-        logger.info(f"🎉 Скачивание завершено: {successful_count} успешно, {failed_count} с ошибками")
-        
-        return {
-            "success": True,
-            "message": f"Обработано {len(results)} треков",
-            "results": results,
-            "downloaded": successful_count,
-            "failed": failed_count
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка скачивания треков: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка скачивания: {str(e)}")
-
-
-# -------- Simple photo API wrappers --------
-
-async def download_artist_photo(artist_name: str, track_id: int):
-    """Простая обертка для скачивания фото артиста"""
-    return await asyncio.to_thread(
-        image_searcher.fetch_artist_png, artist_name, track_id
-    )
-
-async def search_artist_photos(artist_name: str, count: int = 10):
-    """Поиск фото артиста"""
-    return await asyncio.to_thread(
-        image_searcher.fetch_multiple_artist_photos, artist_name, count
-    )
-# -------- Legacy --------
-
-@app.post("/api/generate/presentation")
-async def generate_presentation(request_data: dict):
-    """Генерация презентации с заменой фото, аудио и созданием ZIP."""
-    try:
-        game_title = request_data.get("title") or "Музыкальное Лото"
-        logger.info(f"🚀 Генерация презентации: {game_title}")
-
-        # Пытаемся получить треки из медиатеки, если нет — пусть генератор возьмёт JSON
-        tracks = media_library.get_tracks() or None
-        if tracks:
-            logger.info(f"📊 Получено {len(tracks)} треков из медиатеки")
-        else:
-            logger.warning("⚠️ В медиатеке нет треков, генератор сам подхватит tracks.json")
-
-        base_path = os.path.join(BASE_DIR, "base.pptx")
-        if not os.path.exists(base_path):
-            raise HTTPException(status_code=500, detail="Файл base.pptx не найден")
-
-        generator = ModernPresentationGenerator(base_path)
-
-        make_bw = request_data.get("design", {}).get("make_bw", False)
-        
-        # ВАЖНО: получаем путь к ZIP архиву, а не к папке
-        result_path = generator.generate(
-            game_title=game_title,
-            tracks=tracks,
-            make_bw=make_bw
-        )
-
-        # Проверяем, что result_path - это путь к ZIP файлу
-        if result_path and os.path.isdir(result_path):
-            # Ищем ZIP файл в папке
-            zip_files = list(Path(result_path).glob("*.zip"))
-            if zip_files:
-                result_path = str(zip_files[0])
-            else:
-                # Если ZIP не найден, ищем PPTX
-                pptx_files = list(Path(result_path).glob("*.pptx"))
-                if pptx_files:
-                    result_path = str(pptx_files[0])
-                else:
-                    raise HTTPException(status_code=500, detail="Файл презентации не создан")
-
-        if not result_path or not os.path.exists(result_path):
-            raise HTTPException(status_code=500, detail="Ошибка генерации: файл не создан")
-
-        # Определяем имя файла для скачивания
-        filename = os.path.basename(result_path)
-        
-        logger.info(f"✅ Презентация успешно создана: {result_path}")
-        return {
-            "success": True,
-            "message": f"Презентация '{game_title}' создана успешно",
-            "archive": filename,
-            "archive_path": result_path,
-            "download_url": f"/api/download/{filename}"
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"❌ Ошибка генерации презентации: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
-
-from fastapi.responses import FileResponse
-from fastapi import HTTPException
-
-@app.get("/download/{filename}")
-def download_file(filename: str):
-    file_path = Path("output") / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Файл не найден")
-
-    return FileResponse(
-        path=file_path,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        filename=filename
-    )
-@app.post("/api/generate/tickets")
-async def generate_tickets_legacy(count: int = 24):
-    try:
-        tracks = media_library.get_tracks()
-        result_path = ticket_gen.generate_modern_tickets(tracks, count)
-        if result_path:
-            return {"success": True, "message": f"Сгенерировано {count} билетов",
-                    "file_name": os.path.basename(result_path)}
-        raise HTTPException(status_code=500, detail="Ошибка генерации")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/download/{filename}")
-async def download_file(filename: str):
-    """
-    Скачивание файлов из различных директорий проекта
-    """
-    try:
-        logger.info(f"📥 Запрос на скачивание файла: {filename}")
-        
-        # Безопасная проверка имени файла
-        if not filename or '..' in filename or filename.startswith('/'):
-            logger.warning(f"🚫 Некорректное имя файла: {filename}")
-            raise HTTPException(status_code=400, detail="Некорректное имя файла")
-        
-        # Убираем параметры запроса если есть
-        filename = filename.split('?')[0]
-        
-        # Список возможных путей для поиска файла
-        possible_paths = [
-            os.path.join(BASE_DIR, "output", filename),
-            os.path.join(BASE_DIR, "assets", "custom_buttons", filename),
-            os.path.join(BASE_DIR, "assets", "backgrounds", filename),
-            os.path.join(BASE_DIR, "downloads", filename),
-            os.path.join(BASE_DIR, "uploads", filename),
-            os.path.join(BASE_DIR, "temp", filename),
-            os.path.join(BASE_DIR, "images", filename),
-            os.path.join(BASE_DIR, filename),  # Прямо в корневой директории
-        ]
-        
-        # Добавляем поиск в подпапках output
-        output_dir = os.path.join(BASE_DIR, "output")
-        if os.path.exists(output_dir):
-            for root, dirs, files in os.walk(output_dir):
-                for file in files:
-                    if file == filename:
-                        possible_paths.append(os.path.join(root, file))
-        
-        logger.info(f"🔍 Ищем файл по путям: {[p for p in possible_paths if 'output' in p]}")
-        
-        file_path = None
-        for path in possible_paths:
-            if os.path.exists(path) and os.path.isfile(path):
-                file_path = path
-                logger.info(f"✅ Файл найден: {file_path}")
-                break
-        
-        if not file_path:
-            # Попробуем найти файл без учета регистра
-            output_dir = os.path.join(BASE_DIR, "output")
-            if os.path.exists(output_dir):
-                for root, dirs, files in os.walk(output_dir):
-                    for file in files:
-                        if file.lower() == filename.lower():
-                            file_path = os.path.join(root, file)
-                            logger.info(f"✅ Файл найден (без учета регистра): {file_path}")
-                            break
-                    if file_path:
-                        break
-        
-        if not file_path:
-            logger.warning(f"❌ Файл не найден: {filename}")
-            logger.warning(f"📁 Содержимое output директории: {os.listdir(os.path.join(BASE_DIR, 'output')) if os.path.exists(os.path.join(BASE_DIR, 'output')) else 'Директория не существует'}")
-            raise HTTPException(status_code=404, detail=f"Файл '{filename}' не найден")
-
-        # Проверяем размер файла
-        file_size = os.path.getsize(file_path)
-        if file_size == 0:
-            logger.warning(f"⚠️ Файл пустой: {file_path}")
-            raise HTTPException(status_code=500, detail="Файл пустой")
-
-        # Определяем MIME тип
-        file_ext = os.path.splitext(filename)[1].lower()
-        mime_types = {
-            '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            '.zip': 'application/zip',
-            '.mp3': 'audio/mpeg',
-            '.png': 'image/png',
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.json': 'application/json',
-            '.txt': 'text/plain'
-        }
-        
-        media_type = mime_types.get(file_ext, 'application/octet-stream')
-        
-        logger.info(f"📤 Отправляем файл: {filename} ({file_size} bytes, {media_type})")
-        
-        return FileResponse(
-            file_path, 
-            filename=filename, 
-            media_type=media_type,
-            headers={
-                'Content-Disposition': f'attachment; filename="{filename}"',
-                'Content-Length': str(file_size)
-            }
-        )
-        
-    except HTTPException:
-        # Пробрасываем HTTP исключения как есть
-        raise
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка при загрузке файла {filename}: {e}")
-        logger.exception("Полная трассировка ошибки:")
-        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
-
-@app.get("/api/status")
-async def get_status():
-    try:
-        path = _find_track_json_path()
-        tracks = []
-        if path and os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            tracks = data.get("tracks", [])
-        tracks_count = len(tracks)
-        tracks_with_photos = sum(1 for t in tracks if t.get("image_path") and os.path.exists(t["image_path"]))
-        status_info = {
-            "status": "running",
-            "version": "3.0.0",
-            "tracks_count": tracks_count,
-            "tracks_with_photos": tracks_with_photos,
-            "musical_loto_ready": tracks_count >= 40,
-            "metadata_processor": type(metadata_processor).__name__,
-            "features": [
-                "musical_loto_game",
-                "modern_presentations",
-                "smart_metadata",
-                "audio_editing",
-                "ticket_generation",
-                "json_export",
-                "artist_images_manual",
-                "youtube_track_download",
-            ],
-        }
-        if tracks_count < 40:
-            status_info["warning"] = f"Для Musical Loto нужно ещё {40 - tracks_count} треков"
-        else:
-            status_info["message"] = "Musical Loto готов к генерации!"
-        return status_info
-    except Exception as e:
-        logger.error(f"❌ Ошибка статуса: {e}")
-        return {"status": "error", "version": "3.0.0", "tracks_count": 0, "error": str(e)}
-
-# -------- Audio Editor API --------
 
 @app.get("/api/tracks/{track_id}/waveform")
 async def get_track_waveform(track_id: int):
@@ -2291,15 +1457,13 @@ async def get_track_waveform(track_id: int):
         track = media_library.get_track(track_id)
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
-        if not track.get('waveform_data'):
-            waveform_data = audio_editor.generate_waveform(track['file_path'])
-            if waveform_data:
-                track['waveform_data'] = waveform_data
-                if hasattr(media_library, 'save_to_file'):
-                    media_library.save_to_file()
-            else:
-                raise HTTPException(status_code=500, detail="Failed to generate waveform")
-        return {"waveform_data": track.get('waveform_data')}
+        
+        # Генерируем waveform
+        waveform_data = audio_editor.generate_waveform(track['file_path'])
+        if waveform_data:
+            return {"waveform_data": waveform_data}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to generate waveform")
     except Exception as e:
         logger.error(f"❌ Ошибка генерации waveform: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка генерации waveform: {str(e)}")
@@ -2335,14 +1499,7 @@ async def suggest_best_segment(track_id: int):
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
         best_start = audio_editor.suggest_best_segment(track['file_path'])
-        analysis_details = {
-            "method": "комбинированный анализ",
-            "score": 0.85,
-            "energy_score": 0.78,
-            "variability_score": 0.82,
-            "peaks_score": 0.91,
-        }
-        return {"success": True, "suggested_start": best_start, "analysis_details": analysis_details}
+        return {"success": True, "suggested_start": best_start}
     except Exception as e:
         logger.error(f"❌ Ошибка анализа отрезка: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка анализа: {str(e)}")
@@ -2353,14 +1510,18 @@ async def get_track_segment_file(track_id: int, start_time: float = 0, duration:
         track = media_library.get_track(track_id)
         if not track:
             raise HTTPException(status_code=404, detail="Track not found")
+        
         segment_start = start_time if start_time > 0 else track.get('segment_start', 0)
         segment_duration = duration if duration > 0 else track.get('segment_duration', 30)
+        
         segment_filename = f"preview_{track_id}_{int(segment_start)}s.mp3"
         segment_path = os.path.join(BASE_DIR, "temp", segment_filename)
         os.makedirs(os.path.dirname(segment_path), exist_ok=True)
+        
         segment_path = audio_editor.extract_segment(
             track['file_path'], segment_start, segment_duration, segment_path
         )
+        
         if segment_path and os.path.exists(segment_path):
             return FileResponse(segment_path,
                                 filename=f"preview_{track['artist']}_{track['title']}.mp3",
@@ -2371,50 +1532,80 @@ async def get_track_segment_file(track_id: int, start_time: float = 0, duration:
         raise HTTPException(status_code=500, detail=str(e))
 
 # =========================
-# FILE UPLOAD FIXES - COMPLETE BLOCK
+# LOCAL FILES MANAGEMENT
 # =========================
 
-@app.post("/api/local/upload-base-pptx")
-async def upload_base_pptx(file: UploadFile = File(...)):
-    """Загрузить новый base.pptx"""
+@app.delete("/api/local/artist-photo/{filename}")
+async def delete_local_artist_photo(filename: str):
+    """Удалить фото артиста"""
     try:
-        logger.info(f"🔼 Начало загрузки base.pptx: {file.filename}")
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        file_path = os.path.join(artists_dir, filename)
         
-        if not file.filename or not file.filename.endswith('.pptx'):
-            raise HTTPException(status_code=400, detail="Файл должен быть в формате .pptx")
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Фото не найдено")
         
-        base_path = os.path.join(BASE_DIR, "base.pptx")
+        os.remove(file_path)
+        logger.info(f"🗑️ Удалено фото: {filename}")
         
-        # Читаем содержимое файла
-        content = await file.read()
-        if not content:
-            raise HTTPException(status_code=400, detail="Файл пустой")
+        return {"success": True, "message": "Фото удалено"}
         
-        logger.info(f"📊 Размер файла: {len(content)} байт")
-        
-        # Сохраняем файл
-        with open(base_path, "wb") as f:
-            f.write(content)
-        
-        # Проверяем что файл сохранился
-        if not os.path.exists(base_path):
-            raise HTTPException(status_code=500, detail="Файл не сохранился на сервере")
-        
-        file_size = os.path.getsize(base_path)
-        logger.info(f"✅ base.pptx обновлен, размер: {file_size} байт")
-        
-        return {
-            "success": True,
-            "message": "base.pptx успешно обновлен",
-            "size": file_size,
-            "filename": "base.pptx"
-        }
-        
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки base.pptx: {e}")
+        logger.error(f"❌ Ошибка удаления фото: {e}")
         return {"success": False, "error": str(e)}
+
+@app.get("/api/local/artist-photos")
+async def get_local_artist_photos():
+    """Получить список локальных фото артистов"""
+    try:
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        photos = []
+        
+        if os.path.exists(artists_dir):
+            for filename in os.listdir(artists_dir):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    file_path = os.path.join(artists_dir, filename)
+                    file_size = os.path.getsize(file_path)
+                    artist_name = os.path.splitext(filename)[0].replace('_', ' ')
+                    photos.append({
+                        "filename": filename,
+                        "artist_name": artist_name,
+                        "file_path": file_path,
+                        "size": file_size,
+                        "url": f"/api/local/artist-photo/{filename}",
+                        "size_mb": f"{(file_size / 1024 / 1024):.2f} MB"
+                    })
+        
+        logger.info(f"📁 Найдено {len(photos)} локальных фото артистов")
+        return {"photos": sorted(photos, key=lambda x: x['artist_name'])}
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения локальных фото: {e}")
+        return {"photos": []}
+
+@app.get("/api/local/artist-photo/{filename}")
+async def get_local_artist_photo(filename: str):
+    """Получить локальное фото артиста"""
+    try:
+        artists_dir = os.path.join(BASE_DIR, "artists")
+        file_path = os.path.join(artists_dir, filename)
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Фото не найдено")
+        
+        # Определяем MIME тип по расширению
+        ext = filename.lower().split('.')[-1]
+        mime_types = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'webp': 'image/webp'
+        }
+        media_type = mime_types.get(ext, 'image/jpeg')
+        
+        return FileResponse(file_path, media_type=media_type)
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения фото {filename}: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка получения фото: {str(e)}")
 
 @app.post("/api/local/upload-artist-photos")
 async def upload_local_artist_photos(files: List[UploadFile] = File(...)):
@@ -2527,150 +1718,99 @@ async def download_base_pptx():
         logger.error(f"❌ Ошибка скачивания base.pptx: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка скачивания: {str(e)}")
 
-@app.get("/api/local/artist-photos")
-async def get_local_artist_photos():
-    """Получить список локальных фото артистов"""
+@app.post("/api/local/upload-base-pptx")
+async def upload_base_pptx(file: UploadFile = File(...)):
+    """Загрузить новый base.pptx"""
     try:
-        artists_dir = os.path.join(BASE_DIR, "artists")
-        photos = []
+        logger.info(f"🔼 Начало загрузки base.pptx: {file.filename}")
         
-        if os.path.exists(artists_dir):
-            for filename in os.listdir(artists_dir):
-                if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                    file_path = os.path.join(artists_dir, filename)
-                    file_size = os.path.getsize(file_path)
-                    artist_name = os.path.splitext(filename)[0].replace('_', ' ')
-                    photos.append({
-                        "filename": filename,
-                        "artist_name": artist_name,
-                        "file_path": file_path,
-                        "size": file_size,
-                        "url": f"/api/local/artist-photo/{filename}",
-                        "size_mb": f"{(file_size / 1024 / 1024):.2f} MB"
-                    })
+        if not file.filename or not file.filename.endswith('.pptx'):
+            raise HTTPException(status_code=400, detail="Файл должен быть в формате .pptx")
         
-        logger.info(f"📁 Найдено {len(photos)} локальных фото артистов")
-        return {"photos": sorted(photos, key=lambda x: x['artist_name'])}
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения локальных фото: {e}")
-        return {"photos": []}
-
-@app.get("/api/local/artist-photo/{filename}")
-async def get_local_artist_photo(filename: str):
-    """Получить локальное фото артиста"""
-    try:
-        artists_dir = os.path.join(BASE_DIR, "artists")
-        file_path = os.path.join(artists_dir, filename)
-        
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="Фото не найдено")
-        
-        # Определяем MIME тип по расширению
-        ext = filename.lower().split('.')[-1]
-        mime_types = {
-            'png': 'image/png',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'webp': 'image/webp'
-        }
-        media_type = mime_types.get(ext, 'image/jpeg')
-        
-        return FileResponse(file_path, media_type=media_type)
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения фото {filename}: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка получения фото: {str(e)}")
-
-@app.delete("/api/local/artist-photo/{filename}")
-async def delete_local_artist_photo(filename: str):
-    """Удалить фото артиста"""
-    try:
-        artists_dir = os.path.join(BASE_DIR, "artists")
-        file_path = os.path.join(artists_dir, filename)
-        
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="Фото не найдено")
-        
-        os.remove(file_path)
-        logger.info(f"🗑️ Удалено фото: {filename}")
-        
-        return {"success": True, "message": "Фото удалено"}
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка удаления фото: {e}")
-        return {"success": False, "error": str(e)}
-
-# =========================
-# DROPBOX DOWNLOAD ENDPOINTS
-# =========================
-
-@app.post("/api/dropbox/download-base-pptx")
-async def download_base_pptx_from_dropbox():
-    """Скачать base.pptx из Dropbox (если локального нет)"""
-    try:
         base_path = os.path.join(BASE_DIR, "base.pptx")
-        success = dropbox_storage.download_base_pptx(base_path)
         
-        if success:
-            file_size = os.path.getsize(base_path)
-            return {
-                "success": True,
-                "message": "base.pptx скачан из Dropbox",
-                "size": file_size
-            }
-        else:
-            return {"success": False, "error": "Не удалось скачать base.pptx"}
-            
+        # Читаем содержимое файла
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Файл пустой")
+        
+        logger.info(f"📊 Размер файла: {len(content)} байт")
+        
+        # Сохраняем файл
+        with open(base_path, "wb") as f:
+            f.write(content)
+        
+        # Проверяем что файл сохранился
+        if not os.path.exists(base_path):
+            raise HTTPException(status_code=500, detail="Файл не сохранился на сервере")
+        
+        file_size = os.path.getsize(base_path)
+        logger.info(f"✅ base.pptx обновлен, размер: {file_size} байт")
+        
+        return {
+            "success": True,
+            "message": "base.pptx успешно обновлен",
+            "size": file_size,
+            "filename": "base.pptx"
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ Ошибка скачивания base.pptx: {e}")
+        logger.error(f"❌ Ошибка загрузки base.pptx: {e}")
         return {"success": False, "error": str(e)}
 
-@app.post("/api/dropbox/download-artist-photos")
-async def download_artist_photos_from_dropbox():
-    """Скачать фото артистов из Dropbox (если локальной папки нет или пустая)"""
+# =========================
+# HEALTH AND STATUS
+# =========================
+
+@app.get("/api/status")
+async def get_status():
     try:
-        artists_dir = os.path.join(BASE_DIR, "artists")
-        success = dropbox_storage.download_artist_photos(artists_dir)
+        tracks_count = media_library.get_tracks_count()
+        tracks_with_photos = len([t for t in media_library.get_tracks() if t.get("image_path") and os.path.exists(t.get("image_path"))])
         
-        if success:
-            # Получаем список скачанных фото
-            photos = []
-            if os.path.exists(artists_dir):
-                for filename in os.listdir(artists_dir):
-                    if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                        photos.append({
-                            "filename": filename,
-                            "artist_name": os.path.splitext(filename)[0].replace('_', ' ')
-                        })
-            
-            return {
-                "success": True,
-                "message": f"Скачано {len(photos)} фото артистов",
-                "photos": photos
-            }
+        # Проверяем дубликаты
+        duplicates_result = await get_all_duplicates()
+        duplicate_groups = duplicates_result.get('total_duplicate_groups', 0)
+        
+        status_info = {
+            "status": "running",
+            "version": "3.0.0",
+            "tracks_count": tracks_count,
+            "tracks_with_photos": tracks_with_photos,
+            "duplicate_groups": duplicate_groups,
+            "musical_loto_ready": tracks_count >= 40 and duplicate_groups == 0,
+            "metadata_processor": type(metadata_processor).__name__,
+            "features": [
+                "musical_loto_game",
+                "modern_presentations",
+                "smart_metadata",
+                "audio_editing",
+                "ticket_generation",
+                "json_export",
+                "artist_images_manual",
+                "yandex_music_track_download",
+                "duplicate_checking"
+            ],
+        }
+        
+        if tracks_count < 40:
+            status_info["warning"] = f"Для Musical Loto нужно ещё {40 - tracks_count} треков"
+        elif duplicate_groups > 0:
+            status_info["warning"] = f"Найдено {duplicate_groups} групп дубликатов"
         else:
-            return {"success": False, "error": "Не удалось скачать фото артистов"}
+            status_info["message"] = "Musical Loto готов к генерации!"
             
+        return status_info
     except Exception as e:
-        logger.error(f"❌ Ошибка скачивания фото артистов: {e}")
-        return {"success": False, "error": str(e)}
-
-@app.get("/api/dropbox/available-photos")
-async def get_available_dropbox_photos():
-    """Получить список фото доступных в Dropbox"""
-    try:
-        photos = dropbox_storage.list_artist_photos()
-        return {"photos": photos}
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения списка фото: {e}")
-        return {"photos": []}
-
-# -------- Health --------
+        logger.error(f"❌ Ошибка статуса: {e}")
+        return {"status": "error", "version": "3.0.0", "tracks_count": 0, "error": str(e)}
 
 @app.get("/api/health")
 async def health_check():
     tracks_count = media_library.get_tracks_count()
-    tracks_with_photos = len([t for t in media_library.get_tracks()
-                              if t.get('image_path') and os.path.exists(t.get('image_path'))])
+    tracks_with_photos = len([t for t in media_library.get_tracks() if t.get('image_path') and os.path.exists(t.get('image_path'))])
     return {
         "status": "healthy",
         "service": "Music Loto Maker API v3.0",
@@ -2686,18 +1826,114 @@ async def health_check():
             "ticket_generation",
             "json_export",
             "artist_images_manual",
-            "youtube_track_download",
+            "yandex_music_track_download",
+            "duplicate_checking"
         ],
     }
 
+# =========================
+# FILE DOWNLOAD
+# =========================
+
+@app.get("/api/download/{filename}")
+async def download_file(filename: str):
+    """Скачивание файлов из различных директорий проекта"""
+    try:
+        logger.info(f"📥 Запрос на скачивание файла: {filename}")
+        
+        if not filename or '..' in filename or filename.startswith('/'):
+            logger.warning(f"🚫 Некорректное имя файла: {filename}")
+            raise HTTPException(status_code=400, detail="Некорректное имя файла")
+        
+        filename = filename.split('?')[0]
+        
+        possible_paths = [
+            os.path.join(BASE_DIR, "output", filename),
+            os.path.join(BASE_DIR, "assets", "custom_buttons", filename),
+            os.path.join(BASE_DIR, "assets", "backgrounds", filename),
+            os.path.join(BASE_DIR, "downloads", filename),
+            os.path.join(BASE_DIR, "uploads", filename),
+            os.path.join(BASE_DIR, "temp", filename),
+            os.path.join(BASE_DIR, "images", filename),
+            os.path.join(BASE_DIR, filename),
+        ]
+        
+        output_dir = os.path.join(BASE_DIR, "output")
+        if os.path.exists(output_dir):
+            for root, dirs, files in os.walk(output_dir):
+                for file in files:
+                    if file == filename:
+                        possible_paths.append(os.path.join(root, file))
+        
+        logger.info(f"🔍 Ищем файл по путям: {[p for p in possible_paths if 'output' in p]}")
+        
+        file_path = None
+        for path in possible_paths:
+            if os.path.exists(path) and os.path.isfile(path):
+                file_path = path
+                logger.info(f"✅ Файл найден: {file_path}")
+                break
+        
+        if not file_path:
+            output_dir = os.path.join(BASE_DIR, "output")
+            if os.path.exists(output_dir):
+                for root, dirs, files in os.walk(output_dir):
+                    for file in files:
+                        if file.lower() == filename.lower():
+                            file_path = os.path.join(root, file)
+                            logger.info(f"✅ Файл найден (без учета регистра): {file_path}")
+                            break
+                    if file_path:
+                        break
+        
+        if not file_path:
+            logger.warning(f"❌ Файл не найден: {filename}")
+            logger.warning(f"📁 Содержимое output директории: {os.listdir(os.path.join(BASE_DIR, 'output')) if os.path.exists(os.path.join(BASE_DIR, 'output')) else 'Директория не существует'}")
+            raise HTTPException(status_code=404, detail=f"Файл '{filename}' не найден")
+
+        file_size = os.path.getsize(file_path)
+        if file_size == 0:
+            logger.warning(f"⚠️ Файл пустой: {file_path}")
+            raise HTTPException(status_code=500, detail="Файл пустой")
+
+        file_ext = os.path.splitext(filename)[1].lower()
+        mime_types = {
+            '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            '.zip': 'application/zip',
+            '.mp3': 'audio/mpeg',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.json': 'application/json',
+            '.txt': 'text/plain'
+        }
+        
+        media_type = mime_types.get(file_ext, 'application/octet-stream')
+        
+        logger.info(f"📤 Отправляем файл: {filename} ({file_size} bytes, {media_type})")
+        
+        return FileResponse(
+            file_path, 
+            filename=filename, 
+            media_type=media_type,
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Length': str(file_size)
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка при загрузке файла {filename}: {e}")
+        logger.exception("Полная трассировка ошибки:")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
     logger.info("🎵 Music Loto Maker Server v3.0 Starting...")
     logger.info(f"🔧 Metadata processor: {type(metadata_processor).__name__}")
-    logger.info("📷 Artist photos: HYBRID (local + Dropbox download)")
-    logger.info("🎯 Key features: Smart segments, File management, Presentation generation")
-    logger.info("⏱️ Timing management: Auto smart segments + manual editing")
-    logger.info("🌐 Internet download: YouTube Music")
+    logger.info("🎯 Key features: Smart segments, File management, Presentation generation, Duplicate checking")
+    logger.info("🌐 Music download: Yandex Music only")
     logger.info(f"🌐 Server running on http://0.0.0.0:{PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)

@@ -2436,3 +2436,125 @@ header {
         margin-bottom: 16px;
         opacity: 0.5;
     }
+/* Стили для прогресс бара скачивания */
+.download-progress-container {
+    margin: 15px 0;
+    padding: 15px;
+    background: var(--bg-dark);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    transition: all 0.3s ease;
+}
+
+.progress-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 14px;
+}
+
+.progress-status {
+    font-weight: 600;
+    color: var(--text-light);
+}
+
+.progress-count {
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: var(--bg-card);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #3b82f6, #10b981);
+    border-radius: 4px;
+    transition: width 0.3s ease, background 0.3s ease;
+    width: 0%;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+}
+
+.progress-details {
+    font-size: 12px;
+    color: var(--text-muted);
+    max-height: 150px;
+    overflow-y: auto;
+    line-height: 1.4;
+}
+
+/* Статусы для деталей прогресса */
+.progress-detail-item {
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.progress-detail-success {
+    color: #10b981;
+}
+
+.progress-detail-error {
+    color: #ef4444;
+}
+
+.progress-detail-processing {
+    color: #f59e0b;
+}
+
+/* Анимация пульсации для активного скачивания */
+.progress-fill.pulsing {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+    }
+
+    50% {
+        opacity: 0.7;
+        box-shadow: 0 0 15px rgba(16, 185, 129, 0.5);
+    }
+
+    100% {
+        opacity: 1;
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+    }
+}
+
+/* Стили для результатов скачивания */
+.download-results {
+    margin-top: 20px;
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 15px;
+    border: 1px solid var(--border);
+}
+
+.result-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    margin: 4px 0;
+    border-radius: 6px;
+    background: var(--bg-dark);
+}
+
+.result-success {
+    border-left: 4px solid #10b981;
+    background: rgba(16, 185, 129, 0.1);
+}
+
+.result-error {
+    border-left: 4px solid #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}

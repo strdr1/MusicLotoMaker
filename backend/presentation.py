@@ -23,8 +23,20 @@ logging.basicConfig(level=logging.INFO)
 class ModernPresentationGenerator:
     def __init__(self, base_path: str):
         self.base_path = Path(base_path)
+        
+        # Проверяем существование файла и пытаемся скачать если нет
         if not self.base_path.exists():
-            raise FileNotFoundError(f"❌ Шаблон не найден: {self.base_path}")
+            logger.info(f"📦 Файл {base_path} не найден, пробуем скачать из Dropbox...")
+            try:
+                from backend.dropbox_storage import DropboxStorage
+                dropbox_storage = DropboxStorage()
+                if dropbox_storage.download_base_pptx(str(self.base_path)):
+                    logger.info(f"✅ Файл успешно скачан: {self.base_path}")
+                else:
+                    raise FileNotFoundError(f"❌ Шаблон не найден и не удалось скачать: {self.base_path}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка при скачивании шаблона: {e}")
+                raise FileNotFoundError(f"❌ Шаблон не найден: {self.base_path}")
 
         self.skip_slides = {1, 2, 3, 4, 45, 46, 47, 88, 89, 90, 131}
         self.buffer_ms = 5000
@@ -73,12 +85,51 @@ class ModernPresentationGenerator:
         return next((p for p in possible_paths if p.exists()), None)
 
     def _load_tracks_from_json(self):
-        json_path = Path.cwd() / "tracks.json"
-        if not json_path.exists():
-            logger.warning("⚠️ tracks.json не найден — треки не загружены")
+        """Загружает треки из различных возможных файлов"""
+        # Пробуем разные возможные имена файлов
+        possible_paths = [
+            Path.cwd() / "tracks.json",
+            Path.cwd() / "Track_data.json", 
+            Path.cwd() / "track_data.json",
+            Path.cwd() / "data.json",
+            Path.cwd() / "track_data" / "tracks.json",  # если в папке
+            Path.cwd() / "data" / "tracks.json"
+        ]
+        
+        json_path = None
+        for path in possible_paths:
+            if path.exists():
+                json_path = path
+                logger.info(f"📁 Найден файл с треками: {path}")
+                break
+        
+        if not json_path:
+            logger.warning("⚠️ Файл с треками не найден — проверьте наличие tracks.json или Track_data.json")
             return []
-        with open(json_path, "r", encoding="utf-8") as f:
-            return json.load(f).get("tracks", [])
+        
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                
+            # Проверяем разные возможные структуры JSON
+            tracks = data.get("tracks", [])
+            if not tracks and isinstance(data, list):
+                tracks = data
+                
+            logger.info(f"🎵 Загружено {len(tracks)} треков из {json_path.name}")
+            
+            # Логируем первые несколько треков для отладки
+            if tracks:
+                for i, track in enumerate(tracks[:3]):
+                    logger.debug(f"   {i+1}. {track.get('artist', 'Unknown')} - {track.get('title', 'Unknown')}")
+                if len(tracks) > 3:
+                    logger.debug(f"   ... и еще {len(tracks) - 3} треков")
+                    
+            return tracks
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки {json_path.name}: {e}")
+            return []
 
     def _get_rels_list_sorted(self, slides_rels_dir: Path):
         rels = list(slides_rels_dir.glob("slide*.xml.rels"))
@@ -103,6 +154,7 @@ class ModernPresentationGenerator:
             track_path = track.get("file_path") or track.get("path", "")
             real_path = self._find_track_file(track_path)
             if not real_path:
+                logger.warning(f"⚠️ Файл трека не найден: {track_path}")
                 return None
 
             # Быстрая загрузка только метаданных для проверки длины
@@ -212,13 +264,25 @@ class ModernPresentationGenerator:
 
     # === ИСПРАВЛЕННАЯ ОПТИМИЗИРОВАННАЯ ГЕНЕРАЦИЯ ===
     def generate(self, game_title: str, tracks: list = None, make_bw: bool = False, use_parallel: bool = True):
+        # Сначала пробуем переданные треки
         if not tracks:
             tracks = self._load_tracks_from_json()
+        
+        # Если из JSON не загрузилось, пробуем из медиатеки
+        if not tracks:
+            try:
+                from backend.server import media_library
+                library_tracks = media_library.get_tracks()
+                if library_tracks:
+                    tracks = library_tracks
+                    logger.info(f"🎵 Загружено {len(tracks)} треков из медиатеки")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось загрузить треки из медиатеки: {e}")
 
         if not tracks:
-            raise ValueError("❌ Нет треков — генерация невозможна")
+            raise ValueError("❌ Нет треков — генерация невозможна. Загрузите треки в медиатеку или создайте tracks.json/Track_data.json")
 
-        logger.info(f"🎵 Загружено треков: {len(tracks)}")
+        logger.info(f"🎵 Используется треков: {len(tracks)}")
 
         tmp = Path(tempfile.mkdtemp(prefix="pptx_work_"))
         extract_dir = tmp / "extracted"
@@ -348,7 +412,7 @@ if __name__ == "__main__":
         generator = ModernPresentationGenerator("template.pptx")
         result_path = generator.generate(
             game_title="Моя музыкальная викторина",
-            tracks=None,  # Автоматически загрузит из tracks.json
+            tracks=None,  # Автоматически загрузит из tracks.json или Track_data.json
             make_bw=False,
             use_parallel=True
         )

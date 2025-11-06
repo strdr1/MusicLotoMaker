@@ -33,7 +33,6 @@
                     🗑️ Очистить все
                 </button>
             </div>
-
             <!-- Блок скачивания треков из интернета -->
             <div class="list-search-section">
                 <h3>📥 Скачать треки из интернета</h3>
@@ -43,16 +42,15 @@
                         <label>Список треков (каждый с новой строки):</label>
                         <textarea id="trackList" class="form-input" rows="8" placeholder="Формат:
 Исполнитель - Название трека
-"></textarea>
-                        <small class="text-muted">Исполнитель - Название</small>
+Queen - Bohemian Rhapsody
+The Beatles - Yesterday
+Michael Jackson - Billie Jean"></textarea>
+                        <small class="text-muted">Формат: Исполнитель - Название трека</small>
                     </div>
 
                     <div class="list-search-actions">
                         <button class="btn btn-primary" onclick="downloadTrackList()">
                             📥 Скачать все треки
-                        </button>
-                        <button class="btn btn-secondary" onclick="testParseTrackList()">
-                            🔍 Проверить список
                         </button>
                         <button class="btn btn-warning" onclick="clearTrackList()">
                             🗑️ Очистить
@@ -71,15 +69,16 @@
                     </div>
                 </div>
 
-                <div id="listSearchProgress" style="display: none;">
+                <!-- Прогресс бар скачивания -->
+                <div id="listSearchProgress" class="download-progress-container" style="display: none;">
                     <div class="progress-info">
-                        <span id="progressStatus">Подготовка...</span>
-                        <span id="progressCount">0/0</span>
+                        <span id="progressStatus" class="progress-status">Подготовка...</span>
+                        <span id="progressCount" class="progress-count">0/0</span>
                     </div>
                     <div class="progress-bar">
                         <div class="progress-fill" id="progressFill"></div>
                     </div>
-                    <div id="progressDetails" style="margin-top: 10px; font-size: 12px;"></div>
+                    <div id="progressDetails" class="progress-details"></div>
                 </div>
             </div>
 
