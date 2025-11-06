@@ -63,7 +63,7 @@ def smart_remove_background(image_bytes: bytes) -> bytes:
     except Exception as e:
         raise RuntimeError(f"Rembg error: {e}")
 
-# ----------------- Ультра-умный парсер имен -----------------
+# ----------------- Минимальный парсер имен -----------------
 def similarity(a: str, b: str) -> float:
     """Вычисляет схожесть двух строк"""
     a = a.lower().strip()
@@ -71,18 +71,18 @@ def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 def normalize_artist_name(name: str) -> str:
-    """Нормализует имя артиста для поиска"""
+    """Минимальная нормализация - только спецсимволы"""
     name = name.lower().strip()
     
-    # Убираем восклицательные знаки, пунктуацию
-    name = re.sub(r'[!?.,;:"]', '', name)
+    # Убираем только мешающие символы
+    name = re.sub(r'[!?.,;:"()]', '', name)
     
-    # Замены символов и слов
+    # Базовые замены
     replacements = {
-        'ё': 'е', 'ъ': '', 'ь': '',
-        '$': 's', '&': 'and', '+': 'and',
-        ' group': '', ' band': '', ' группа': '', ' банд': '',
-        '!': '', '?': '', '.': '', ',': ''
+        'ё': 'е',
+        '$': 's', 
+        '&': 'and', 
+        '+': 'and'
     }
     
     for old, new in replacements.items():
@@ -93,8 +93,8 @@ def normalize_artist_name(name: str) -> str:
     
     return name
 
-def generate_smart_variants(artist_name: str) -> List[str]:
-    """Генерирует умные варианты для поиска"""
+def generate_search_variants(artist_name: str) -> List[str]:
+    """Генерирует варианты для поиска"""
     variants = set()
     
     # Основные варианты
@@ -114,47 +114,6 @@ def generate_smart_variants(artist_name: str) -> List[str]:
     variants.add(normalized.replace(' ', '_'))
     variants.add(normalized.replace(' ', ''))
     
-    # Популярные замены
-    common_replacements = [
-        ('ё', 'е'), ('Ё', 'Е'),
-        ('$', 's'), ('&', 'and'), 
-        ('+', 'and'), ('!', ''),
-        (' group', ''), (' band', ''),
-        (' группа', ''), (' банд', ''),
-        ('brothers', 'brother'), ('sisters', 'sister'),
-        ('crew', ''), ('family', ''),
-        ('max', 'макс'), ('макс', 'max'),
-        ('anna', 'анна'), ('анна', 'anna'),
-        ('alex', 'алекс'), ('алекс', 'alex'),
-    ]
-    
-    current_name = artist_name
-    for old, new in common_replacements:
-        if old in current_name.lower():
-            replaced = current_name.replace(old, new).replace(old.title(), new)
-            variants.add(replaced)
-            variants.add(replaced.lower())
-            current_name = replaced
-    
-    # Для конкретных артистов
-    specific_mappings = {
-        'руки вверх!': 'руки вверх',
-        'максим': 'макс',
-        'макsим': 'максим', 
-        'макс': 'максим',
-        'гаяз': 'gayaz',
-        'gayazov': 'gayaz',
-        'анна асти': 'anna asti',
-        'anna asti': 'анна асти',
-    }
-    
-    for original, replacement in specific_mappings.items():
-        if original in artist_name.lower():
-            variants.add(replacement)
-            variants.add(replacement.upper())
-            variants.add(replacement.title())
-    
-    # Убираем дубликаты и пустые строки
     return sorted([v for v in variants if v and len(v) > 1], key=len, reverse=True)
 
 # ----------------- Утилиты -----------------
@@ -220,66 +179,48 @@ class SimpleArtistImageSearch:
             logger.error(f"❌ Ошибка сохранения кэша фото: {e}")
 
     def _find_local_artist_photo(self, artist_name: str) -> Optional[str]:
+        """Простой поиск локального фото"""
         if not os.path.exists(self.artists_dir):
             return None
 
         logger.info(f"🔍 Поиск локального фото для: '{artist_name}'")
 
-        # Упрощённые варианты имён
-        search_names = set()
-        base = normalize_artist_name(artist_name)
-        search_names.add(base)
-        search_names.add(base.replace(' ', ''))
-        search_names.add(base.replace(' ', '_'))
-        search_names.add(artist_name.strip())
-        search_names.add(artist_name.lower())
-        search_names.add(artist_name.title())
+        # Генерируем варианты для поиска
+        search_names = generate_search_variants(artist_name)
+        logger.info(f"🔍 Варианты поиска: {search_names}")
 
         supported_ext = ['.jpg', '.jpeg', '.png', '.webp']
-        all_files = list(Path(self.artists_dir).glob("*"))
-
+        
         # 1️⃣ Прямое совпадение по имени файла
         for name in search_names:
             for ext in supported_ext:
                 path = Path(self.artists_dir) / f"{name}{ext}"
                 if path.exists():
-                    logger.info(f"📁 Найдено точное совпадение: {path}")
+                    logger.info(f"✅ Найдено точное совпадение: {path}")
                     return str(path)
 
-        # 2️⃣ Совпадение без учёта регистра
+        # 2️⃣ Поиск по всем файлам в папке
+        all_files = list(Path(self.artists_dir).glob("*"))
         for f in all_files:
             if f.suffix.lower() not in supported_ext:
                 continue
-            if f.stem.lower() in [n.lower() for n in search_names]:
-                logger.info(f"📁 Найдено совпадение (регистр): {f}")
-                return str(f)
+                
+            # Проверяем все варианты имен
+            filename_lower = f.stem.lower()
+            for search_name in search_names:
+                if filename_lower == search_name.lower():
+                    logger.info(f"✅ Найдено совпадение: {f}")
+                    return str(f)
 
-        # 3️⃣ Поиск по схожести (немного проще)
-        best_match = None
-        best_ratio = 0.66
-        for f in all_files:
-            if f.suffix.lower() not in supported_ext:
-                continue
-            sim = similarity(f.stem, artist_name)
-            if sim > best_ratio:
-                best_ratio = sim
-                best_match = str(f)
-
-        if best_match:
-            logger.info(f"✅ Лучшее совпадение: {best_match} ({best_ratio:.2f})")
-            return best_match
-
-        logger.info(f"🚫 Фото для '{artist_name}' не найдено")
+        logger.info(f"❌ Локальное фото для '{artist_name}' не найдено")
         return None
 
-
     def _search_yandex_music_smart(self, artist_name: str) -> Optional[str]:
-        """Умный поиск в Яндекс.Музыке с выбором лучшего фото"""
+        """Поиск в Яндекс.Музыке"""
         try:
             from yandex_music import Client as YandexClient
             
             YANDEX_MUSIC_TOKEN = "y0__xC-3q2iAxje-AYglImpghUw9pW0kAgCx0SZ5vnWcYWpiGpLqwVPsGWEfg"
-
                 
             client = YandexClient(YANDEX_MUSIC_TOKEN).init()
             search_result = client.search(artist_name)
@@ -291,43 +232,28 @@ class SimpleArtistImageSearch:
             # Берем самого релевантного артиста
             artist = search_result.artists.results[0]
             
-            # Пробуем разные источники фото в порядке приоритета
-            photo_sources = []
-            
-            # 1. Основное фото (cover)
+            # Пробуем разные источники фото
             if hasattr(artist, 'cover') and artist.cover:
                 cover_uri = getattr(artist.cover, 'uri', None)
                 if cover_uri:
                     photo_url = f"https://{cover_uri.replace('%%', '1000x1000')}"
-                    photo_sources.append(("cover", photo_url))
+                    logger.info(f"✅ Яндекс.Музыка: найдено фото {photo_url}")
+                    return photo_url
             
-            # 2. OG image
             if hasattr(artist, 'og_image') and artist.og_image:
                 og_image_url = artist.og_image.replace('%%', '1000x1000')
-                photo_sources.append(("og_image", og_image_url))
+                logger.info(f"✅ Яндекс.Музыка: найдено OG фото {og_image_url}")
+                return og_image_url
             
-            # 3. Composer cover (для композиторов)
-            if hasattr(artist, 'composer') and artist.composer and hasattr(artist.composer, 'cover') and artist.composer.cover:
-                composer_uri = getattr(artist.composer.cover, 'uri', None)
-                if composer_uri:
-                    photo_url = f"https://{composer_uri.replace('%%', '1000x1000')}"
-                    photo_sources.append(("composer", photo_url))
-            
-            if not photo_sources:
-                logger.info(f"🔍 Яндекс.Музыка: у артиста '{artist_name}' нет фото")
-                return None
-            
-            # Возвращаем лучшее фото (cover имеет наивысший приоритет)
-            best_photo = photo_sources[0][1]
-            logger.info(f"✅ Яндекс.Музыка: найдено {len(photo_sources)} фото, выбрано: {best_photo}")
-            return best_photo
+            logger.info(f"🔍 Яндекс.Музыка: у артиста '{artist_name}' нет фото")
+            return None
             
         except Exception as e:
             logger.warning(f"⚠️ Ошибка поиска в Яндекс.Музыке: {e}")
             return None
 
     def _process_photo_smart(self, image_data: bytes, track_id: int, source: str = "internet") -> Optional[str]:
-        """Умная обработка фото с улучшенным удалением фона"""
+        """Обработка фото"""
         try:
             img = Image.open(io.BytesIO(image_data))
             w, h = img.size
@@ -352,16 +278,16 @@ class SimpleArtistImageSearch:
                     img.save(out_path, "PNG")
                     return str(out_path)
 
-            # Умное удаление фона
+            # Удаление фона
             if self.use_rembg and _ensure_rembg():
                 try:
                     png_bytes = smart_remove_background(image_data)
                     with open(out_path, "wb") as f:
                         f.write(png_bytes)
-                    logger.info(f"✅ Фото обработано (умное удаление фона): {out_path}")
+                    logger.info(f"✅ Фото обработано (удаление фона): {out_path}")
                     return str(out_path)
                 except Exception as e:
-                    logger.warning(f"⚠️ Умное удаление фона не удалось: {e}")
+                    logger.warning(f"⚠️ Удаление фона не удалось: {e}")
 
             # Fallback - просто сохраняем как есть
             img.save(out_path, "PNG", optimize=True)
@@ -373,7 +299,7 @@ class SimpleArtistImageSearch:
             return None
 
     def fetch_artist_png(self, artist_name: str, track_id: int, use_rembg: bool = True):
-        """Умный поиск фото с улучшенным парсингом и обработкой"""
+        """Умный поиск фото"""
         original_rembg_setting = self.use_rembg
         self.use_rembg = use_rembg
         
@@ -382,11 +308,12 @@ class SimpleArtistImageSearch:
             if cache_key in self.artist_cache:
                 return self.artist_cache[cache_key]
             
-            logger.info(f"🎭 УМНЫЙ поиск фото для: '{artist_name}' (ID: {track_id})")
+            logger.info(f"🎭 Поиск фото для: '{artist_name}' (ID: {track_id})")
             
             # 1. Локальные фото (приоритет)
             local_photo = self._find_local_artist_photo(artist_name)
             if local_photo:
+                logger.info(f"📁 НАЙДЕН локальный файл: {local_photo}")
                 try:
                     with open(local_photo, "rb") as f:
                         image_data = f.read()
@@ -394,12 +321,15 @@ class SimpleArtistImageSearch:
                     if processed_path:
                         self.artist_cache[cache_key] = processed_path
                         self._cache_push(artist_name.strip().lower(), f"local://{local_photo}")
-                        logger.info(f"✅ Использовано локальное фото: {local_photo}")
+                        logger.info(f"✅ ИСПОЛЬЗУЕТСЯ локальное фото: {local_photo}")
                         return processed_path
+                    else:
+                        logger.warning(f"⚠️ Ошибка обработки локального фото: {local_photo}")
                 except Exception as e:
-                    logger.warning(f"⚠️ Ошибка обработки локального фото: {e}")
+                    logger.warning(f"⚠️ Ошибка чтения локального фото: {e}")
 
-            # 2. Яндекс.Музыка (умный поиск)
+            # 2. Яндекс.Музыка (только если локальное не найдено)
+            logger.info(f"🔍 Локальное фото не найдено, ищем в Яндекс.Музыке...")
             url = self._search_yandex_music_smart(artist_name)
             if url:
                 image_data = download_bytes(url)
@@ -428,11 +358,10 @@ class SimpleArtistImageSearch:
     def _create_placeholder_image(self, artist_name: str, track_id: int) -> str:
         try:
             w, h = 600, 600
-            # Красивый градиентный фон
             img = Image.new("RGB", (w, h), (60, 75, 115))
             draw = ImageDraw.Draw(img)
             
-            # Добавляем легкий градиент
+            # Градиент
             for i in range(h):
                 r = max(40, min(60, 40 + i//20))
                 g = max(55, min(75, 55 + i//25)) 
@@ -443,14 +372,13 @@ class SimpleArtistImageSearch:
             text = artist_name if len(artist_name) <= 28 else artist_name[:25] + "..."
             tw = draw.textlength(text, font=font)
             
-            # Красивая тень
+            # Тень и текст
             draw.text(((w-tw)/2 + 2, (h-32)/2 + 2), text, fill=(20, 30, 50), font=font)
-            # Основной текст
             draw.text(((w-tw)/2, (h-32)/2), text, fill=(235, 240, 255), font=font)
             
             out = Path(self.images_dir) / f"{track_id}_artist.png"
             img.save(out, "PNG")
-            logger.info(f"🖼️ Создан красивый placeholder: {out}")
+            logger.info(f"🖼️ Создан placeholder: {out}")
             return str(out)
         except Exception as e:
             logger.error(f"❌ Ошибка placeholder: {e}")
