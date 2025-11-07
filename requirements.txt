@@ -21,3 +21,4 @@ lxml>=4.9.0
 dropbox>=11.36.0
 python-magic>=0.4.27
 rembg
+psutil
