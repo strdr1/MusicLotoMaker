@@ -13,15 +13,16 @@ from PIL import Image, ImageOps
 from pptx import Presentation
 from pptx.util import Inches
 from pptx.dml.color import RGBColor
-import concurrent.futures
-from functools import lru_cache
+import gc
+import psutil
+import time
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-
 class ModernPresentationGenerator:
     def __init__(self, base_path: str):
+        # Добавлен конструктор с параметром base_path
         self.base_path = Path(base_path)
         
         # Проверяем существование файла и пытаемся скачать если нет
@@ -42,41 +43,87 @@ class ModernPresentationGenerator:
         self.buffer_ms = 5000
         self.default_ms = 35_000
         self.photo_scale_factor = 1.3
+        
+        # Ограничения для экономии памяти
+        self.max_workers = 2
+        self.image_cache_size = 8
+        self._image_cache = {}
 
-    # === КЭШИРОВАНИЕ ===
-    @lru_cache(maxsize=32)
-    def _load_and_process_image(self, image_path: str, make_bw: bool):
-        """Кэширует обработку изображений"""
+    def _check_memory_usage(self):
+        """Проверяем использование памяти"""
+        try:
+            memory = psutil.virtual_memory()
+            if memory.percent > 85:
+                logger.warning(f"⚠️ Использование памяти высокое: {memory.percent}%")
+                return False
+            return True
+        except:
+            return True  # Если не можем проверить, продолжаем работу
+
+    def _force_garbage_collection(self):
+        """Принудительная очистка памяти"""
+        gc.collect()
+        time.sleep(0.1)
+
+    def _load_and_process_image_optimized(self, image_path: str, make_bw: bool):
+        """Оптимизированная загрузка изображений с контролем памяти"""
+        if not self._check_memory_usage():
+            self._force_garbage_collection()
+            
+        cache_key = f"{image_path}_{make_bw}"
+        if cache_key in self._image_cache:
+            return self._image_cache[cache_key]
+            
+        # Ограничиваем размер кэша
+        if len(self._image_cache) >= self.image_cache_size:
+            self._image_cache.pop(next(iter(self._image_cache)))
+            
         path = Path(image_path)
         if not path.exists():
             return None
             
-        with Image.open(path) as img:
-            img = img.convert("RGBA")
+        try:
+            # Загружаем с уменьшением качества для экономии памяти
+            with Image.open(path) as img:
+                # Сразу уменьшаем размер если изображение слишком большое
+                max_pixels = 1024 * 1024  # 1MP
+                if img.width * img.height > max_pixels:
+                    ratio = (max_pixels / (img.width * img.height)) ** 0.5
+                    new_size = (int(img.width * ratio), int(img.height * ratio))
+                    img = img.resize(new_size, Image.LANCZOS)
+                
+                img = img.convert("RGBA")
 
-            if make_bw:
-                grayscale = ImageOps.grayscale(img.convert("RGB"))
-                alpha = img.split()[3]
-                img = Image.merge("RGBA", (grayscale, grayscale, grayscale, alpha))
+                if make_bw:
+                    grayscale = ImageOps.grayscale(img.convert("RGB"))
+                    alpha = img.split()[3] if len(img.split()) > 3 else None
+                    if alpha:
+                        img = Image.merge("RGBA", (grayscale, grayscale, grayscale, alpha))
+                    else:
+                        img = grayscale.convert("RGBA")
 
-            # Увеличиваем на 30%
-            max_dim = Inches(14)
-            dpi = 96
-            target_px = int(max_dim.inches * dpi)
-            
-            new_width = int(img.width * self.photo_scale_factor)
-            new_height = int(img.height * self.photo_scale_factor)
-            
-            img_resized = img.resize((new_width, new_height), Image.LANCZOS)
-            
-            if new_width > target_px or new_height > target_px:
-                img_resized.thumbnail((target_px, target_px), Image.LANCZOS)
+                # Увеличиваем на 30% но с ограничением
+                max_dim = Inches(14)
+                dpi = 96
+                target_px = int(max_dim.inches * dpi)
+                
+                new_width = int(img.width * self.photo_scale_factor)
+                new_height = int(img.height * self.photo_scale_factor)
+                
+                img_resized = img.resize((new_width, new_height), Image.LANCZOS)
+                
+                if new_width > target_px or new_height > target_px:
+                    img_resized.thumbnail((target_px, target_px), Image.LANCZOS)
 
-            return img_resized
+                self._image_cache[cache_key] = img_resized
+                return img_resized
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки изображения {image_path}: {e}")
+            return None
 
-    @lru_cache(maxsize=128)
-    def _find_track_file(self, track_path: str):
-        """Кэширует поиск файлов треков"""
+    def _find_track_file_optimized(self, track_path: str):
+        """Оптимизированный поиск файлов треков"""
         possible_paths = [
             Path(track_path),
             Path.cwd() / "downloads" / Path(track_path).name,
@@ -84,16 +131,13 @@ class ModernPresentationGenerator:
         ]
         return next((p for p in possible_paths if p.exists()), None)
 
-    def _load_tracks_from_json(self):
-        """Загружает треки из различных возможных файлов"""
-        # Пробуем разные возможные имена файлов
+    def _load_tracks_from_json_optimized(self):
+        """Загружает треки с минимальным использованием памяти"""
         possible_paths = [
             Path.cwd() / "tracks.json",
             Path.cwd() / "Track_data.json", 
             Path.cwd() / "track_data.json",
             Path.cwd() / "data.json",
-            Path.cwd() / "track_data" / "tracks.json",  # если в папке
-            Path.cwd() / "data" / "tracks.json"
         ]
         
         json_path = None
@@ -104,42 +148,29 @@ class ModernPresentationGenerator:
                 break
         
         if not json_path:
-            logger.warning("⚠️ Файл с треками не найден — проверьте наличие tracks.json или Track_data.json")
+            logger.warning("⚠️ Файл с треками не найден")
             return []
         
         try:
             with open(json_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 
-            # Проверяем разные возможные структуры JSON
             tracks = data.get("tracks", [])
             if not tracks and isinstance(data, list):
                 tracks = data
                 
-            logger.info(f"🎵 Загружено {len(tracks)} треков из {json_path.name}")
-            
-            # Логируем первые несколько треков для отладки
-            if tracks:
-                for i, track in enumerate(tracks[:3]):
-                    logger.debug(f"   {i+1}. {track.get('artist', 'Unknown')} - {track.get('title', 'Unknown')}")
-                if len(tracks) > 3:
-                    logger.debug(f"   ... и еще {len(tracks) - 3} треков")
-                    
+            logger.info(f"🎵 Загружено {len(tracks)} треков")
             return tracks
             
         except Exception as e:
-            logger.error(f"❌ Ошибка загрузки {json_path.name}: {e}")
+            logger.error(f"❌ Ошибка загрузки треков: {e}")
             return []
 
-    def _get_rels_list_sorted(self, slides_rels_dir: Path):
-        rels = list(slides_rels_dir.glob("slide*.xml.rels"))
-        return sorted(rels, key=lambda p: int(''.join(ch for ch in p.stem if ch.isdigit()) or 0))
-
-    # === ПАРАЛЛЕЛЬНАЯ ОБРАБОТКА АУДИО ===
-    def _process_audio_segment(self, args):
-        """Обрабатывает один аудио-сегмент (для многопоточности)"""
-        rels_path, track, slide_num, media_dir = args
-        
+    def _process_audio_segment_optimized(self, rels_path, track, slide_num, media_dir):
+        """Оптимизированная обработка аудио с контролем памяти"""
+        if not self._check_memory_usage():
+            self._force_garbage_collection()
+            
         try:
             tree = ET.parse(rels_path)
             root = tree.getroot()
@@ -152,25 +183,31 @@ class ModernPresentationGenerator:
                 return None
 
             track_path = track.get("file_path") or track.get("path", "")
-            real_path = self._find_track_file(track_path)
+            real_path = self._find_track_file_optimized(track_path)
             if not real_path:
                 logger.warning(f"⚠️ Файл трека не найден: {track_path}")
                 return None
 
-            # Быстрая загрузка только метаданных для проверки длины
+            # Загружаем аудио с минимальным использованием памяти
             audio = AudioSegment.from_file(real_path)
             seg_start = int(float(track.get("segment_start", 0)) * 1000)
             seg_dur = int(float(track.get("segment_duration", self.default_ms / 1000)) * 1000)
             end_ms = min(len(audio), seg_start + seg_dur + self.buffer_ms)
             
-            # Вырезаем только если нужно
+            # Вырезаем сегмент
             if seg_start > 0 or end_ms < len(audio):
                 clip = audio[seg_start:end_ms]
             else:
-                clip = audio  # Используем оригинал если не нужно вырезать
+                clip = audio
 
             out_media_path = media_dir / os.path.basename(targets[0])
-            clip.export(out_media_path, format="mp3", bitrate="128k")  # Уменьшаем битрейт для скорости
+            
+            # Используем более низкое качество для экономии памяти
+            clip.export(out_media_path, format="mp3", bitrate="96k")
+            
+            # Очищаем память
+            del audio, clip
+            self._force_garbage_collection()
 
             return (slide_num, track)
 
@@ -178,22 +215,16 @@ class ModernPresentationGenerator:
             logger.error(f"❌ Ошибка обработки аудио для слайда {slide_num}: {e}")
             return None
 
-    # === ОПТИМИЗИРОВАННАЯ ВСТАВКА ТЕКСТА И ФОТО ===
-    def _replace_placeholders_and_photos(self, prs, slide_track_map, make_bw: bool):
-        """Оптимизированная версия вставки текста и фото"""
-        # Предварительная обработка всех изображений
-        processed_images = {}
-        for slide_num, track in slide_track_map.items():
-            image_path = track.get("image_path", "")
-            if image_path:
-                processed_img = self._load_and_process_image(image_path, make_bw)
-                if processed_img:
-                    processed_images[slide_num] = processed_img
-
-        # Получаем высоту слайда один раз
+    def _replace_placeholders_and_photos_optimized(self, prs, slide_track_map, make_bw: bool):
+        """Оптимизированная вставка текста и фото с поэтапной обработкой"""
         slide_height = prs.slide_height
-
-        for slide in prs.slides:
+        
+        # Обрабатываем по одному слайду за раз
+        for i, slide in enumerate(prs.slides):
+            if i % 5 == 0:  # Проверяем память каждые 5 слайдов
+                if not self._check_memory_usage():
+                    self._force_garbage_collection()
+            
             slide_num = int(''.join(ch for ch in slide.part.partname if ch.isdigit()) or 0)
             
             if slide_num not in slide_track_map:
@@ -203,7 +234,7 @@ class ModernPresentationGenerator:
             artist = track.get("artist", "Неизвестный исполнитель")
             title = track.get("title", "Без названия")
 
-            # === БЫСТРАЯ ЗАМЕНА ТЕКСТА ===
+            # Замена текста
             for shape in slide.shapes:
                 if not shape.has_text_frame:
                     continue
@@ -211,18 +242,23 @@ class ModernPresentationGenerator:
                 for paragraph in shape.text_frame.paragraphs:
                     for run in paragraph.runs:
                         if "{{ARTIST}}" in run.text:
-                            self._replace_placeholder(paragraph, run, artist)
+                            self._replace_placeholder_optimized(paragraph, run, artist)
                         elif "{{TRACK}}" in run.text:
-                            self._replace_placeholder(paragraph, run, title)
+                            self._replace_placeholder_optimized(paragraph, run, title)
 
-            # === БЫСТРАЯ ВСТАВКА ФОТО ===
-            if slide_num in processed_images:
-                self._insert_processed_image(slide, processed_images[slide_num], slide_num, slide_height)
+            # Обработка и вставка фото (только если нужно для этого слайда)
+            image_path = track.get("image_path", "")
+            if image_path:
+                processed_img = self._load_and_process_image_optimized(image_path, make_bw)
+                if processed_img:
+                    self._insert_processed_image_optimized(slide, processed_img, slide_num, slide_height)
+                    # Очищаем ссылку на изображение
+                    del processed_img
 
         logger.info("✅ Замена текста и добавление фото завершены")
 
-    def _replace_placeholder(self, paragraph, run, text):
-        """Быстрая замена плейсхолдера"""
+    def _replace_placeholder_optimized(self, paragraph, run, text):
+        """Оптимизированная замена плейсхолдера"""
         font_name = run.font.name
         font_size = run.font.size
         font_bold = run.font.bold
@@ -242,33 +278,58 @@ class ModernPresentationGenerator:
                 RGBColor(255, 0, 0) if random.random() < 0.5 else RGBColor(0, 0, 0)
             )
 
-    def _insert_processed_image(self, slide, processed_img, slide_num, slide_height):
-        """Быстрая вставка предобработанного изображения"""
+    def _insert_processed_image_optimized(self, slide, processed_img, slide_num, slide_height):
+        """Оптимизированная вставка изображения"""
         try:
-            temp_img_path = Path(tempfile.gettempdir()) / f"temp_photo_{slide_num}.png"
+            temp_img_path = Path(tempfile.gettempdir()) / f"temp_photo_{slide_num}_{os.getpid()}.png"
             processed_img.save(temp_img_path, "PNG", optimize=True)
 
             dpi = 96
             width = Inches(processed_img.width / dpi)
             height = Inches(processed_img.height / dpi)
             left = Inches(0)
-            top = slide_height - height  # Используем переданную высоту слайда
+            top = slide_height - height
 
             slide.shapes.add_picture(str(temp_img_path), left, top, width=width, height=height)
-            temp_img_path.unlink(missing_ok=True)
+            
+            # Сразу удаляем временный файл
+            try:
+                temp_img_path.unlink(missing_ok=True)
+            except:
+                pass
 
-            logger.info(f"🖼️ Фото добавлено на слайд {slide_num} ({width.inches:.1f}×{height.inches:.1f} дюйма)")
+            logger.debug(f"🖼️ Фото добавлено на слайд {slide_num}")
 
         except Exception as e:
             logger.error(f"❌ Ошибка вставки фото для слайда {slide_num}: {e}")
 
-    # === ИСПРАВЛЕННАЯ ОПТИМИЗИРОВАННАЯ ГЕНЕРАЦИЯ ===
-    def generate(self, game_title: str, tracks: list = None, make_bw: bool = False, use_parallel: bool = True):
-        # Сначала пробуем переданные треки
-        if not tracks:
-            tracks = self._load_tracks_from_json()
+    def _process_audio_sequential(self, audio_tasks):
+        """Последовательная обработка аудио для экономии памяти"""
+        results = []
+        for i, task in enumerate(audio_tasks):
+            if i % 3 == 0:  # Проверяем память каждые 3 задачи
+                if not self._check_memory_usage():
+                    self._force_garbage_collection()
+                    time.sleep(0.5)  # Даем системе время освободить память
+                    
+            result = self._process_audio_segment_optimized(*task)
+            if result:
+                results.append(result)
+                
+        return results
+
+    def generate(self, game_title: str, tracks: list = None, make_bw: bool = False, use_parallel: bool = False):
+        """Оптимизированная генерация презентации для сервера с 512MB RAM"""
         
-        # Если из JSON не загрузилось, пробуем из медиатеки
+        logger.info("🚀 Запуск оптимизированной генерации презентации")
+        
+        # Принудительная очистка памяти перед началом
+        self._force_garbage_collection()
+        
+        # Загружаем треки
+        if not tracks:
+            tracks = self._load_tracks_from_json_optimized()
+        
         if not tracks:
             try:
                 from backend.server import media_library
@@ -280,16 +341,17 @@ class ModernPresentationGenerator:
                 logger.warning(f"⚠️ Не удалось загрузить треки из медиатеки: {e}")
 
         if not tracks:
-            raise ValueError("❌ Нет треков — генерация невозможна. Загрузите треки в медиатеку или создайте tracks.json/Track_data.json")
+            raise ValueError("❌ Нет треков для генерации")
 
         logger.info(f"🎵 Используется треков: {len(tracks)}")
 
-        tmp = Path(tempfile.mkdtemp(prefix="pptx_work_"))
+        # Создаем временную директорию
+        tmp = Path(tempfile.mkdtemp(prefix="pptx_opt_"))
         extract_dir = tmp / "extracted"
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Быстрое извлечение
+            # Извлекаем шаблон
             with zipfile.ZipFile(self.base_path, "r") as z:
                 z.extractall(extract_dir)
 
@@ -302,7 +364,7 @@ class ModernPresentationGenerator:
             out_root = Path.cwd() / "output" / f"presentation_{timestamp}"
             out_root.mkdir(parents=True, exist_ok=True)
 
-            # Быстрая замена заголовка
+            # Замена заголовка
             slide1 = slides_dir / "slide1.xml"
             if slide1.exists():
                 content = slide1.read_text(encoding="utf-8")
@@ -310,78 +372,62 @@ class ModernPresentationGenerator:
                     slide1.write_text(content.replace("{{TITLE}}", game_title), encoding="utf-8")
                     logger.info(f"📝 Заголовок заменен на: {game_title}")
 
-            # === ИСПРАВЛЕННАЯ ОБРАБОТКА АУДИО ===
-            rels_list = self._get_rels_list_sorted(slides_rels_dir)
+            # Подготавливаем задачи для обработки аудио
+            rels_files = sorted(
+                [f for f in slides_rels_dir.glob("slide*.xml.rels")],
+                key=lambda x: int(''.join(filter(str.isdigit, x.stem)) or 0)
+            )
+            
             slide_track_map = {}
-            track_index = 0  # Отдельный индекс для треков
+            audio_tasks = []
+            track_index = 0
             track_for_13_and_44 = None
 
-            # Подготавливаем задачи для параллельной обработки
-            audio_tasks = []
-            for rels_path in rels_list:
-                slide_num = int(''.join(ch for ch in rels_path.stem if ch.isdigit()) or 0)
+            for rels_path in rels_files:
+                slide_num = int(''.join(filter(str.isdigit, rels_path.stem)) or 0)
                 
-                # Пропускаем слайды из черного списка
                 if slide_num in self.skip_slides:
                     continue
                 
-                # Обработка специальных слайдов 13 и 44
                 if slide_num == 13:
-                    # Для слайда 13 резервируем текущий трек, но не увеличиваем индекс
                     if track_index < len(tracks):
                         track_for_13_and_44 = tracks[track_index]
-                        # НЕ увеличиваем track_index здесь!
                         track = track_for_13_and_44
                         audio_tasks.append((rels_path, track, slide_num, media_dir))
                         slide_track_map[slide_num] = track
-                        logger.info(f"🎵 Слайд 13: зарезервирован трек '{track.get('title', 'Без названия')}'")
                     continue
                 elif slide_num == 44:
-                    # Слайд 44 использует тот же трек, что и слайд 13
                     if track_for_13_and_44:
                         track = track_for_13_and_44
                         audio_tasks.append((rels_path, track, slide_num, media_dir))
                         slide_track_map[slide_num] = track
-                        logger.info(f"🎵 Слайд 44: использован трек '{track.get('title', 'Без названия')}'")
                     continue
                 else:
-                    # Обычные слайды
                     if track_index >= len(tracks):
-                        logger.warning(f"⚠️ Закончились треки на слайде {slide_num}")
                         break
                     
                     track = tracks[track_index]
-                    track_index += 1  # Увеличиваем индекс только для обычных слайдов
+                    track_index += 1
                     
                     audio_tasks.append((rels_path, track, slide_num, media_dir))
                     slide_track_map[slide_num] = track
-                    logger.debug(f"🎵 Слайд {slide_num}: назначен трек '{track.get('title', 'Без названия')}' (индекс: {track_index-1})")
 
-            # Параллельная обработка аудио
-            if use_parallel and len(audio_tasks) > 1:
-                logger.info("🔄 Параллельная обработка аудио...")
-                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                    results = list(executor.map(self._process_audio_segment, audio_tasks))
-                    # Обновляем карту треков результатами обработки
-                    for result in results:
-                        if result:
-                            slide_num, processed_track = result
-                            slide_track_map[slide_num] = processed_track
-            else:
-                # Последовательная обработка если не используем параллельность
-                logger.info("🔄 Последовательная обработка аудио...")
-                for task in audio_tasks:
-                    result = self._process_audio_segment(task)
-                    if result:
-                        slide_num, processed_track = result
-                        slide_track_map[slide_num] = processed_track
+            # Обработка аудио - используем последовательную обработку для экономии памяти
+            logger.info("🔄 Обработка аудио (последовательно для экономии памяти)...")
+            results = self._process_audio_sequential(audio_tasks)
+            
+            # Обновляем карту треков
+            for slide_num, processed_track in results:
+                slide_track_map[slide_num] = processed_track
 
-            # Логируем распределение треков для отладки
             logger.info(f"📊 Распределено треков по слайдам: {len(slide_track_map)}")
-            logger.info(f"📊 Использовано треков из доступных: {track_index} из {len(tracks)}")
 
-            # Быстрая сборка PPTX
+            # Создаем финальный PPTX
             final_pptx = out_root / f"presentation_{timestamp}.pptx"
+            
+            # Очищаем память перед сборкой
+            self._force_garbage_collection()
+            
             with zipfile.ZipFile(final_pptx, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zip_out:
                 for root, _, files in os.walk(extract_dir):
                     for file in files:
@@ -389,21 +435,37 @@ class ModernPresentationGenerator:
                         arcname = os.path.relpath(fp, extract_dir)
                         zip_out.write(fp, arcname)
 
+            # Очищаем кэш изображений перед финальной обработкой
+            self._image_cache.clear()
+            self._force_garbage_collection()
+
             # Финальная обработка текста и фото
+            logger.info("🎨 Замена текста и добавление фото...")
             prs = Presentation(final_pptx)
-            self._replace_placeholders_and_photos(prs, slide_track_map, make_bw)
+            self._replace_placeholders_and_photos_optimized(prs, slide_track_map, make_bw)
             prs.save(final_pptx)
+
+            # Финальная очистка памяти
+            del prs
+            self._force_garbage_collection()
 
             logger.info(f"✅ Презентация готова: {final_pptx}")
             logger.info(f"📁 Папка с результатами: {out_root}")
             return str(out_root)
 
         except Exception as e:
-            logger.error(f"❌ Критическая ошибка при генерации презентации: {e}")
+            logger.error(f"❌ Ошибка при генерации презентации: {e}")
             raise
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-            logger.info("🧹 Временные файлы очищены")
+            # Тщательная очистка
+            self._image_cache.clear()
+            self._force_garbage_collection()
+            
+            try:
+                shutil.rmtree(tmp, ignore_errors=True)
+                logger.info("🧹 Временные файлы очищены")
+            except Exception as e:
+                logger.warning(f"⚠️ Не удалось полностью очистить временные файлы: {e}")
 
 
 # Пример использования
@@ -411,10 +473,10 @@ if __name__ == "__main__":
     try:
         generator = ModernPresentationGenerator("template.pptx")
         result_path = generator.generate(
-            game_title="Моя музыкальная викторина",
-            tracks=None,  # Автоматически загрузит из tracks.json или Track_data.json
+            game_title="Моя оптимизированная викторина",
+            tracks=None,
             make_bw=False,
-            use_parallel=True
+            use_parallel=False
         )
         print(f"🎉 Презентация создана в: {result_path}")
     except Exception as e:
