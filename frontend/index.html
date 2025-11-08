@@ -107,81 +107,81 @@ Michael Jackson - Billie Jean"></textarea>
             <div id="mediaStatus" class="status"></div>
         </div>
         <!-- Вкладка Файлы -->
-<div id="local" class="tab-content">
-    <div class="local-header">
-        <h2>💾 Управление файлами</h2>
-        <p class="subtitle">Работа с базовыми файлами системы</p>
-    </div>
-    
-    <!-- Скачивание из Dropbox -->
-    <div class="local-section">
-        <h3>📥 Быстрое скачивание</h3>
-        <p class="text-muted">Скачайте необходимые файлы из облачного хранилища</p>
-        
-        <div class="download-actions">
-            <button class="btn btn-primary" onclick="downloadBasePptxFromDropbox()">
-                <span class="icon">📄</span>
-                Скачать base.pptx
-            </button>
-            <button class="btn btn-primary" onclick="downloadArtistPhotosFromDropbox()">
-                <span class="icon">🖼️</span>
-                Скачать фото артистов
-            </button>
-        </div>
-        
-        <small class="text-muted">Файлы будут сохранены в локальные папки проекта</small>
-    </div>
+        <div id="local" class="tab-content">
+            <div class="local-header">
+                <h2>💾 Управление файлами</h2>
+                <p class="subtitle">Работа с базовыми файлами системы</p>
+            </div>
 
-    <!-- Управление base.pptx -->
-    <div class="local-section">
-        <h3>📂 Шаблон презентации</h3>
-        <p class="text-muted">Основной файл для генерации презентаций</p>
-        
-        <div class="upload-area">
-            <div class="icon">📄</div>
-            <h4>Загрузить новый base.pptx</h4>
-            <p>Выберите файл в формате .pptx для замены текущего шаблона</p>
-            <input type="file" id="uploadBasePptx" accept=".pptx" style="display: none;">
-            <button class="btn btn-secondary" onclick="document.getElementById('uploadBasePptx').click()">
-                <span class="icon">📤</span>
-                Выбрать файл
-            </button>
-        </div>
-        
-        <div id="basePptxBlock" class="base-pptx-card">
-            <!-- Информация о base.pptx -->
-        </div>
-    </div>
+            <!-- Скачивание из Dropbox -->
+            <div class="local-section">
+                <h3>📥 Быстрое скачивание</h3>
+                <p class="text-muted">Скачайте необходимые файлы из облачного хранилища</p>
 
-    <!-- Управление фото артистов -->
-    <div class="local-section">
-        <h3>🖼️ Фото артистов</h3>
-        <p class="text-muted">Управление фотографиями в папке artists</p>
-        
-        <div class="upload-area">
-            <div class="icon">🖼️</div>
-            <h4>Добавить новые фото</h4>
-            <p>Загрузите изображения артистов для автоматического использования в презентациях</p>
-            <input type="file" id="uploadArtistPhotos" accept="image/*" multiple style="display: none;">
-            <button class="btn btn-secondary" onclick="document.getElementById('uploadArtistPhotos').click()">
-                <span class="icon">📤</span>
-                Выбрать фото
-            </button>
+                <div class="download-actions">
+                    <button class="btn btn-primary" onclick="downloadBasePptxFromDropbox()">
+                        <span class="icon">📄</span>
+                        Скачать base.pptx
+                    </button>
+                    <button class="btn btn-primary" onclick="downloadArtistPhotosFromDropbox()">
+                        <span class="icon">🖼️</span>
+                        Скачать фото артистов
+                    </button>
+                </div>
+
+                <small class="text-muted">Файлы будут сохранены в локальные папки проекта</small>
+            </div>
+
+            <!-- Управление base.pptx -->
+            <div class="local-section">
+                <h3>📂 Шаблон презентации</h3>
+                <p class="text-muted">Основной файл для генерации презентаций</p>
+
+                <div class="upload-area">
+                    <div class="icon">📄</div>
+                    <h4>Загрузить новый base.pptx</h4>
+                    <p>Выберите файл в формате .pptx для замены текущего шаблона</p>
+                    <input type="file" id="uploadBasePptx" accept=".pptx" style="display: none;">
+                    <button class="btn btn-secondary" onclick="document.getElementById('uploadBasePptx').click()">
+                        <span class="icon">📤</span>
+                        Выбрать файл
+                    </button>
+                </div>
+
+                <div id="basePptxBlock" class="base-pptx-card">
+                    <!-- Информация о base.pptx -->
+                </div>
+            </div>
+
+            <!-- Управление фото артистов -->
+            <div class="local-section">
+                <h3>🖼️ Фото артистов</h3>
+                <p class="text-muted">Управление фотографиями в папке artists</p>
+
+                <div class="upload-area">
+                    <div class="icon">🖼️</div>
+                    <h4>Добавить новые фото</h4>
+                    <p>Загрузите изображения артистов для автоматического использования в презентациях</p>
+                    <input type="file" id="uploadArtistPhotos" accept="image/*" multiple style="display: none;">
+                    <button class="btn btn-secondary" onclick="document.getElementById('uploadArtistPhotos').click()">
+                        <span class="icon">📤</span>
+                        Выбрать фото
+                    </button>
+                </div>
+
+                <div class="toolbar" style="margin: 20px 0;">
+                    <button class="btn btn-secondary" onclick="refreshArtistPhotos()">
+                        <span class="icon">🔄</span>
+                        Обновить список
+                    </button>
+                    <div class="photos-count" id="photosCount">0 фото</div>
+                </div>
+
+                <div id="artistPhotosList" class="artist-photos-grid">
+                    <!-- Фото из папки artists -->
+                </div>
+            </div>
         </div>
-        
-        <div class="toolbar" style="margin: 20px 0;">
-            <button class="btn btn-secondary" onclick="refreshArtistPhotos()">
-                <span class="icon">🔄</span>
-                Обновить список
-            </button>
-            <div class="photos-count" id="photosCount">0 фото</div>
-        </div>
-        
-        <div id="artistPhotosList" class="artist-photos-grid">
-            <!-- Фото из папки artists -->
-        </div>
-    </div>
-</div>
         <!-- Вкладка Презентация -->
         <div id="presentation" class="tab-content">
             <div class="generator-card simple">
@@ -213,7 +213,7 @@ Michael Jackson - Billie Jean"></textarea>
                     <ul style="margin: 10px 0; padding-left: 20px;">
                         <li>Презентация создается в формате PowerPoint (.pptx)</li>
                         <li>Автоматически добавляются фото артистов</li>
-                        <li>Создаются нарезанные аудио-отрезки для каждого трека</li>                        
+                        <li>Создаются нарезанные аудио-отрезки для каждого трека</li>
                         <li>Для корректной работы необходимо ровно 120 трек в медиатеке</li>
                     </ul>
                 </div>
@@ -224,156 +224,87 @@ Michael Jackson - Billie Jean"></textarea>
         <div id="tickets" class="tab-content">
             <div class="generator-card">
                 <h2>🎫 Генератор билетов</h2>
-                <p>Создавайте билеты лото из треков медиатеки. Настройте дизайн мини-конструктора и укажите количество билетов.</p>
+                <p>Создавайте билеты лото из треков медиатеки</p>
 
-                <div class="settings-card">
-                    <div class="settings-grid">
-                        <!-- Левая колонка: настройки -->
-                        <div class="settings-controls">
-                            <div class="form-group">
-                                <label>Количество билетов (1–100):</label>
-                                <input id="ticketsCount" type="number" class="form-input" value="10" min="1" max="100">
-                            </div>
-
-                            <div class="group">
-                                <h4>🎨 Дизайн билета</h4>
-
-                                <!-- Первая строка настроек - выровнена по высоте -->
-                                <div class="settings-row">
-                                    <div class="setting-item">
-                                        <label>Шрифт</label>
-                                        <select id="t_font" class="form-input">
-                                            <option>Helvetica</option>
-                                            <option>Arial</option>
-                                            <option>Times-Roman</option>
-                                            <option>Courier</option>
-                                        </select>
-                                    </div>
-
-                                    <div class="setting-item">
-                                        <label>Размер названия трека</label>
-                                        <input id="t_title_size" type="number" class="form-input" value="11" min="8" max="36">
-                                    </div>
-
-                                    <div class="setting-item">
-                                        <label>Размер имени артиста</label>
-                                        <input id="t_artist_size" type="number" class="form-input" value="9" min="6" max="28">
-                                    </div>
-                                </div>
-
-                                <!-- Вторая строка настроек - выровнена по высоте -->
-                                <div class="settings-row">
-                                    <div class="setting-item">
-                                        <label>Цвет имени артиста</label>
-                                        <input id="t_text_color" type="color" class="form-input" value="#666666">
-                                    </div>
-
-                                    <div class="setting-item">
-                                        <label>Цвет названия</label>
-                                        <input id="t_accent_color" type="color" class="form-input" value="#000000">
-                                    </div>
-
-                                    <div class="setting-item checkbox-group">
-                                        <label class="checkbox-label">
-                                            <input id="t_bold" type="checkbox" checked>
-                                            <span>Жирный шрифт названий</span>
-                                        </label>
-                                        <label class="checkbox-label">
-                                            <input id="t_upper" type="checkbox">
-                                            <span>ВЕРХНИЙ РЕГИСТР</span>
-                                        </label>
-                                    </div>
-                                </div>
-
-                                <!-- Настройки позиционирования -->
-                                <div class="position-settings">
-                                    <h5>🎯 Настройки позиционирования</h5>
-
-                                    <div class="setting-item">
-                                        <label>Позиция названия трека: <span id="titlePositionValue">0%</span></label>
-                                        <input id="t_title_position" type="range" class="form-slider" min="12" max="100" value="10">
-                                        <small>Сверху: 0% ↓ Снизу: 100%</small>
-                                    </div>
-
-                                    <div class="setting-item">
-                                        <label>Позиция имени артиста: <span id="artistPositionValue">90%</span></label>
-                                        <input id="t_artist_position" type="range" class="form-slider" min="7" max="80" value="80">
-                                        <small>Сверху: 0% ↓ Снизу: 100%</small>
-                                    </div>
-
-                                    <div class="setting-item">
-                                        <label>Вертикальный отступ: <span id="verticalPaddingValue">5px</span></label>
-                                        <input id="t_vertical_padding" type="range" class="form-slider" min="5" max="30" value="5">
-                                        <small>Меньше: 5px ↔ Больше: 30px</small>
-                                    </div>
-                                </div>
-
-                                <div class="generate-section">
-                                    <button id="generateTicketsBtn" class="btn btn-large btn-primary">🎫 Сгенерировать билеты</button>
-                                    <div id="ticketsDownloadSection" style="display: none; margin-top: 10px;">
-
-                                        <p>📁 Папка с билетами: <span id="ticketsFolderPath"></span></p>
-                                        <a id="ticketsDownloadLink" class="btn btn-success" download>📥 Скачать билеты</a>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Правая колонка: превью -->
-                        <div class="settings-preview">
-                            <!-- УВЕЛИЧЕННОЕ ПРЕВЬЮ -->
-                            <div id="ticketsPreview">
-                                <h4 style="text-align:center; margin-bottom:16px;">📋 Превью билета</h4>
-                                <div style="display:flex; justify-content:center;">
-                                    <!-- Основной билет увеличен -->
-                                    <div id="ticketPreviewCard"
-                                         style="width:600px; border:3px solid #2b3744; padding:25px; background:#ffffff; border-radius:15px; text-align:center; box-shadow:0 12px 32px rgba(0,0,0,0.4);">
-                                        <div id="ticketPreviewTitle"
-                                             style="color:#000000; font-weight:700; margin-bottom:20px; font-size:24px; padding-bottom:12px; border-bottom:2px solid #2b3744;">
-                                            БИЛЕТ №1 - МУЗЫКАЛЬНОЕ ЛОТО
-                                        </div>
-                                        <div id="ticketPreviewGrid"
-                                             style="display:grid; grid-template-columns:repeat(6, 1fr); gap:10px; background:#ffffff; padding:20px; border-radius:12px; min-height:400px;">
-                                            <!-- Сетка 6x6 будет заполнена JavaScript -->
-                                        </div>
-                                        <div style="margin-top:15px; font-size:13px; color:#888; font-style:italic;">
-                                            Музыкальное лото — отметьте сыгранные треки *привью, проверьте папку с output
-                                            Рекомендуется не менять настройки!
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                <!-- Статистика треков -->
+                <div class="stats-card">
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-label">Статус:</span>
+                            <span class="stat-value" id="generationStatus">Загрузка...</span>
                         </div>
                     </div>
-                </div>
-
-                <!-- ОТДЕЛЬНЫЙ БЛОК ДЛЯ СКАЧИВАНИЯ -->
-                <div id="downloadSection" style="display: none; margin-top: 30px; padding: 25px; background: linear-gradient(135deg, #10b981, #059669); border-radius: 12px; border: 2px solid #059669; text-align: center; box-shadow: 0 8px 25px rgba(0,0,0,0.3);">
-                    <div style="color: white;">
-                        <h3 style="margin-bottom: 10px; font-size: 24px;">✅ Билеты успешно сгенерированы!</h3>
-                        <p style="margin-bottom: 20px; font-size: 16px; opacity: 0.9;">Ваши билеты готовы к скачиванию</p>
-
-                        <button id="downloadTicketsBtn" class="btn" style="padding: 16px 32px; font-size: 18px; font-weight: bold; background: white; color: #059669; border: none; border-radius: 10px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.2); transition: all 0.3s ease;">
-                            📥 СКАЧАТЬ АРХИВ С БИЛЕТАМИ
-                        </button>
-
-                        <div id="downloadInfo" style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px;">
-                            <div style="display: flex; justify-content: center; gap: 30px; flex-wrap: wrap;">
-                                <div><strong>Файл:</strong> <span id="downloadFileName">-</span></div>
-                                <div><strong>Количество билетов:</strong> <span id="downloadTicketsCount">-</span></div>
-                                <div><strong>Использовано треков:</strong> <span id="downloadTracksUsed">-</span></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div id="ticketsStatus" class="status"></div>
-                <!-- ВРЕМЕННЫЙ БЛОК ДЛЯ СКАЧИВАНИЯ -->
-                <div id="tempDownloadSection" style="display:none; margin-top: 30px; padding: 25px; background: #f0fdf4; border: 2px solid #059669; border-radius: 12px;">
-                    <div id="tempDownloadInfo" style="margin-bottom: 15px; font-size: 16px; color: #065f46;"></div>
-                    <button id="tempDownloadBtn" class="btn btn-success" style="padding: 12px 24px; font-size: 16px;">
-                        📥 Скачать билеты
+                    <button id="refreshTracksBtn" class="btn btn-secondary">
+                        🔄 Обновить треки
                     </button>
+                </div>
+
+                <!-- Панель генерации -->
+                <div class="generation-card">
+                    <h2>🚀 Генерация билетов</h2>
+
+                    <div class="input-group">
+                        <label for="ticketsCount">Количество билетов:</label>
+                        <input type="number" id="ticketsCount" min="1" max="100" value="10" class="number-input">
+                    </div>
+
+                    <button id="generateTicketsBtn" class="btn btn-primary">
+                        🎫 Сгенерировать билеты
+                    </button>
+
+                    <!-- Прогресс-бар -->
+                    <div id="progressSection" class="progress-section" style="display: none;">
+                        <div class="progress-header">
+                            <span>Прогресс генерации:</span>
+                            <span id="progressText">Подготовка...</span>
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar" id="generationProgress">0%</div>
+                        </div>
+                        <div class="progress-stats">
+                            <div class="progress-stat">
+                                <span>Текущий билет:</span>
+                                <strong id="currentTicket">-</strong>
+                            </div>
+                            <div class="progress-stat">
+                                <span>Всего билетов:</span>
+                                <strong id="ticketsCountDisplay">10</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Секция скачивания -->
+                <div id="downloadSection" class="download-card" style="display: none;">
+                    <h2>📥 Результаты генерации</h2>
+                    <div class="download-info">
+                        <div class="info-item">
+                            <span>Файл:</span>
+                            <strong id="downloadFileName">-</strong>
+                        </div>
+                        <div class="info-item">
+                            <span>Билетов создано:</span>
+                            <strong id="downloadTicketsCount">-</strong>
+                        </div>
+                        <div class="info-item">
+                            <span>Треков использовано:</span>
+                            <strong id="downloadTracksUsed">-</strong>
+                        </div>
+                    </div>
+                    <button id="downloadTicketsBtn" class="btn btn-success">
+                        💾 Скачать ZIP архив
+                    </button>
+                </div>
+
+                <!-- Информационная панель -->
+                <div class="info-card">
+                    <h3>ℹ️ Информация</h3>
+                    <ul class="info-list">
+                        <li>Для генерации требуется минимум <strong>36 треков</strong></li>
+                        <li>Каждый билет содержит <strong>6×6 ячеек</strong> с треками</li>
+                        <li>Треки автоматически обновляются каждые 10 секунд</li>
+                        <li>Результат скачивается в ZIP архиве с PDF файлами</li>
+                    </ul>
                 </div>
             </div>
         </div>
