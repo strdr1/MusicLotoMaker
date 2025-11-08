@@ -221,108 +221,134 @@ class ModernPresentationGenerator:
 
     def _apply_text_formatting_with_style(self, original_run, new_text, is_artist, slide_num, artist_name=None):
         """Применяет форматирование с сохранением стиля оригинала и умным окрашиванием с кешированием"""
-        RED = RGBColor(255, 0, 0)
-        BLACK = RGBColor(0, 0, 0)
+        try:
+            logger.info(f"🔧 Начало форматирования текста: '{new_text}' (артист: {is_artist}, слайд: {slide_num})")
         
-        # Сохраняем стиль оригинального run
-        font_name = original_run.font.name
-        font_size = original_run.font.size
-        font_bold = original_run.font.bold
-        font_italic = original_run.font.italic
+            RED = RGBColor(255, 0, 0)
+            BLACK = RGBColor(0, 0, 0)
         
-        special_chars = {'@', '#', '$', '&', '€', '£', '¥'}
-        special_patterns = {'zz', 'xxx', 'www', 'qq', 'kk'}
+            # Сохраняем стиль оригинального run
+            font_name = original_run.font.name
+            font_size = original_run.font.size
+            font_bold = original_run.font.bold  # Это булево значение
+            font_italic = original_run.font.italic  # Это булево значение
         
-        words = new_text.split()
+            logger.info(f"📝 Параметры шрифта: name={font_name}, size={font_size}, bold={font_bold}, italic={font_italic}")
         
-        # Инициализируем счетчик для слайда если нужно
-        if slide_num not in self._red_words_per_slide:
-            self._red_words_per_slide[slide_num] = 0
+            special_chars = {'@', '#', '$', '&', '€', '£', '¥'}
+            special_patterns = {'zz', 'xxx', 'www', 'qq', 'kk'}
         
-        # Если это артист и у нас есть кеш для него, используем его
-        cached_red_words = set()
-        if is_artist and artist_name and artist_name in self._artist_red_words_cache:
-            cached_red_words = self._artist_red_words_cache[artist_name]
-            logger.info(f"🎨 Используем кеш красных слов для артиста '{artist_name}': {cached_red_words}")
+            words = new_text.split()
         
-        # Находим слова для покраски
-        paintable_words = []
-        for word in words:
-            # Проверяем кеш для этого артиста
-            if word.lower() in cached_red_words:
-                paintable_words.append((word, True))
-                continue
+            # Инициализируем счетчик для слайда если нужно
+            if slide_num not in self._red_words_per_slide:
+                self._red_words_per_slide[slide_num] = 0
+        
+            # Если это артист и у нас есть кеш для него, используем его
+            cached_red_words = set()
+            if is_artist and artist_name and artist_name in self._artist_red_words_cache:
+                cached_red_words = self._artist_red_words_cache[artist_name]
+                logger.info(f"🎨 Используем кеш красных слов для артиста '{artist_name}': {cached_red_words}")
+        
+            # Находим слова для покраски
+            paintable_words = []
+            for word in words:
+                # Проверяем кеш для этого артиста
+                if word.lower() in cached_red_words:
+                    paintable_words.append((word, True))
+                    continue
                 
-            has_special_char = any(char in word for char in special_chars)
-            has_special_pattern = any(pattern in word.lower() for pattern in special_patterns)
-            paintable_words.append((word, has_special_char or has_special_pattern))
+                has_special_char = any(char in word for char in special_chars)
+                has_special_pattern = any(pattern in word.lower() for pattern in special_patterns)
+                paintable_words.append((word, has_special_char or has_special_pattern))
         
-        # Гарантируем минимум 1 красное слово на слайд, но не более 1
-        if (not any(paintable for _, paintable in paintable_words) and 
-            words and self._red_words_per_slide[slide_num] == 0):
-            random_index = random.randint(0, len(words) - 1)
-            paintable_words[random_index] = (words[random_index], True)
+            # Гарантируем минимум 1 красное слово на слайд, но не более 1
+            if (not any(paintable for _, paintable in paintable_words) and 
+                words and self._red_words_per_slide[slide_num] == 0):
+                random_index = random.randint(0, len(words) - 1)
+                paintable_words[random_index] = (words[random_index], True)
         
-        # Сохраняем выбранные красные слова в кеш для артиста
-        red_words_for_artist = set()
-        for word, should_paint in paintable_words:
-            if should_paint:
-                red_words_for_artist.add(word.lower())
+            # Сохраняем выбранные красные слова в кеш для артиста
+            red_words_for_artist = set()
+            for word, should_paint in paintable_words:
+                if should_paint:
+                    red_words_for_artist.add(word.lower())
         
-        if is_artist and artist_name and red_words_for_artist:
-            self._artist_red_words_cache[artist_name] = red_words_for_artist
-            logger.info(f"💾 Сохранили в кеш для артиста '{artist_name}': {red_words_for_artist}")
+            if is_artist and artist_name and red_words_for_artist:
+                self._artist_red_words_cache[artist_name] = red_words_for_artist
+                logger.info(f"💾 Сохранили в кеш для артиста '{artist_name}': {red_words_for_artist}")
         
-        # Очищаем оригинальный run и создаем новые с сохранением стиля
-        original_run.text = ""
-        parent_paragraph = original_run._parent
+            # Очищаем оригинальный run и создаем новые с сохранением стиля
+            original_run.text = ""
+            parent_paragraph = original_run._parent
         
-        for word, should_paint in paintable_words:
-            # Проверяем лимит красных слов на слайд
-            can_paint_red = should_paint and self._red_words_per_slide[slide_num] < 1
+            for word, should_paint in paintable_words:
+                # Проверяем лимит красных слов на слайд
+                can_paint_red = should_paint and self._red_words_per_slide[slide_num] < 1
             
-            if can_paint_red:
-                self._red_words_per_slide[slide_num] += 1
-                # Обрабатываем слово посимвольно
-                for char in word:
+                if can_paint_red:
+                    self._red_words_per_slide[slide_num] += 1
+                    logger.info(f"🎨 Красим слово '{word}' в красный на слайде {slide_num}")
+                
+                    # Обрабатываем слово посимвольно
+                    for char in word:
+                        new_run = parent_paragraph.add_run()
+                        new_run.text = char
+                        # Сохраняем стиль оригинала
+                        if font_name:
+                            new_run.font.name = font_name
+                        if font_size:
+                            new_run.font.size = font_size
+                    
+                        # ИСПРАВЛЕНИЕ: Правильно устанавливаем булевы значения
+                        new_run.font.bold = font_bold if font_bold is not None else False
+                        new_run.font.italic = font_italic if font_italic is not None else False
+                    
+                        # Красим только специальные символы (или все если слово выбрано случайно)
+                        if char in special_chars or (should_paint and not any(c in word for c in special_chars)):
+                            new_run.font.color.rgb = RED
+                        else:
+                            new_run.font.color.rgb = BLACK
+                
+                    # Добавляем пробел
+                    space_run = parent_paragraph.add_run()
+                    space_run.text = " "
+                    if font_name:
+                        space_run.font.name = font_name
+                    if font_size:
+                        space_run.font.size = font_size
+                    space_run.font.bold = font_bold if font_bold is not None else False
+                    space_run.font.italic = font_italic if font_italic is not None else False
+                    space_run.font.color.rgb = BLACK
+                else:
+                    # Обычное слово без окрашивания
                     new_run = parent_paragraph.add_run()
-                    new_run.text = char
+                    new_run.text = word + " "
                     # Сохраняем стиль оригинала
                     if font_name:
                         new_run.font.name = font_name
                     if font_size:
                         new_run.font.size = font_size
-                    new_run.font.bold = font_bold
-                    new_run.font.italic = font_italic
-                    
-                    # Красим только специальные символы (или все если слово выбрано случайно)
-                    if char in special_chars or (should_paint and not any(c in word for c in special_chars)):
-                        new_run.font.color.rgb = RED
-                    else:
-                        new_run.font.color.rgb = BLACK
                 
-                # Добавляем пробел
-                space_run = parent_paragraph.add_run()
-                space_run.text = " "
-                if font_name:
-                    space_run.font.name = font_name
-                if font_size:
-                    space_run.font.size = font_size
-                space_run.font.bold = font_bold
-                space_run.font.italic = font_italic
-                space_run.font.color.rgb = BLACK
-            else:
-                # Обычное слово без окрашивания
-                new_run = parent_paragraph.add_run()
-                new_run.text = word + " "
-                # Сохраняем стиль оригинала
-                if font_name:
-                    new_run.font.name = font_name
-                if font_size:
-                    new_run.font.size = font_size
-                new_run.font.bold = font_bold
-                new_run.font.italic = font_italic
-                new_run.font.color.rgb = BLACK
+                    # ИСПРАВЛЕНИЕ: Правильно устанавливаем булевы значения
+                    new_run.font.bold = font_bold if font_bold is not None else False
+                    new_run.font.italic = font_italic if font_italic is not None else False
+                    new_run.font.color.rgb = BLACK
+        
+            logger.info(f"✅ Форматирование завершено для текста: '{new_text}'")
+        
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка в _apply_text_formatting_with_style: {e}")
+            logger.error(f"📌 Тип font.bold: {type(original_run.font.bold)}, значение: {original_run.font.bold}")
+            logger.error(f"📌 Тип font.italic: {type(original_run.font.italic)}, значение: {original_run.font.italic}")
+        
+            # Аварийное восстановление - просто устанавливаем текст
+            try:
+                original_run.text = new_text
+                logger.info("🆘 Установлен простой текст в качестве запасного варианта")
+            except:
+                logger.error("💥 Не удалось установить даже простой текст")
+            raise
 
     def _move_button_to_corner(self, slide, slide_height, slide_width, mirror=False):
         """Перемещает кнопку image42.png в угол и при необходимости отзеркаливает через отрицательное масштабирование"""
