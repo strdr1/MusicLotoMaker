@@ -72,7 +72,7 @@ from PIL import Image, ImageOps
 from pptx import Presentation
 from pptx.util import Inches
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE
 from pptx.enum.dml import MSO_THEME_COLOR
 from pptx.oxml.xmlchemy import OxmlElement
 
@@ -135,6 +135,27 @@ class ModernPresentationGenerator:
         logger.debug("🧹 Принудительная сборка мусора")
         gc.collect()
         time.sleep(0.1)
+
+    def _safe_set_auto_size(self, text_frame, enabled):
+        """Безопасная установка auto_size с правильным enum значением"""
+        try:
+            if enabled:
+                text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+            else:
+                text_frame.auto_size = None
+            logger.debug(f"✅ Auto_size установлен: {enabled}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось установить auto_size: {e}")
+            # Пробуем альтернативный способ
+            try:
+                if hasattr(text_frame, '_bodyPr'):
+                    if enabled:
+                        text_frame._bodyPr.set('autofit', 'spAutoFit')
+                    else:
+                        text_frame._bodyPr.set('autofit', None)
+                    logger.debug(f"✅ Auto_size установлен через альтернативный метод: {enabled}")
+            except Exception as alt_e:
+                logger.error(f"❌ Ошибка альтернативной установки auto_size: {alt_e}")
 
     def _get_image_orientation(self, image_path: str):
         """Определяет ориентацию изображения"""
@@ -765,7 +786,9 @@ class ModernPresentationGenerator:
                     artist_shape.top = Inches(1.0)
                 
                 artist_shape.text_frame.word_wrap = False
-                artist_shape.text_frame.auto_size = True
+                # ИСПРАВЛЕНИЕ: Используем безопасную установку auto_size
+                self._safe_set_auto_size(artist_shape.text_frame, True)
+                
                 for paragraph in artist_shape.text_frame.paragraphs:
                     paragraph.alignment = PP_ALIGN.LEFT
                 
@@ -795,7 +818,9 @@ class ModernPresentationGenerator:
                         title_shape.top = Inches(2.2)
                     
                     title_shape.text_frame.word_wrap = False
-                    title_shape.text_frame.auto_size = True
+                    # ИСПРАВЛЕНИЕ: Используем безопасную установку auto_size
+                    self._safe_set_auto_size(title_shape.text_frame, True)
+                    
                     for paragraph in title_shape.text_frame.paragraphs:
                         paragraph.alignment = PP_ALIGN.LEFT
                     
