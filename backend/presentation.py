@@ -26,7 +26,7 @@ def install_missing_packages():
     
     missing_packages = []
     
-    for package, pip_name in required_packages.items():
+    for package, pip_name in required_packages:
         try:
             if package == 'PIL':
                 import PIL
@@ -61,7 +61,7 @@ from PIL import Image, ImageOps
 from pptx import Presentation
 from pptx.util import Inches
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import PP_ALIGN, MSOTriState
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -324,19 +324,49 @@ class ModernPresentationGenerator:
             logger.error(f"❌ Ошибка обработки аудио для слайда {slide_num}: {e}")
             return None
 
+    def _safe_mso_to_bool(self, mso_value):
+        """Безопасно конвертирует MSOTriState в bool"""
+        if mso_value is None:
+            return False
+        # Если это MSOTriState объект
+        if hasattr(mso_value, 'value'):
+            # MSOTriState.TRUE -> True, MSOTriState.FALSE -> False
+            return mso_value == MSOTriState.TRUE
+        # Если это уже bool
+        return bool(mso_value)
+
+    def _safe_set_font_property(self, font_property, value):
+        """Безопасно устанавливает свойство шрифта"""
+        try:
+            # Для MSOTriState используем правильные значения
+            if hasattr(font_property, '__class__') and font_property.__class__.__name__ == 'MSOTriState':
+                if value:
+                    return MSOTriState.TRUE
+                else:
+                    return MSOTriState.FALSE
+            else:
+                return bool(value)
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка установки свойства шрифта: {e}")
+            return value
+
     def _apply_text_formatting_with_style(self, original_run, new_text, is_artist, slide_num, artist_name=None):
-        """УПРОЩЕННАЯ ВЕРСИЯ - без работы с bold/italic"""
+        """Применяет форматирование с правильной работой с MSOTriState"""
         try:
             logger.info(f"🔧 Начало форматирования текста: '{new_text}'")
         
             RED = RGBColor(255, 0, 0)
             BLACK = RGBColor(0, 0, 0)
         
-            # Сохраняем только имя и размер шрифта
+            # Сохраняем стиль оригинального run с правильной конвертацией MSOTriState
             font_name = original_run.font.name
             font_size = original_run.font.size
+            
+            # ПРАВИЛЬНАЯ КОНВЕРТАЦИЯ MSOTriState
+            font_bold = self._safe_mso_to_bool(original_run.font.bold)
+            font_italic = self._safe_mso_to_bool(original_run.font.italic)
 
-            logger.info(f"📝 Параметры шрифта: name={font_name}, size={font_size}")
+            logger.info(f"📝 Параметры шрифта: name={font_name}, size={font_size}, bold={font_bold}, italic={font_italic}")
         
             special_chars = {'@', '#', '$', '&', '€', '£', '¥'}
             special_patterns = {'zz', 'xxx', 'www', 'qq', 'kk'}
@@ -397,11 +427,18 @@ class ModernPresentationGenerator:
                     for char in word:
                         new_run = parent_paragraph.add_run()
                         new_run.text = char
-                        # Сохраняем стиль оригинала
+                        # Сохраняем стиль оригинала с безопасной установкой
                         if font_name:
                             new_run.font.name = font_name
                         if font_size:
                             new_run.font.size = font_size
+                    
+                        # БЕЗОПАСНАЯ УСТАНОВКА свойств шрифта
+                        try:
+                            new_run.font.bold = self._safe_set_font_property(new_run.font.bold, font_bold)
+                            new_run.font.italic = self._safe_set_font_property(new_run.font.italic, font_italic)
+                        except Exception as e:
+                            logger.warning(f"⚠️ Не удалось установить bold/italic: {e}")
                     
                         # Красим только специальные символы (или все если слово выбрано случайно)
                         if char in special_chars or (should_paint and not any(c in word for c in special_chars)):
@@ -416,6 +453,14 @@ class ModernPresentationGenerator:
                         space_run.font.name = font_name
                     if font_size:
                         space_run.font.size = font_size
+                    
+                    # БЕЗОПАСНАЯ УСТАНОВКА для пробела
+                    try:
+                        space_run.font.bold = self._safe_set_font_property(space_run.font.bold, font_bold)
+                        space_run.font.italic = self._safe_set_font_property(space_run.font.italic, font_italic)
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось установить bold/italic для пробела: {e}")
+                    
                     space_run.font.color.rgb = BLACK
                 else:
                     # Обычное слово без окрашивания
@@ -426,12 +471,22 @@ class ModernPresentationGenerator:
                         new_run.font.name = font_name
                     if font_size:
                         new_run.font.size = font_size
+                
+                    # БЕЗОПАСНАЯ УСТАНОВКА
+                    try:
+                        new_run.font.bold = self._safe_set_font_property(new_run.font.bold, font_bold)
+                        new_run.font.italic = self._safe_set_font_property(new_run.font.italic, font_italic)
+                    except Exception as e:
+                        logger.warning(f"⚠️ Не удалось установить bold/italic для слова: {e}")
+                    
                     new_run.font.color.rgb = BLACK
         
             logger.info(f"✅ Форматирование завершено для текста: '{new_text}'")
         
         except Exception as e:
-            logger.error(f"❌ Ошибка в _apply_text_formatting_with_style: {e}")
+            logger.error(f"❌ Критическая ошибка в _apply_text_formatting_with_style: {e}")
+            logger.error(f"📌 Тип font.bold: {type(original_run.font.bold)}, значение: {original_run.font.bold}")
+            logger.error(f"📌 Тип font.italic: {type(original_run.font.italic)}, значение: {original_run.font.italic}")
         
             # Аварийное восстановление - просто устанавливаем текст
             try:
