@@ -26,7 +26,7 @@ def install_missing_packages():
     
     missing_packages = []
     
-    for package, pip_name in required_packages:
+    for package, pip_name in required_packages.items():
         try:
             if package == 'PIL':
                 import PIL
