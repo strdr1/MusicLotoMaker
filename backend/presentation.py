@@ -124,34 +124,66 @@ class ModernPresentationGenerator:
                     return "horizontal"
                 else:
                     return "vertical"
-        except:
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось определить ориентацию изображения {image_path}: {e}")
             return "vertical"  # По умолчанию вертикальное
 
     def _load_and_process_image_optimized(self, image_path: str, make_bw: bool):
+        """ДЕТАЛЬНАЯ ЗАГРУЗКА ИЗОБРАЖЕНИЯ С ЛОГИРОВАНИЕМ"""
+        logger.info(f"🖼️ === НАЧАЛО ЗАГРУЗКИ ИЗОБРАЖЕНИЯ ===")
+        logger.info(f"🖼️ Полный путь из JSON: {image_path}")
+        
         if not self._check_memory_usage():
             self._force_garbage_collection()
             
         cache_key = f"{image_path}_{make_bw}"
         if cache_key in self._image_cache:
+            logger.info(f"🖼️ Используем кэш для: {image_path}")
             return self._image_cache[cache_key]
             
         if len(self._image_cache) >= self.image_cache_size:
             self._image_cache.pop(next(iter(self._image_cache)))
-            
-        path = Path(image_path)
-        if not path.exists():
+        
+        # Ищем файл по имени в разных местах
+        filename = Path(image_path).name
+        logger.info(f"🖼️ Ищем файл по имени: {filename}")
+        
+        possible_paths = [
+            Path.cwd() / "images" / filename,
+            Path.cwd() / "downloads" / filename,
+            Path.cwd() / "uploads" / filename,
+            Path.cwd() / filename,
+            Path.cwd() / "media" / filename,
+        ]
+        
+        found_path = None
+        for path in possible_paths:
+            logger.info(f"🔍 Проверяем путь: {path}")
+            if path.exists():
+                found_path = path
+                logger.info(f"✅ Файл найден: {path}")
+                break
+        
+        if not found_path:
+            logger.error(f"❌ Файл изображения не найден ни в одном месте: {filename}")
+            logger.info(f"📁 Содержимое папки images: {list((Path.cwd() / 'images').glob('*')) if (Path.cwd() / 'images').exists() else 'Папка не существует'}")
             return None
             
         try:
-            with Image.open(path) as img:
+            logger.info(f"🖼️ Открываем изображение: {found_path}")
+            with Image.open(found_path) as img:
+                logger.info(f"🖼️ Изображение открыто: {img.size}, mode: {img.mode}")
+                
                 # Сохраняем оригинальные размеры
                 original_width, original_height = img.size
                 
                 # Конвертируем в RGBA если нужно
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
+                    logger.info(f"🖼️ Конвертировано в RGBA")
 
                 if make_bw:
+                    logger.info(f"🖼️ Применяем ЧБ фильтр")
                     grayscale = ImageOps.grayscale(img.convert("RGB"))
                     alpha = img.split()[3] if len(img.split()) > 3 else None
                     if alpha:
@@ -161,10 +193,11 @@ class ModernPresentationGenerator:
 
                 # Возвращаем изображение без изменения размеров
                 self._image_cache[cache_key] = img
+                logger.info(f"🖼️ === УСПЕШНО ЗАГРУЖЕНО ===")
                 return img
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка обработки изображения {image_path}: {e}")
+            logger.error(f"❌ Ошибка обработки изображения {found_path}: {e}")
             return None
 
     def _apply_fade_effects(self, audio_segment):
@@ -182,12 +215,25 @@ class ModernPresentationGenerator:
         return audio_segment
 
     def _find_track_file_optimized(self, track_path: str):
+        """Ищет аудио файл по имени"""
+        logger.info(f"🎵 Поиск аудио файла: {track_path}")
+        filename = Path(track_path).name
+        logger.info(f"🎵 Ищем по имени: {filename}")
+        
         possible_paths = [
-            Path(track_path),
-            Path.cwd() / "downloads" / Path(track_path).name,
-            Path.cwd() / "uploads" / Path(track_path).name
+            Path.cwd() / "downloads" / filename,
+            Path.cwd() / "uploads" / filename,
+            Path.cwd() / filename,
         ]
-        return next((p for p in possible_paths if p.exists()), None)
+        
+        for path in possible_paths:
+            logger.info(f"🔍 Проверяем: {path}")
+            if path.exists():
+                logger.info(f"✅ Аудио файл найден: {path}")
+                return path
+        
+        logger.warning(f"⚠️ Аудио файл не найден: {filename}")
+        return None
 
     def _load_tracks_from_json_optimized(self):
         possible_paths = [
@@ -217,6 +263,14 @@ class ModernPresentationGenerator:
                 tracks = data
                 
             logger.info(f"🎵 Загружено {len(tracks)} треков")
+            
+            # Логируем информацию о первом треке для диагностики
+            if tracks:
+                first_track = tracks[0]
+                logger.info(f"🎵 Первый трек: {first_track.get('artist')} - {first_track.get('title')}")
+                logger.info(f"🎵 Путь к изображению: {first_track.get('image_path')}")
+                logger.info(f"🎵 Путь к аудио: {first_track.get('file_path')}")
+                
             return tracks
             
         except Exception as e:
@@ -271,31 +325,18 @@ class ModernPresentationGenerator:
             return None
 
     def _apply_text_formatting_with_style(self, original_run, new_text, is_artist, slide_num, artist_name=None):
-        """Применяет форматирование с сохранением стиля оригинала и умным окрашиванием с кешированием"""
+        """УПРОЩЕННАЯ ВЕРСИЯ - без работы с bold/italic"""
         try:
-            logger.info(f"🔧 Начало форматирования текста: '{new_text}' (артист: {is_artist}, слайд: {slide_num})")
+            logger.info(f"🔧 Начало форматирования текста: '{new_text}'")
         
             RED = RGBColor(255, 0, 0)
             BLACK = RGBColor(0, 0, 0)
         
-            # Сохраняем стиль оригинального run
+            # Сохраняем только имя и размер шрифта
             font_name = original_run.font.name
             font_size = original_run.font.size
 
-            # КОНВЕРТИРУЕМ MSOTriState в bool для совместимости
-            def mso_to_bool(mso_value):
-                if mso_value is None:
-                    return False
-                if hasattr(mso_value, 'value'):
-                    return mso_value.value == True
-                return bool(mso_value)
-
-            font_bold = mso_to_bool(original_run.font.bold)
-            font_italic = mso_to_bool(original_run.font.italic)
-
-            logger.info(f"📝 После конвертации - bold: {font_bold} ({type(font_bold)}), italic: {font_italic} ({type(font_italic)})")
-        
-            logger.info(f"📝 Параметры шрифта: name={font_name}, size={font_size}, bold={font_bold}, italic={font_italic}")
+            logger.info(f"📝 Параметры шрифта: name={font_name}, size={font_size}")
         
             special_chars = {'@', '#', '$', '&', '€', '£', '¥'}
             special_patterns = {'zz', 'xxx', 'www', 'qq', 'kk'}
@@ -362,10 +403,6 @@ class ModernPresentationGenerator:
                         if font_size:
                             new_run.font.size = font_size
                     
-                        # ИСПРАВЛЕНИЕ: Правильно устанавливаем булевы значения
-                        new_run.font.bold = font_bold
-                        new_run.font.italic = font_italic
-                    
                         # Красим только специальные символы (или все если слово выбрано случайно)
                         if char in special_chars or (should_paint and not any(c in word for c in special_chars)):
                             new_run.font.color.rgb = RED
@@ -379,8 +416,6 @@ class ModernPresentationGenerator:
                         space_run.font.name = font_name
                     if font_size:
                         space_run.font.size = font_size
-                    space_run.font.bold = font_bold if font_bold is not None else False
-                    space_run.font.italic = font_italic if font_italic is not None else False
                     space_run.font.color.rgb = BLACK
                 else:
                     # Обычное слово без окрашивания
@@ -391,18 +426,12 @@ class ModernPresentationGenerator:
                         new_run.font.name = font_name
                     if font_size:
                         new_run.font.size = font_size
-                
-                    # ИСПРАВЛЕНИЕ: Правильно устанавливаем булевы значения
-                    new_run.font.bold = font_bold if font_bold is not None else False
-                    new_run.font.italic = font_italic if font_italic is not None else False
                     new_run.font.color.rgb = BLACK
         
             logger.info(f"✅ Форматирование завершено для текста: '{new_text}'")
         
         except Exception as e:
-            logger.error(f"❌ Критическая ошибка в _apply_text_formatting_with_style: {e}")
-            logger.error(f"📌 Тип font.bold: {type(original_run.font.bold)}, значение: {original_run.font.bold}")
-            logger.error(f"📌 Тип font.italic: {type(original_run.font.italic)}, значение: {original_run.font.italic}")
+            logger.error(f"❌ Ошибка в _apply_text_formatting_with_style: {e}")
         
             # Аварийное восстановление - просто устанавливаем текст
             try:
@@ -413,9 +442,9 @@ class ModernPresentationGenerator:
             raise
 
     def _move_button_to_corner(self, slide, slide_height, slide_width, mirror=False):
-        """Перемещает кнопку image42.png в угол и при необходимости отзеркаливает через отрицательное масштабирование"""
+        """Перемещает кнопку image42.png в угол"""
         try:
-            logger.info(f"🔍 ПОИСК КНОПКИ IMAGE42.PNG НА СЛАЙДЕ")
+            logger.info(f"🔍 Поиск кнопки image42.png на слайде")
         
             for i, shape in enumerate(slide.shapes):
                 if hasattr(shape, 'image'):
@@ -436,39 +465,15 @@ class ModernPresentationGenerator:
                                         logger.info(f"Фигура {i}: rId={rId}, filename={filename}")
                                     
                                         if filename.lower() == 'image42.png':
-                                            old_left, old_top = shape.left, shape.top
-                                            old_width, old_height = shape.width, shape.height
-                                        
                                             if mirror:
-                                                # Левый нижний угол с отзеркаливанием через отрицательное масштабирование
-                                                new_left = Inches(0.2)
-                                                new_top = slide_height - shape.height - Inches(0.2)
-                                            
-                                                # Перемещаем кнопку
-                                                shape.left = new_left
-                                                shape.top = new_top
-                                            
-                                                # Зеркалим через отрицательную ширину
-                                                # Сохраняем оригинальные размеры
-                                                original_width = shape.width
-                                                original_height = shape.height
-                                            
-                                                # Устанавливаем отрицательную ширину для зеркального отображения
-                                                shape.width = -original_width
-                                            
-                                                # Корректируем позицию, т.к. при отрицательной ширине координаты меняются
-                                                shape.left = new_left + original_width
-                                            
-                                                logger.info(f"✅ Кнопка отзеркалена через отрицательное масштабирование!")
-                                                logger.info(f"📏 Было: {old_width}x{old_height}, стало: {shape.width}x{shape.height}")
-                                                logger.info(f"📍 Было: {old_left},{old_top}, стало: {shape.left},{shape.top}")
-                                            
+                                                # Левый нижний угол
+                                                shape.left = Inches(0.2)
+                                                shape.top = slide_height - shape.height - Inches(0.2)
                                             else:
-                                                # Правый нижний угол без изменений
+                                                # Правый нижний угол
                                                 shape.left = slide_width - shape.width - Inches(0.2)
                                                 shape.top = slide_height - shape.height - Inches(0.2)
-                                                logger.info(f"✅ Кнопка перемещена в правый нижний угол!")
-                                        
+                                            logger.info(f"✅ Кнопка перемещена!")
                                             return True
                     except Exception as e:
                         logger.debug(f"Ошибка при анализе фигуры {i}: {e}")
@@ -482,8 +487,12 @@ class ModernPresentationGenerator:
             return False
 
     def _insert_artist_photo(self, slide, processed_img, slide_height, slide_width, template_type):
-        """Вставляет фото артиста согласно выбранному шаблону"""
+        """Вставляет фото артиста с проверкой на None"""
         try:
+            if processed_img is None:
+                logger.warning("⚠️ Пропускаем вставку фото - изображение не загружено")
+                return
+                
             temp_img_path = Path(tempfile.gettempdir()) / f"temp_photo_{random.randint(1000,9999)}.png"
             processed_img.save(temp_img_path, "PNG", optimize=True)
 
@@ -496,20 +505,19 @@ class ModernPresentationGenerator:
             
             # Увеличиваем фото для ВСЕХ шаблонов
             if template_type == 1:
-                # Шаблон 1: Вертикальное фото слева - УВЕЛИЧИВАЕМ ЕЩЕ БОЛЬШЕ
-                scale_factor = 1.2  # Увеличиваем на 60%
+                # Шаблон 1: Вертикальное фото слева
+                scale_factor = 1.2
                 width_inches *= scale_factor
                 height_inches *= scale_factor
                 
-                # Шаблон 1: Вертикальное фото слева снизу (БОЛЬШОЕ)
                 left = Inches(0)
                 top = slide_height - Inches(height_inches)
                 width = Inches(width_inches)
                 height = Inches(height_inches)
                 
             elif template_type == 2:
-                # Шаблон 2: Вертикальное фото справа - ТОЖЕ УВЕЛИЧИВАЕМ
-                scale_factor = 1.15  # Увеличиваем на 50%
+                # Шаблон 2: Вертикальное фото справа
+                scale_factor = 1.15
                 width_inches *= scale_factor
                 height_inches *= scale_factor
                 
@@ -519,8 +527,8 @@ class ModernPresentationGenerator:
                 height = Inches(height_inches)
                 
             elif template_type == 3:
-                # Шаблон 3: Горизонтальное фото - ТОЖЕ УВЕЛИЧИВАЕМ
-                scale_factor = 1.1  # Увеличиваем на 40%
+                # Шаблон 3: Горизонтальное фото
+                scale_factor = 1.1
                 width_inches *= scale_factor
                 height_inches *= scale_factor
                 
@@ -546,7 +554,7 @@ class ModernPresentationGenerator:
             except:
                 pass
 
-            logger.debug(f"🖼️ Фото добавлено по шаблону {template_type} (увеличено)")
+            logger.info(f"🖼️ Фото добавлено по шаблону {template_type}")
 
         except Exception as e:
             logger.error(f"❌ Ошибка вставки фото: {e}")
@@ -594,6 +602,8 @@ class ModernPresentationGenerator:
                 if processed_img:
                     self._insert_artist_photo(slide, processed_img, slide_height, slide_width, template_type)
                     del processed_img
+                else:
+                    logger.warning(f"⚠️ Не удалось загрузить изображение для слайда {slide_num}: {image_path}")
 
             # Ищем существующие текстовые блоки с плейсхолдерами и заменяем их
             artist_shapes = []
@@ -617,8 +627,8 @@ class ModernPresentationGenerator:
                 # Позиционируем согласно шаблону
                 if template_type == 1:
                     # Шаблон 1: Вертикальное фото слева - текст ПРАВЕЕ и ВЫШЕ
-                    artist_shape.left = Inches(9.0)  # Еще правее
-                    artist_shape.top = Inches(0.8)   # Выше
+                    artist_shape.left = Inches(9.0)
+                    artist_shape.top = Inches(0.8)
                 elif template_type == 2:
                     # Шаблон 2: Вертикальное фото справа - текст слева сверху
                     artist_shape.left = Inches(0.5)
@@ -646,15 +656,12 @@ class ModernPresentationGenerator:
                     
                     # Позиционируем согласно шаблону
                     if template_type == 1:
-                        # Шаблон 1: Вертикальное фото слева - текст ПРАВЕЕ и ВЫШЕ
-                        title_shape.left = Inches(9.0)  # Еще правее
-                        title_shape.top = Inches(2.0)   # Выше и ближе к артисту
+                        title_shape.left = Inches(9.0)
+                        title_shape.top = Inches(2.0)
                     elif template_type == 2:
-                        # Шаблон 2: Вертикальное фото справа - текст слева сверху
                         title_shape.left = Inches(0.5)
                         title_shape.top = Inches(2.2)
                     elif template_type == 3:
-                        # Шаблон 3: Горизонтальное фото - текст справа сверху
                         title_shape.left = Inches(8.0)
                         title_shape.top = Inches(2.2)
                     
@@ -705,7 +712,7 @@ class ModernPresentationGenerator:
         self._force_garbage_collection()
         self._image_cache.clear()
         self._red_words_per_slide.clear()
-        self._artist_red_words_cache.clear()  # Очищаем кеш красных слов
+        self._artist_red_words_cache.clear()
         
         if not tracks:
             tracks = self._load_tracks_from_json_optimized()
