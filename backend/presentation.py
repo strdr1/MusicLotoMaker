@@ -281,8 +281,19 @@ class ModernPresentationGenerator:
             # Сохраняем стиль оригинального run
             font_name = original_run.font.name
             font_size = original_run.font.size
-            font_bold = original_run.font.bold  # Это булево значение
-            font_italic = original_run.font.italic  # Это булево значение
+
+            # КОНВЕРТИРУЕМ MSOTriState в bool для совместимости
+            def mso_to_bool(mso_value):
+                if mso_value is None:
+                    return False
+                if hasattr(mso_value, 'value'):
+                    return mso_value.value == True
+                return bool(mso_value)
+
+            font_bold = mso_to_bool(original_run.font.bold)
+            font_italic = mso_to_bool(original_run.font.italic)
+
+            logger.info(f"📝 После конвертации - bold: {font_bold} ({type(font_bold)}), italic: {font_italic} ({type(font_italic)})")
         
             logger.info(f"📝 Параметры шрифта: name={font_name}, size={font_size}, bold={font_bold}, italic={font_italic}")
         
@@ -352,8 +363,8 @@ class ModernPresentationGenerator:
                             new_run.font.size = font_size
                     
                         # ИСПРАВЛЕНИЕ: Правильно устанавливаем булевы значения
-                        new_run.font.bold = font_bold if font_bold is not None else False
-                        new_run.font.italic = font_italic if font_italic is not None else False
+                        new_run.font.bold = font_bold
+                        new_run.font.italic = font_italic
                     
                         # Красим только специальные символы (или все если слово выбрано случайно)
                         if char in special_chars or (should_paint and not any(c in word for c in special_chars)):
