@@ -51,7 +51,20 @@ const $ = (sel) =>
 function getGenerateBtn() {
     return document.querySelector('[data-id="btn-generate"]') || document.getElementById('btn-generate') || document.querySelector('#presentation .btn-primary.btn-large');
 }
+let presentationWebSocket = null;
 
+function connectPresentationWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/presentation/progress`;
+    presentationWebSocket = new WebSocket(wsUrl);
+
+    presentationWebSocket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'progress') {
+            updatePresentationProgress(data.current, data.total, data.message);
+        }
+    };
+}
 // Инициализация при загрузке страницы
 document.addEventListener('DOMContentLoaded', function () {
     console.log('🎵 Music Loto Maker инициализирован');
@@ -69,7 +82,28 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!document.hidden) updateTracksCount();
     });
 });
+function updatePresentationProgress(current, total, message = '') {
+    const progressBar = document.getElementById('presentationProgressBar');
+    const progressText = document.getElementById('presentationProgressText');
+    const progressSection = document.getElementById('presentationProgress');
 
+    if (!progressBar || !progressText || !progressSection) return;
+
+    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+    progressBar.style.width = `${percent}%`;
+    progressBar.textContent = `${percent}%`;
+    progressText.textContent = message || `Генерация: ${current}/${total}`;
+    progressSection.style.display = 'block';
+
+    // Цвет в зависимости от прогресса (как в билетах)
+    if (percent < 30) {
+        progressBar.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
+    } else if (percent < 70) {
+        progressBar.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+    } else {
+        progressBar.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+    }
+}
 function setupEventListeners() {
     // Обработчик загрузки файлов
     const fileInput = document.getElementById('fileInput');
@@ -432,33 +466,29 @@ function updateDownloadProgress() {
     progressCount.textContent = `${downloadProgress.current}/${downloadProgress.total}`;
     progressFill.style.width = `${percent}%`;
 
+    // ❗️ НЕ МЕНЯЕМ ЦВЕТ ПРОГРЕСС-БАРА ВО ВРЕМЯ СКАЧИВАНИЯ
     if (downloadProgress.isDownloading) {
-        // Добавляем анимацию пульсации
         progressFill.classList.add('pulsing');
-
-        // Меняем цвет в зависимости от прогресса
-        if (percent < 30) {
-            progressFill.style.background = 'linear-gradient(90deg, #ef4444, #f59e0b)';
-        } else if (percent < 70) {
-            progressFill.style.background = 'linear-gradient(90deg, #f59e0b, #3b82f6)';
-        } else {
-            progressFill.style.background = 'linear-gradient(90deg, #3b82f6, #10b981)';
-        }
-
-        // Обновляем детали прогресса в реальном времени
-        updateProgressDetails();
+        // Используем однотонный синий цвет
+        progressFill.style.background = 'var(--primary)';
     } else {
+        // Только после завершения меняем цвет
         progressStatus.textContent = 'Скачивание завершено';
         progressCount.textContent = `${downloadProgress.current}/${downloadProgress.total}`;
         progressFill.style.width = '100%';
-        progressFill.style.background = downloadProgress.failedTracks.length > 0 || downloadProgress.duplicateTracks.length > 0 ?
-            'linear-gradient(90deg, #f59e0b, #d97706)' :
-            'linear-gradient(90deg, #10b981, #059669)';
         progressFill.classList.remove('pulsing');
 
-        // Показываем финальные детали
+        // Определяем цвет по результатам
+        if (downloadProgress.failedTracks.length > 0 || downloadProgress.duplicateTracks.length > 0) {
+            progressFill.style.background = 'var(--warning)'; // оранжевый
+        } else {
+            progressFill.style.background = 'var(--success)'; // зелёный
+        }
+
         updateFinalResults();
     }
+
+    updateProgressDetails(); // Обновляем детали
 }
 
 function updateProgressDetails() {
@@ -762,10 +792,9 @@ function testDownloadProgressWithErrors() {
 // =========================
 
 async function generatePresentation() {
-    const status = document.getElementById("presentationStatus") || document.getElementById("presentation-status");
+    const status = document.getElementById("presentation-status");
     const titleInput = document.getElementById("presentation-title");
     const title = titleInput ? titleInput.value.trim() : "";
-
     const makeBWCheckbox = document.getElementById("make-bw");
     const makeBW = !!(makeBWCheckbox && makeBWCheckbox.checked);
 
@@ -781,11 +810,13 @@ async function generatePresentation() {
     const originalText = generateBtn.innerHTML;
 
     try {
+        // Показываем прогресс
+        updatePresentationProgress(0, 1, 'Подготовка...');
+
         if (status) {
             status.textContent = "⏳ Генерация презентации...";
             status.style.color = "#9ca3af";
         }
-
         generateBtn.disabled = true;
         generateBtn.innerHTML = "⏳ Генерация...";
 
@@ -803,6 +834,7 @@ async function generatePresentation() {
         const data = await response.json();
 
         if (response.ok && data.success) {
+            updatePresentationProgress(1, 1, '✅ Завершено');
             if (status) {
                 status.innerHTML = `✅ Презентация успешно создана!<br>
                 <a href="${data.download_url}" class="download-link" download>
@@ -812,6 +844,7 @@ async function generatePresentation() {
             }
             showNotification('✅ Презентация успешно создана!', 'success');
         } else {
+            updatePresentationProgress(0, 1, '❌ Ошибка');
             const errorMsg = data.detail || data.message || "Не удалось создать презентацию";
             if (status) {
                 status.textContent = "❌ Ошибка: " + errorMsg;
@@ -821,6 +854,7 @@ async function generatePresentation() {
         }
     } catch (error) {
         console.error("Ошибка при генерации презентации:", error);
+        updatePresentationProgress(0, 1, '❌ Ошибка соединения');
         if (status) {
             status.textContent = "❌ Ошибка соединения с сервером.";
             status.style.color = "#f87171";

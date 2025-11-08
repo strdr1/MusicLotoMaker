@@ -1,8 +1,99 @@
-﻿// static/js/tickets.js - Полная версия с исправлениями
+﻿// static/js/tickets.js - Полная версия с прогрессом и WebSocket
 
 const API_BASE_URL = '/api';
 let allTracks = [];
 let autoRefreshInterval = null;
+let progressWebSocket = null;
+
+/** Подключение к WebSocket для прогресса */
+function connectProgressWebSocket() {
+    try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/tickets/progress`;
+
+        progressWebSocket = new WebSocket(wsUrl);
+
+        progressWebSocket.onopen = () => {
+            console.log('✅ WebSocket подключен для отслеживания прогресса');
+            updateWebSocketStatus(true);
+        };
+
+        progressWebSocket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'progress') {
+                    updateProgressBar(data.current, data.total, data.message);
+                    console.log(`📊 Прогресс: ${data.current}/${data.total} - ${data.message}`);
+
+                    // Обновляем дополнительные элементы прогресса
+                    const progressPercent = document.getElementById('progressPercent');
+                    if (progressPercent) {
+                        progressPercent.textContent = `${data.percent}%`;
+                    }
+
+                    const totalTickets = document.getElementById('totalTickets');
+                    if (totalTickets) {
+                        totalTickets.textContent = data.total;
+                    }
+
+                    // Добавляем детали в прогресс
+                    const progressDetails = document.getElementById('progressDetails');
+                    if (progressDetails) {
+                        progressDetails.textContent = data.message;
+                        progressDetails.className = `progress-detail-item stage-${getProgressStage(data.message)}`;
+                    }
+                }
+            } catch (err) {
+                console.error('❌ Ошибка парсинга WebSocket сообщения:', err);
+            }
+        };
+
+        progressWebSocket.onclose = () => {
+            console.log('❌ WebSocket отключен, переподключение через 5 секунд...');
+            updateWebSocketStatus(false);
+            setTimeout(connectProgressWebSocket, 5000);
+        };
+
+        progressWebSocket.onerror = (error) => {
+            console.error('❌ WebSocket ошибка:', error);
+            updateWebSocketStatus(false);
+        };
+
+    } catch (err) {
+        console.error('❌ Ошибка подключения WebSocket:', err);
+        updateWebSocketStatus(false);
+    }
+}
+
+/** Обновление статуса WebSocket */
+function updateWebSocketStatus(connected) {
+    let statusEl = document.getElementById('websocketStatus');
+    if (!statusEl) {
+        statusEl = document.createElement('div');
+        statusEl.id = 'websocketStatus';
+        statusEl.className = 'websocket-status';
+        document.body.appendChild(statusEl);
+    }
+
+    if (connected) {
+        statusEl.className = 'websocket-status websocket-connected';
+        statusEl.innerHTML = '🔗 WebSocket подключен';
+    } else {
+        statusEl.className = 'websocket-status websocket-disconnected';
+        statusEl.innerHTML = '🔌 WebSocket отключен';
+    }
+}
+
+/** Определение стадии прогресса по сообщению */
+function getProgressStage(message) {
+    if (message.includes('Подготовка')) return 'preparing';
+    if (message.includes('Генерация билета')) return 'generating';
+    if (message.includes('Объединение')) return 'merging';
+    if (message.includes('ZIP')) return 'archiving';
+    if (message.includes('завершена') || message.includes('✅')) return 'completed';
+    if (message.includes('Ошибка') || message.includes('❌')) return 'error';
+    return 'generating';
+}
 
 /** Универсальный парсинг ответа с треками */
 function parseTracksResponse(data) {
@@ -239,6 +330,8 @@ function updateProgressBar(current, total, message = '') {
     const progressBar = document.getElementById('generationProgress');
     const progressText = document.getElementById('progressText');
     const currentTicketEl = document.getElementById('currentTicket');
+    const totalTicketsEl = document.getElementById('totalTickets');
+    const progressPercentEl = document.getElementById('progressPercent');
 
     if (progressBar) {
         const percent = total > 0 ? Math.round((current / total) * 100) : 0;
@@ -262,6 +355,25 @@ function updateProgressBar(current, total, message = '') {
     if (currentTicketEl) {
         currentTicketEl.textContent = current > 0 ? current : '-';
     }
+
+    if (totalTicketsEl) {
+        totalTicketsEl.textContent = total > 0 ? total : '-';
+    }
+
+    if (progressPercentEl) {
+        const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+        progressPercentEl.textContent = `${percent}%`;
+    }
+
+    // Показываем/скрываем секцию прогресса
+    const progressSection = document.getElementById('progressSection');
+    if (progressSection) {
+        if (current === 0 && total === 0) {
+            progressSection.style.display = 'none';
+        } else {
+            progressSection.style.display = 'block';
+        }
+    }
 }
 
 /** Генерация билетов с прогресс-баром */
@@ -277,7 +389,6 @@ async function generateTickets() {
     }
 
     const btn = document.getElementById('generateTicketsBtn');
-    const progressSection = document.getElementById('progressSection');
     const originalText = btn ? btn.textContent : '';
 
     if (btn) {
@@ -285,8 +396,10 @@ async function generateTickets() {
         btn.textContent = '⏳ Запуск...';
     }
 
-    if (progressSection) {
-        progressSection.style.display = 'block';
+    // Скрываем секцию скачивания предыдущих результатов
+    const downloadSection = document.getElementById('downloadSection');
+    if (downloadSection) {
+        downloadSection.style.display = 'none';
     }
 
     try {
@@ -303,10 +416,7 @@ async function generateTickets() {
                 text_color: '#000000',
                 accent_color: '#000000',
                 bold: true,
-                uppercase: true,
-                title_position: 10,
-                artist_position: 80,
-                vertical_padding: 5
+                uppercase: true
             }
         };
 
@@ -322,35 +432,14 @@ async function generateTickets() {
         console.log('🎫 Ответ сервера:', result);
 
         if (resp.ok && result.success) {
-            updateProgressBar(count, count, '✅ Генерация завершена!');
             showNotification(`✅ ${result.message}`, 'success');
 
-            // Скачивание файла
-            if (result.download_url) {
-                const fullUrl = result.download_url.startsWith('/')
-                    ? `${window.location.origin}${result.download_url}`
-                    : result.download_url;
-
-                // Автоматическое скачивание
-                const link = document.createElement('a');
-                link.href = fullUrl;
-                link.download = result.zip_file || 'tickets.zip';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-
-                console.log('✅ Автоматическое скачивание:', result.zip_file);
-
-                // Показываем секцию скачивания
-                const downloadSection = document.getElementById('downloadSection');
-                if (downloadSection) {
-                    document.getElementById('downloadFileName').textContent = result.zip_file || '-';
-                    document.getElementById('downloadTicketsCount').textContent = result.tickets_count || count;
-                    document.getElementById('downloadTracksUsed').textContent = allTracks.length;
-                    downloadSection.style.display = 'block';
-                }
-            } else {
-                showNotification('❌ Ссылка для скачивания не получена', 'error');
+            // Показываем секцию скачивания
+            if (downloadSection) {
+                document.getElementById('downloadFileName').textContent = result.zip_file || '-';
+                document.getElementById('downloadTicketsCount').textContent = result.tickets_count || count;
+                document.getElementById('downloadTracksUsed').textContent = result.tracks_used || allTracks.length;
+                downloadSection.style.display = 'block';
             }
 
         } else {
@@ -366,6 +455,24 @@ async function generateTickets() {
             btn.disabled = false;
             btn.textContent = originalText;
         }
+    }
+}
+
+/** Скачивание сгенерированных билетов */
+function downloadGeneratedTickets() {
+    const fileName = document.getElementById('downloadFileName').textContent;
+    if (fileName && fileName !== '-') {
+        const downloadUrl = `/api/tickets/download/${fileName}`;
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        showNotification(`📥 Начинается скачивание: ${fileName}`, 'success');
+    } else {
+        showNotification('❌ Файл для скачивания не найден', 'error');
     }
 }
 
@@ -422,13 +529,10 @@ function attachTicketEvents() {
         ticketsCountDisplay.textContent = ticketsCountInput.value || 10;
     }
 
-    // Кнопка ручной загрузки треков
-    const manualLoadBtn = document.getElementById('manualLoadTracks');
-    if (manualLoadBtn) {
-        manualLoadBtn.addEventListener('click', () => {
-            showNotification('🔄 Ручная загрузка треков...', 'info');
-            loadTracksForTickets(true).catch(console.error);
-        });
+    // Кнопка скачивания билетов
+    const downloadBtn = document.getElementById('downloadTicketsBtn');
+    if (downloadBtn) {
+        downloadBtn.addEventListener('click', downloadGeneratedTickets);
     }
 
     console.log('✅ События билетов привязаны');
@@ -437,6 +541,9 @@ function attachTicketEvents() {
 /** Инициализация модуля билетов */
 function initializeTicketsModule() {
     console.log('🎫 Инициализация модуля билетов...');
+
+    // Подключаем WebSocket для прогресса
+    connectProgressWebSocket();
 
     // Проверяем, находимся ли мы на вкладке билетов
     const isTicketsTabActive = () => {
@@ -505,6 +612,27 @@ window.ticketsDebug = {
         } catch (err) {
             console.error('❌ Ошибка теста API:', err);
             return null;
+        }
+    },
+    testWebSocket: () => {
+        console.log('🔌 Тестирование WebSocket...');
+        if (progressWebSocket) {
+            console.log('WebSocket состояние:', progressWebSocket.readyState);
+            console.log('WebSocket URL:', progressWebSocket.url);
+        } else {
+            console.log('WebSocket не подключен');
+        }
+    },
+    simulateProgress: (current, total, message) => {
+        console.log('🎭 Имитация прогресса:', { current, total, message });
+        updateProgressBar(current, total, message);
+    },
+    clearProgress: () => {
+        console.log('🧹 Очистка прогресса');
+        updateProgressBar(0, 0, '');
+        const downloadSection = document.getElementById('downloadSection');
+        if (downloadSection) {
+            downloadSection.style.display = 'none';
         }
     }
 };

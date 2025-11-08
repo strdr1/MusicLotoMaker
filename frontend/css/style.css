@@ -315,7 +315,7 @@ header {
     border: 1px solid var(--border);
 }
 
-/* Колонка действий - ИСПРАВЛЕНА */
+/* Колонка действий */
 .col-actions {
     display: flex;
     gap: 4px;
@@ -647,10 +647,7 @@ header {
     }
 }
 
-/* ========================= */
 /* AUDIO EDITOR STYLES */
-/* ========================= */
-
 #audioEditorModal .modal-content {
     max-width: 95vw;
     width: 95vw;
@@ -679,7 +676,6 @@ header {
     padding-right: 8px;
 }
 
-    /* Scrollbar для редактора */
     .audio-editor-content::-webkit-scrollbar {
         width: 6px;
     }
@@ -1286,7 +1282,6 @@ header {
     .form-actions {
         flex-direction: column;
     }
-
     /* Audio Editor Responsive */
     #audioEditorModal .modal-content {
         max-width: 98vw;
@@ -1313,12 +1308,7 @@ header {
         width: 100%;
     }
 
-    .playback-controls {
-        flex-direction: column;
-        text-align: center;
-        gap: 10px;
-    }
-
+    .playback-controls,
     .preview-controls {
         flex-direction: column;
         text-align: center;
@@ -1342,7 +1332,6 @@ header {
         grid-template-columns: 1fr;
     }
 
-    /* Volume responsive */
     .volume-control {
         width: 100%;
         justify-content: center;
@@ -1425,7 +1414,8 @@ header {
     .photo-navigation .btn-small {
         min-width: 70px;
     }
-/* ===== Превью презентации (фиктивная визуализация) ===== */
+
+/* ===== Превью презентации ===== */
 .ppt-preview {
     margin-top: 24px;
     display: flex;
@@ -1437,7 +1427,7 @@ header {
 .ppt-slide {
     position: relative;
     width: 420px;
-    height: 236px; /* формат 16:9 миниатюры */
+    height: 236px;
     background: linear-gradient(180deg,#1a2238,#111827);
     border-radius: 16px;
     overflow: hidden;
@@ -1455,7 +1445,6 @@ header {
         letter-spacing: .5px;
     }
 
-/* ===== Slide Intro ===== */
 .slide-intro {
     background: linear-gradient(180deg,#4e7cff,#1a2242);
     display: flex;
@@ -1477,7 +1466,6 @@ header {
         opacity: .8;
     }
 
-/* ===== Slide Menu ===== */
 .slide-menu .ppt-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(40px,1fr));
@@ -1502,7 +1490,6 @@ header {
         opacity: .6;
     }
 
-/* ===== Slide Song ===== */
 .slide-song {
     display: flex;
     align-items: center;
@@ -1541,7 +1528,6 @@ header {
     margin-top: 6px;
 }
 
-/* ===== Slide Pause ===== */
 .slide-pause {
     background: radial-gradient(circle at center,#27365f,#0f1623);
     display: flex;
@@ -1556,6 +1542,7 @@ header {
     text-shadow: 0 0 12px #4e7cff;
 }
 
+/* Upload Progress */
 .upload-progress-panel {
     margin-top: 10px;
     background: var(--bg-card);
@@ -1643,161 +1630,84 @@ header {
     color: #dc2626;
 }
 
-.settings-card { padding: 20px; }
-.settings-grid { display: grid; grid-template-columns: 420px 1fr; gap: 20px; }
-.settings-controls .group { background: rgba(255,255,255,0.03); padding: 12px; border-radius: 12px; margin-bottom: 12px; }
-.settings-controls label { display:block; margin: 6px 0; font-size: 14px; }
-.settings-controls .row { display:flex; gap:8px; flex-wrap: wrap; }
-.settings-preview { background:#0a0f1e; border-radius: 16px; padding: 12px; display:flex; flex-direction:column; align-items:center; }
-.settings-preview canvas { width:100%; height:auto; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
-.settings-preview .muted { color: #94a3b8; font-size: 12px; margin-top: 6px; }
-/* Доп. правки для конструктора */
+/* Settings */
+.settings-card {
+    padding: 20px;
+}
+
+.settings-grid {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    gap: 20px;
+}
+
+.settings-controls .group {
+    background: rgba(255,255,255,0.03);
+    padding: 12px;
+    border-radius: 12px;
+    margin-bottom: 12px;
+}
+
+.settings-controls label {
+    display: block;
+    margin: 6px 0;
+    font-size: 14px;
+}
+
+.settings-controls .row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.settings-preview {
+    background: #0a0f1e;
+    border-radius: 16px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 472px;
+}
+
+    .settings-preview canvas {
+        width: 100%;
+        height: auto;
+        border-radius: 12px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.3);
+    }
+
+    .settings-preview .muted {
+        color: #94a3b8;
+        font-size: 12px;
+        margin-top: 6px;
+    }
+
 .settings-controls h4 {
-    margin: 0 0 8px 0
+    margin: 0 0 8px 0;
 }
 
 .settings-controls .group h4 {
-    font-weight: 700
+    font-weight: 700;
 }
 
 .settings-controls small {
     display: block;
     margin-top: 6px;
-    color: var(--text-muted)
+    color: var(--text-muted);
 }
 
-.settings-preview {
-    min-height: 472px
-}
-
-@media(max-width: 980px) {
+@media (max-width: 980px) {
     .settings-grid {
-        grid-template-columns: 1fr
+        grid-template-columns: 1fr;
     }
 
     .settings-preview {
-        order: -1
+        order: -1;
     }
 }
-/* Добавьте в CSS */
-.list-search-section {
-    background: var(--bg-card);
-    padding: 20px;
-    border-radius: 12px;
-    margin: 20px 0;
-    border: 2px solid var(--border);
-}
 
-.list-search-section h3 {
-    margin-bottom: 15px;
-    color: var(--text-light);
-    font-size: 1.3em;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.list-search-controls {
-    display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 20px;
-    align-items: start;
-}
-
-.list-search-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.list-search-actions .btn {
-    width: 100%;
-}
-
-#trackList {
-    resize: vertical;
-    min-height: 150px;
-    font-family: 'Courier New', monospace;
-    font-size: 14px;
-    line-height: 1.4;
-}
-
-/* Прогресс бар */
-#listSearchProgress {
-    background: var(--bg-dark);
-    padding: 15px;
-    border-radius: 8px;
-    border-left: 4px solid var(--primary);
-}
-
-.progress-info {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 10px;
-    font-size: 14px;
-    font-weight: 600;
-}
-
-.progress-bar {
-    width: 100%;
-    height: 8px;
-    background: var(--border);
-    border-radius: 4px;
-    overflow: hidden;
-}
-
-.progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--primary), var(--success));
-    border-radius: 4px;
-    transition: width 0.3s ease;
-    width: 0%;
-}
-
-/* Статусы треков в результатах */
-.track-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    padding: 4px 8px;
-    border-radius: 4px;
-}
-
-.status-found { background: rgba(34, 197, 94, 0.2); color: #16a34a; }
-.status-searching { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
-.status-error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
-.status-downloading { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
-.status-downloaded { background: rgba(34, 197, 94, 0.2); color: #16a34a; }
-
-.batch-download-controls {
-    display: flex;
-    gap: 10px;
-    margin: 15px 0;
-    padding: 15px;
-    background: var(--bg-dark);
-    border-radius: 8px;
-    border-left: 4px solid var(--primary);
-}
-
-/* Адаптивность */
-@media (max-width: 768px) {
-    .list-search-controls {
-        grid-template-columns: 1fr;
-        gap: 15px;
-    }
-    
-    .list-search-actions {
-        flex-direction: row;
-        flex-wrap: wrap;
-    }
-    
-    .list-search-actions .btn {
-        flex: 1;
-        min-width: 120px;
-    }
-}
-/* Стили для блока скачивания треков */
+/* List Search */
 .list-search-section {
     background: var(--bg-card);
     padding: 20px;
@@ -1840,7 +1750,6 @@ header {
     line-height: 1.4;
 }
 
-/* Прогресс бар */
 #listSearchProgress {
     background: var(--bg-dark);
     padding: 15px;
@@ -1892,7 +1801,46 @@ header {
         cursor: pointer;
     }
 
-/* Адаптивность */
+/* Track Statuses */
+.track-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.status-found {
+    background: rgba(34, 197, 94, 0.2);
+    color: #16a34a;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.status-searching {
+    background: rgba(59, 130, 246, 0.2);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.status-error {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.status-downloading {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.status-downloaded {
+    background: rgba(34, 197, 94, 0.2);
+    color: #16a34a;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
 @media (max-width: 768px) {
     .list-search-controls {
         grid-template-columns: 1fr;
@@ -1908,232 +1856,9 @@ header {
             flex: 1;
             min-width: 120px;
         }
-}/* Статусы треков в результатах */
-.track-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    padding: 4px 8px;
-    border-radius: 4px;
 }
 
-.status-found {
-    background: rgba(34, 197, 94, 0.2);
-    color: #16a34a;
-    border: 1px solid rgba(34, 197, 94, 0.3);
-}
-
-.status-searching {
-    background: rgba(59, 130, 246, 0.2);
-    color: #3b82f6;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.status-error {
-    background: rgba(239, 68, 68, 0.2);
-    color: #ef4444;
-    border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.status-downloading {
-    background: rgba(245, 158, 11, 0.2);
-    color: #f59e0b;
-    border: 1px solid rgba(245, 158, 11, 0.3);
-}
-
-.status-downloaded {
-    background: rgba(34, 197, 94, 0.2);
-    color: #16a34a;
-    border: 1px solid rgba(34, 197, 94, 0.3);
-}
-/* Статусы треков в результатах */
-.track-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    padding: 4px 8px;
-    border-radius: 4px;
-}
-
-.status-found {
-    background: rgba(34, 197, 94, 0.2);
-    color: #16a34a;
-    border: 1px solid rgba(34, 197, 94, 0.3);
-}
-
-.status-searching {
-    background: rgba(59, 130, 246, 0.2);
-    color: #3b82f6;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.status-error {
-    background: rgba(239, 68, 68, 0.2);
-    color: #ef4444;
-    border: 1px solid rgba(239, 68, 68, 0.3);
-}
-
-.status-downloading {
-    background: rgba(245, 158, 11, 0.2);
-    color: #f59e0b;
-    border: 1px solid rgba(245, 158, 11, 0.3);
-}
-
-.status-downloaded {
-    background: rgba(34, 197, 94, 0.2);
-    color: #16a34a;
-    border: 1px solid rgba(34, 197, 94, 0.3);
-}
-/* Стили для выровненных настроек билетов */
-.settings-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 15px;
-    margin-bottom: 20px;
-    align-items: end; /* Выравниваем по нижнему краю */
-}
-
-.setting-item {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-    .setting-item label {
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--text-light);
-        margin-bottom: 4px;
-    }
-
-/* Чекбоксы в одну колонку */
-.checkbox-group {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    justify-content: flex-end;
-    height: 100%;
-}
-
-.checkbox-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    font-size: 13px;
-}
-
-    .checkbox-label input[type="checkbox"] {
-        margin: 0;
-    }
-
-/* Настройки позиционирования */
-.position-settings {
-    background: #f8f9fa;
-    padding: 20px;
-    border-radius: 8px;
-    margin: 20px 0;
-    border: 1px solid #e9ecef;
-}
-
-    .position-settings h5 {
-        margin: 0 0 15px 0;
-        color: #495057;
-        font-size: 14px;
-    }
-
-    .position-settings .setting-item {
-        margin-bottom: 15px;
-    }
-
-        .position-settings .setting-item:last-child {
-            margin-bottom: 0;
-        }
-
-/* Слайдеры */
-.form-slider {
-    width: 100%;
-    height: 6px;
-    border-radius: 3px;
-    background: #ddd;
-    outline: none;
-    opacity: 0.7;
-    transition: opacity 0.2s;
-}
-
-    .form-slider:hover {
-        opacity: 1;
-    }
-
-    .form-slider::-webkit-slider-thumb {
-        appearance: none;
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: #4E7CFF;
-        cursor: pointer;
-    }
-
-    .form-slider::-moz-range-thumb {
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: #4E7CFF;
-        cursor: pointer;
-        border: none;
-    }
-
-/* Секция генерации */
-.generate-section {
-    text-align: center;
-    padding-top: 20px;
-    border-top: 1px solid var(--border);
-}
-
-/* Адаптивность */
-@media (max-width: 1200px) {
-    .settings-row {
-        grid-template-columns: 1fr 1fr;
-    }
-}
-
-@media (max-width: 768px) {
-    .settings-row {
-        grid-template-columns: 1fr;
-    }
-
-    .settings-grid {
-        grid-template-columns: 1fr;
-    }
-}
-.artist-photos-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 16px;
-    margin-top: 10px;
-}
-
-.artist-photo-card {
-    background: #1e293b;
-    color: #fff;
-    padding: 10px;
-    border-radius: 8px;
-    width: 160px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    text-align: center;
-}
-
-    .artist-photo-card img {
-        max-width: 100%;
-        border-radius: 6px;
-        margin-bottom: 8px;
-    }
-/* =========================
-   LOCAL FILES STYLES
-   ========================= */
-
+/* Local Files */
 .local-section {
     background: var(--bg-card);
     border-radius: 12px;
@@ -2222,6 +1947,7 @@ header {
     transition: all 0.3s ease;
     display: flex;
     flex-direction: column;
+    animation: fadeInUp 0.3s ease;
 }
 
     .artist-photo-card:hover {
@@ -2281,24 +2007,11 @@ header {
         transform: translateY(-1px);
     }
 
-/* Form Groups for Local Section */
-.local-section .form-group {
-    margin-bottom: 20px;
-}
-
-    .local-section .form-group label {
-        display: block;
-        margin-bottom: 8px;
-        color: var(--text-light);
-        font-weight: 600;
-    }
-
 .local-section .form-input {
     width: 100%;
     max-width: 400px;
 }
 
-/* Upload Area Styling */
 .upload-area {
     border: 2px dashed var(--border);
     border-radius: 12px;
@@ -2331,7 +2044,6 @@ header {
         font-size: 14px;
     }
 
-/* Status Indicators */
 .status-indicator {
     display: inline-flex;
     align-items: center;
@@ -2360,31 +2072,6 @@ header {
         border: 1px solid rgba(239, 68, 68, 0.2);
     }
 
-/* Responsive Design */
-@media (max-width: 768px) {
-    .artist-photos-grid {
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-        gap: 16px;
-    }
-
-    .download-actions {
-        flex-direction: column;
-    }
-
-        .download-actions .btn {
-            justify-content: center;
-        }
-
-    .pptx-actions {
-        flex-direction: column;
-    }
-
-    .local-section {
-        padding: 20px;
-    }
-}
-
-/* Animation for new items */
 @keyframes fadeInUp {
     from {
         opacity: 0;
@@ -2397,24 +2084,10 @@ header {
     }
 }
 
-.artist-photo-card {
-    animation: fadeInUp 0.3s ease;
-}
-/* Дополнительные утилиты */
-.local-header {
-    margin-bottom: 32px;
-}
-
-    .local-header .subtitle {
-        color: var(--text-muted);
-        margin: 8px 0 0 0;
-        font-size: 16px;
-    }
-
-.toolbar {
-    display: flex;
-    align-items: center;
-    gap: 16px;
+.local-header .subtitle {
+    color: var(--text-muted);
+    margin: 8px 0 0 0;
+    font-size: 16px;
 }
 
 .photos-count {
@@ -2426,17 +2099,7 @@ header {
     border: 1px solid var(--border);
 }
 
-.empty-state {
-    text-align: center;
-    padding: 40px 20px;
-}
-
-    .empty-state .icon {
-        font-size: 48px;
-        margin-bottom: 16px;
-        opacity: 0.5;
-    }
-/* Стили для прогресс бара скачивания */
+/* Download Progress */
 .download-progress-container {
     margin: 15px 0;
     padding: 15px;
@@ -2444,42 +2107,6 @@ header {
     border-radius: 8px;
     border: 1px solid var(--border);
     transition: all 0.3s ease;
-}
-
-.progress-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-    font-size: 14px;
-}
-
-.progress-status {
-    font-weight: 600;
-    color: var(--text-light);
-}
-
-.progress-count {
-    color: var(--text-muted);
-    font-weight: 600;
-}
-
-.progress-bar {
-    width: 100%;
-    height: 8px;
-    background: var(--bg-card);
-    border-radius: 4px;
-    overflow: hidden;
-    margin-bottom: 10px;
-}
-
-.progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #3b82f6, #10b981);
-    border-radius: 4px;
-    transition: width 0.3s ease, background 0.3s ease;
-    width: 0%;
-    box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
 }
 
 .progress-details {
@@ -2490,7 +2117,6 @@ header {
     line-height: 1.4;
 }
 
-/* Статусы для деталей прогресса */
 .progress-detail-item {
     padding: 4px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -2508,7 +2134,6 @@ header {
     color: #f59e0b;
 }
 
-/* Анимация пульсации для активного скачивания */
 .progress-fill.pulsing {
     animation: pulse 1.5s ease-in-out infinite;
 }
@@ -2530,7 +2155,6 @@ header {
     }
 }
 
-/* Стили для результатов скачивания */
 .download-results {
     margin-top: 20px;
     background: var(--bg-card);
@@ -2558,11 +2182,8 @@ header {
     border-left: 4px solid #ef4444;
     background: rgba(239, 68, 68, 0.1);
 }
-/* =========================
-   TICKETS GENERATION STYLES
-   ========================= */
 
-/* Статистика треков */
+/* Tickets Generation */
 .stats-card {
     background: var(--bg-card);
     border-radius: 12px;
@@ -2600,7 +2221,6 @@ header {
     color: var(--text-light);
 }
 
-/* Карточка генерации */
 .generation-card {
     background: var(--bg-card);
     border-radius: 12px;
@@ -2616,7 +2236,6 @@ header {
         font-size: 1.5em;
     }
 
-/* Группа ввода */
 .input-group {
     margin-bottom: 20px;
     text-align: left;
@@ -2645,142 +2264,166 @@ header {
         border-color: var(--primary);
     }
 
-/* Секция прогресса */
 .progress-section {
-    margin-top: 25px;
-    padding-top: 25px;
-    border-top: 1px solid var(--border);
+    background: var(--bg-dark);
+    border-radius: 12px;
+    padding: 20px;
+    margin: 20px 0;
+    border: 1px solid var(--border);
+    animation: slideInDown 0.3s ease;
 }
 
 .progress-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 10px;
-    font-weight: 500;
+    margin-bottom: 15px;
+    font-weight: 600;
     color: var(--text-light);
 }
 
 .progress-container {
     width: 100%;
     height: 20px;
-    background: var(--bg-dark);
+    background: var(--bg-card);
     border-radius: 10px;
     overflow: hidden;
     margin-bottom: 15px;
     border: 1px solid var(--border);
+    position: relative;
 }
 
 .progress-bar {
     height: 100%;
-    background: linear-gradient(90deg, var(--primary), var(--success));
+    background: linear-gradient(90deg, #3b82f6, #10b981, #06b6d4);
     border-radius: 10px;
-    transition: width 0.3s ease;
+    transition: width 0.5s ease;
     display: flex;
     align-items: center;
     justify-content: center;
     color: white;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: bold;
     min-width: 40px;
+    position: relative;
+    overflow: hidden;
+}
+
+    .progress-bar.pulsing {
+        animation: pulse 2s infinite;
+    }
+
+    .progress-bar::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+        animation: shimmer 2s infinite;
+    }
+
+@keyframes shimmer {
+    0% {
+        left: -100%;
+    }
+
+    100% {
+        left: 100%;
+    }
 }
 
 .progress-stats {
-    display: flex;
-    gap: 30px;
-    flex-wrap: wrap;
-    justify-content: center;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+    margin-bottom: 15px;
 }
 
 .progress-stat {
     display: flex;
-    gap: 10px;
-    font-size: 14px;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 13px;
     color: var(--text-light);
+    text-align: center;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    border-left: 3px solid var(--primary);
 }
 
     .progress-stat strong {
         color: var(--primary);
+        font-size: 14px;
+        font-weight: 700;
     }
 
-/* Секция скачивания */
-.download-card {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 25px;
-    margin-bottom: 20px;
-    border: 1px solid var(--border);
-    animation: slideInUp 0.5s ease;
+.progress-details {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    max-height: 150px;
+    overflow-y: auto;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    border-left: 4px solid var(--primary);
 }
 
-    .download-card h2 {
-        margin-bottom: 20px;
-        color: var(--text-light);
-        font-size: 1.5em;
-    }
-
-.download-info {
-    margin-bottom: 20px;
-}
-
-.info-item {
+.progress-detail-item {
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--border);
-    color: var(--text-light);
+    gap: 8px;
 }
 
-    .info-item:last-child {
+    .progress-detail-item:last-child {
         border-bottom: none;
     }
 
-/* Информационная карточка */
-.info-card {
-    background: var(--bg-card);
-    border-radius: 12px;
-    padding: 25px;
-    margin-bottom: 20px;
-    border: 1px solid var(--border);
+.progress-detail-info {
+    color: #3b82f6;
 }
 
-    .info-card h3 {
-        margin-bottom: 15px;
-        color: var(--text-light);
-        font-size: 1.3em;
-    }
-
-.info-list {
-    list-style: none;
-    padding: 0;
+.stage-preparing {
+    border-left-color: #3b82f6;
 }
 
-    .info-list li {
-        padding: 8px 0;
-        padding-left: 25px;
-        position: relative;
-        color: var(--text-muted);
-        line-height: 1.5;
-    }
+.stage-loading {
+    border-left-color: #8b5cf6;
+}
 
-        .info-list li:before {
-            content: "•";
-            color: var(--primary);
-            font-weight: bold;
-            position: absolute;
-            left: 10px;
-        }
+.stage-audio {
+    border-left-color: #06b6d4;
+}
 
-    .info-list strong {
-        color: var(--text-light);
-    }
+.stage-slides {
+    border-left-color: #10b981;
+}
 
-/* Анимации */
-@keyframes slideInUp {
+.stage-media {
+    border-left-color: #f59e0b;
+}
+
+.stage-final {
+    border-left-color: #84cc16;
+}
+
+.stage-completed {
+    border-left-color: #10b981;
+}
+
+.stage-error {
+    border-left-color: #ef4444;
+}
+
+@keyframes slideInDown {
     from {
         opacity: 0;
-        transform: translateY(20px);
+        transform: translateY(-10px);
     }
 
     to {
@@ -2789,26 +2432,7 @@ header {
     }
 }
 
-@keyframes pulse {
-    0% {
-        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
-    }
-
-    70% {
-        box-shadow: 0 0 0 10px rgba(59, 130, 246, 0);
-    }
-
-    100% {
-        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
-    }
-}
-
-/* Кнопка с анимацией пульсации при генерации */
-.btn-pulse {
-    animation: pulse 2s infinite;
-}
-
-/* Адаптивность */
+/* Responsive */
 @media (max-width: 768px) {
     .stats-card {
         flex-direction: column;
@@ -2822,20 +2446,17 @@ header {
     }
 
     .progress-stats {
-        flex-direction: column;
+        grid-template-columns: 1fr;
         gap: 10px;
-        align-items: center;
     }
 
     .progress-stat {
+        flex-direction: row;
         justify-content: space-between;
-        width: 100%;
-        max-width: 200px;
+        text-align: left;
     }
 
-    .generation-card,
-    .download-card,
-    .info-card {
+    .generation-card, .download-card, .info-card {
         padding: 20px;
     }
 
@@ -2859,5 +2480,218 @@ header {
     .number-input {
         width: 100%;
         max-width: 120px;
+    }
+
+    .progress-section {
+        padding: 12px;
+    }
+
+    .progress-stat {
+        font-size: 12px;
+    }
+
+        .progress-stat strong {
+            font-size: 13px;
+        }
+}
+/* Добавьте в конец CSS файла */
+
+/* Download Card */
+.download-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 25px;
+    margin: 20px 0;
+    border: 1px solid var(--border);
+    animation: slideInUp 0.3s ease;
+}
+
+.download-info {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: var(--bg-dark);
+    border-radius: 8px;
+    border-left: 4px solid var(--success);
+}
+
+.info-card {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 20px;
+    border: 1px solid var(--border);
+}
+
+.info-list {
+    list-style: none;
+    padding: 0;
+    margin: 15px 0 0 0;
+}
+
+    .info-list li {
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+        .info-list li:before {
+            content: "•";
+            color: var(--primary);
+            font-weight: bold;
+        }
+
+        .info-list li:last-child {
+            border-bottom: none;
+        }
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* WebSocket Connection Status */
+.websocket-status {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    padding: 8px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.websocket-connected {
+    background: rgba(34, 197, 94, 0.2);
+    color: #16a34a;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.websocket-disconnected {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.websocket-connecting {
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* Progress States */
+.progress-stage {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 8px;
+}
+
+.stage-preparing {
+    background: rgba(59, 130, 246, 0.2);
+    color: #3b82f6;
+}
+
+.stage-generating {
+    background: rgba(139, 92, 246, 0.2);
+    color: #8b5cf6;
+}
+
+.stage-merging {
+    background: rgba(6, 182, 212, 0.2);
+    color: #06b6d4;
+}
+
+.stage-archiving {
+    background: rgba(16, 185, 129, 0.2);
+    color: #10b981;
+}
+
+.stage-completed {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+
+.stage-error {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+/* === Патч: Прогресс-бар скачивания треков — чёткий рост слева направо === */
+#listSearchProgress .progress-bar {
+    width: 100%;
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+
+#listSearchProgress .progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 4px;
+    transition: width 0.3s ease, background-color 0.3s ease;
+    /* Убираем градиент — используем однотонную заливку */
+    background: var(--primary);
+    /* Гарантируем рост от левого края */
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+/* Цвета в зависимости от прогресса (устанавливаемся через JS) */
+.progress-fill.error-stage {
+    background-color: #ef4444; /* красный */
+}
+
+.progress-fill.warning-stage {
+    background-color: #f59e0b; /* оранжевый */
+}
+
+.progress-fill.success-stage {
+    background-color: #10b981; /* зелёный */
+}
+
+/* Анимация пульсации (остаётся) */
+.progress-fill.pulsing {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+    }
+
+    50% {
+        opacity: 0.7;
+        box-shadow: 0 0 15px rgba(16, 185, 129, 0.5);
+    }
+
+    100% {
+        opacity: 1;
+        box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
     }
 }

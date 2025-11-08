@@ -198,13 +198,26 @@ Michael Jackson - Billie Jean"></textarea>
                     <label for="presentation-title">Название презентации:</label>
                     <input type="text" id="presentation-title" class="form-input" placeholder="Например: Дискотека 80-х, Хиты 90-х, Современные хиты..." value="Музыкальное Лото">
                 </div>
+
                 <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
                     <input type="checkbox" id="make-bw" />
                     <span>Преобразовать фото в чёрно-белые</span>
                 </label>
+
                 <button class="btn btn-large btn-primary" onclick="generatePresentation()" id="generatePresentationBtn">
                     🎬 Сгенерировать презентацию
                 </button>
+
+                <!-- Простой прогресс-бар генерации (в стиле билетов) -->
+                <div id="presentationProgress" class="progress-section" style="display: none; margin-top: 20px;">
+                    <div class="progress-header">
+                        <span>Генерация:</span>
+                        <span id="presentationProgressText">Подготовка...</span>
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-bar" id="presentationProgressBar" style="width: 0%">0%</div>
+                    </div>
+                </div>
 
                 <div id="presentation-status" class="status" style="margin-top: 15px;"></div>
 
@@ -214,7 +227,8 @@ Michael Jackson - Billie Jean"></textarea>
                         <li>Презентация создается в формате PowerPoint (.pptx)</li>
                         <li>Автоматически добавляются фото артистов</li>
                         <li>Создаются нарезанные аудио-отрезки для каждого трека</li>
-                        <li>Для корректной работы необходимо ровно 120 трек в медиатеке</li>
+                        <li>Для корректной работы необходимо минимум 1 трек в медиатеке</li>
+                        <li>Рекомендуется 120 треков для полной презентации</li>
                     </ul>
                 </div>
             </div>
@@ -230,6 +244,10 @@ Michael Jackson - Billie Jean"></textarea>
                 <div class="stats-card">
                     <div class="stats-grid">
                         <div class="stat-item">
+                            <span class="stat-label">Треков в системе:</span>
+                            <span class="stat-value" id="tracksCount">0</span>
+                        </div>
+                        <div class="stat-item">
                             <span class="stat-label">Статус:</span>
                             <span class="stat-value" id="generationStatus">Загрузка...</span>
                         </div>
@@ -241,11 +259,14 @@ Michael Jackson - Billie Jean"></textarea>
 
                 <!-- Панель генерации -->
                 <div class="generation-card">
-                    <h2>🚀 Генерация билетов</h2>
+                    <h3>🚀 Генерация билетов</h3>
 
                     <div class="input-group">
                         <label for="ticketsCount">Количество билетов:</label>
-                        <input type="number" id="ticketsCount" min="1" max="100" value="10" class="number-input">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <input type="number" id="ticketsCount" min="1" max="100" value="10" class="number-input">
+                            <span id="ticketsCountDisplay">10</span>
+                        </div>
                     </div>
 
                     <button id="generateTicketsBtn" class="btn btn-primary">
@@ -259,7 +280,7 @@ Michael Jackson - Billie Jean"></textarea>
                             <span id="progressText">Подготовка...</span>
                         </div>
                         <div class="progress-container">
-                            <div class="progress-bar" id="generationProgress">0%</div>
+                            <div class="progress-bar" id="generationProgress" style="width: 0%">0%</div>
                         </div>
                         <div class="progress-stats">
                             <div class="progress-stat">
@@ -268,7 +289,16 @@ Michael Jackson - Billie Jean"></textarea>
                             </div>
                             <div class="progress-stat">
                                 <span>Всего билетов:</span>
-                                <strong id="ticketsCountDisplay">10</strong>
+                                <strong id="totalTickets">-</strong>
+                            </div>
+                            <div class="progress-stat">
+                                <span>Прогресс:</span>
+                                <strong id="progressPercent">0%</strong>
+                            </div>
+                        </div>
+                        <div class="progress-details">
+                            <div id="progressDetails" class="progress-detail-item">
+                                Ожидание начала генерации...
                             </div>
                         </div>
                     </div>
@@ -276,7 +306,7 @@ Michael Jackson - Billie Jean"></textarea>
 
                 <!-- Секция скачивания -->
                 <div id="downloadSection" class="download-card" style="display: none;">
-                    <h2>📥 Результаты генерации</h2>
+                    <h3>📥 Результаты генерации</h3>
                     <div class="download-info">
                         <div class="info-item">
                             <span>Файл:</span>
@@ -291,7 +321,7 @@ Michael Jackson - Billie Jean"></textarea>
                             <strong id="downloadTracksUsed">-</strong>
                         </div>
                     </div>
-                    <button id="downloadTicketsBtn" class="btn btn-success">
+                    <button id="downloadTicketsBtn" class="btn btn-success" onclick="downloadGeneratedTickets()">
                         💾 Скачать ZIP архив
                     </button>
                 </div>
@@ -302,8 +332,9 @@ Michael Jackson - Billie Jean"></textarea>
                     <ul class="info-list">
                         <li>Для генерации требуется минимум <strong>36 треков</strong></li>
                         <li>Каждый билет содержит <strong>6×6 ячеек</strong> с треками</li>
-                        <li>Треки автоматически обновляются каждые 10 секунд</li>
+                        <li>Треки автоматически обновляются каждые 15 секунд</li>
                         <li>Результат скачивается в ZIP архиве с PDF файлами</li>
+                        <li>Прогресс отображается в реальном времени</li>
                     </ul>
                 </div>
             </div>

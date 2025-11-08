@@ -22,6 +22,7 @@ from PIL import Image
 import io
 import asyncio
 import aiohttp
+from urllib.parse import quote
 import re
 from typing import List
 
@@ -1035,7 +1036,29 @@ async def serve_frontend():
 # =========================
 # TRACK MANAGEMENT API
 # =========================
+from pydantic import BaseModel
 
+class SegmentUpdate(BaseModel):
+    start_time: float
+    duration: float = 30
+
+@app.put("/api/tracks/{track_id}/segment")
+async def update_track_segment_endpoint(track_id: int, update: SegmentUpdate):
+    """Обновить отрезок трека (начало и длительность)"""
+    track = media_library.get_track(track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail="Трек не найден")
+
+    success = media_library.update_track_segment(
+        track_id=track_id,
+        start_time=update.start_time,
+        duration=update.duration
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="Не удалось обновить отрезок")
+
+    logger.info(f"🔄 Отрезок трека {track_id} обновлён: {update.start_time}с, {update.duration}с")
+    return {"success": True, "message": "Отрезок успешно сохранён"}
 @app.get("/api/tracks")
 async def get_tracks():
     """Возвращает список треков из медиатеки"""
