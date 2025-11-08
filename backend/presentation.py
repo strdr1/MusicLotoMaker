@@ -14,6 +14,17 @@ import time
 import subprocess
 import sys
 
+# Настройка расширенного логирования
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('presentation_generator.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Функция для автоматической установки недостающих библиотек
 def install_missing_packages():
     """Автоматически устанавливает недостающие пакеты"""
@@ -32,24 +43,24 @@ def install_missing_packages():
                 import PIL
             else:
                 __import__(package)
-            logging.info(f"✅ {package} уже установлен")
+            logger.info(f"✅ {package} уже установлен")
         except ImportError:
             missing_packages.append(pip_name)
-            logging.warning(f"⚠️ {package} не найден, будет установлен")
+            logger.warning(f"⚠️ {package} не найден, будет установлен")
     
     if missing_packages:
-        logging.info(f"📦 Устанавливаем недостающие пакеты: {', '.join(missing_packages)}")
+        logger.info(f"📦 Устанавливаем недостающие пакеты: {', '.join(missing_packages)}")
         try:
             # Устанавливаем все недостающие пакеты одной командой
             subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
-            logging.info("✅ Все пакеты успешно установлены")
+            logger.info("✅ Все пакеты успешно установлены")
             
             # Перезагружаем текущий модуль чтобы импорты заработали
             import importlib
             importlib.invalidate_caches()
             
         except subprocess.CalledProcessError as e:
-            logging.error(f"❌ Ошибка установки пакетов: {e}")
+            logger.error(f"❌ Ошибка установки пакетов: {e}")
             raise
 
 # Устанавливаем недостающие пакеты при импорте
@@ -61,10 +72,9 @@ from PIL import Image, ImageOps
 from pptx import Presentation
 from pptx.util import Inches
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN, MSOTriState
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+from pptx.enum.text import PP_ALIGN
+from pptx.enum.dml import MSO_THEME_COLOR
+from pptx.oxml.xmlchemy import OxmlElement
 
 class ModernPresentationGenerator:
     def __init__(self, base_path: str):
@@ -101,6 +111,16 @@ class ModernPresentationGenerator:
         self._red_words_per_slide = {}
         self._artist_red_words_cache = {}  # Кеш красных слов для каждого артиста
 
+    def _log_memory_usage(self):
+        """Логирует использование памяти"""
+        try:
+            memory = psutil.virtual_memory()
+            process = psutil.Process()
+            process_memory = process.memory_info().rss / 1024 / 1024
+            logger.debug(f"💾 Память: системная {memory.percent}%, процесс {process_memory:.1f}MB")
+        except Exception as e:
+            logger.debug(f"⚠️ Не удалось получить информацию о памяти: {e}")
+
     def _check_memory_usage(self):
         try:
             memory = psutil.virtual_memory()
@@ -112,6 +132,7 @@ class ModernPresentationGenerator:
             return True
 
     def _force_garbage_collection(self):
+        logger.debug("🧹 Принудительная сборка мусора")
         gc.collect()
         time.sleep(0.1)
 
@@ -120,119 +141,98 @@ class ModernPresentationGenerator:
         try:
             with Image.open(image_path) as img:
                 width, height = img.size
-                if width > height:
-                    return "horizontal"
-                else:
-                    return "vertical"
+                orientation = "horizontal" if width > height else "vertical"
+                logger.debug(f"📐 Ориентация изображения {image_path}: {orientation} ({width}x{height})")
+                return orientation
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось определить ориентацию изображения {image_path}: {e}")
+            logger.error(f"❌ Ошибка определения ориентации изображения {image_path}: {e}")
             return "vertical"  # По умолчанию вертикальное
 
     def _load_and_process_image_optimized(self, image_path: str, make_bw: bool):
-        """ДЕТАЛЬНАЯ ЗАГРУЗКА ИЗОБРАЖЕНИЯ С ЛОГИРОВАНИЕМ"""
-        logger.info(f"🖼️ === НАЧАЛО ЗАГРУЗКИ ИЗОБРАЖЕНИЯ ===")
-        logger.info(f"🖼️ Полный путь из JSON: {image_path}")
-        
         if not self._check_memory_usage():
             self._force_garbage_collection()
             
         cache_key = f"{image_path}_{make_bw}"
         if cache_key in self._image_cache:
-            logger.info(f"🖼️ Используем кэш для: {image_path}")
+            logger.debug(f"🎨 Используем кешированное изображение: {cache_key}")
             return self._image_cache[cache_key]
             
         if len(self._image_cache) >= self.image_cache_size:
-            self._image_cache.pop(next(iter(self._image_cache)))
-        
-        # Ищем файл по имени в разных местах
-        filename = Path(image_path).name
-        logger.info(f"🖼️ Ищем файл по имени: {filename}")
-        
-        possible_paths = [
-            Path.cwd() / "images" / filename,
-            Path.cwd() / "downloads" / filename,
-            Path.cwd() / "uploads" / filename,
-            Path.cwd() / filename,
-            Path.cwd() / "media" / filename,
-        ]
-        
-        found_path = None
-        for path in possible_paths:
-            logger.info(f"🔍 Проверяем путь: {path}")
-            if path.exists():
-                found_path = path
-                logger.info(f"✅ Файл найден: {path}")
-                break
-        
-        if not found_path:
-            logger.error(f"❌ Файл изображения не найден ни в одном месте: {filename}")
-            logger.info(f"📁 Содержимое папки images: {list((Path.cwd() / 'images').glob('*')) if (Path.cwd() / 'images').exists() else 'Папка не существует'}")
+            removed_key = next(iter(self._image_cache))
+            del self._image_cache[removed_key]
+            logger.debug(f"🗑️ Удален из кеша: {removed_key}")
+            
+        path = Path(image_path)
+        if not path.exists():
+            logger.error(f"❌ Файл изображения не найден: {image_path}")
             return None
             
         try:
-            logger.info(f"🖼️ Открываем изображение: {found_path}")
-            with Image.open(found_path) as img:
-                logger.info(f"🖼️ Изображение открыто: {img.size}, mode: {img.mode}")
-                
+            logger.debug(f"🖼️ Загрузка изображения: {image_path}, BW: {make_bw}")
+            with Image.open(path) as img:
                 # Сохраняем оригинальные размеры
                 original_width, original_height = img.size
+                logger.debug(f"📏 Размеры оригинала: {original_width}x{original_height}, режим: {img.mode}")
                 
                 # Конвертируем в RGBA если нужно
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
-                    logger.info(f"🖼️ Конвертировано в RGBA")
+                    logger.debug("🔄 Конвертировано в RGBA")
 
                 if make_bw:
-                    logger.info(f"🖼️ Применяем ЧБ фильтр")
+                    logger.debug("⚫ Конвертация в черно-белое")
                     grayscale = ImageOps.grayscale(img.convert("RGB"))
                     alpha = img.split()[3] if len(img.split()) > 3 else None
                     if alpha:
                         img = Image.merge("RGBA", (grayscale, grayscale, grayscale, alpha))
                     else:
                         img = grayscale.convert("RGBA")
+                    logger.debug("✅ Конвертация в ЧБ завершена")
 
                 # Возвращаем изображение без изменения размеров
                 self._image_cache[cache_key] = img
-                logger.info(f"🖼️ === УСПЕШНО ЗАГРУЖЕНО ===")
+                logger.debug(f"✅ Изображение успешно обработано и закешировано")
                 return img
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка обработки изображения {found_path}: {e}")
+            logger.error(f"❌ Ошибка обработки изображения {image_path}: {e}")
             return None
 
     def _apply_fade_effects(self, audio_segment):
         """Применяет нарастание в начале и затухание в конце трека"""
-        # Нарастание в начале (1 секунда)
-        fade_in_duration = min(self.fade_in_duration, len(audio_segment) // 3)
-        if fade_in_duration > 0:
-            audio_segment = audio_segment.fade_in(fade_in_duration)
-        
-        # Затухание в конце (3 секунды)
-        fade_out_duration = min(self.fade_duration, len(audio_segment) - 1000)
-        if fade_out_duration > 0:
-            audio_segment = audio_segment.fade_out(fade_out_duration)
-        
-        return audio_segment
+        try:
+            logger.debug(f"🎵 Применение эффектов затухания: длина трека {len(audio_segment)}ms")
+            
+            # Нарастание в начале (1 секунда)
+            fade_in_duration = min(self.fade_in_duration, len(audio_segment) // 3)
+            if fade_in_duration > 0:
+                audio_segment = audio_segment.fade_in(fade_in_duration)
+                logger.debug(f"🔊 Нарастание: {fade_in_duration}ms")
+            
+            # Затухание в конце (3 секунды)
+            fade_out_duration = min(self.fade_duration, len(audio_segment) - 1000)
+            if fade_out_duration > 0:
+                audio_segment = audio_segment.fade_out(fade_out_duration)
+                logger.debug(f"🔇 Затухание: {fade_out_duration}ms")
+            
+            return audio_segment
+        except Exception as e:
+            logger.error(f"❌ Ошибка применения эффектов затухания: {e}")
+            return audio_segment
 
     def _find_track_file_optimized(self, track_path: str):
-        """Ищет аудио файл по имени"""
-        logger.info(f"🎵 Поиск аудио файла: {track_path}")
-        filename = Path(track_path).name
-        logger.info(f"🎵 Ищем по имени: {filename}")
-        
         possible_paths = [
-            Path.cwd() / "downloads" / filename,
-            Path.cwd() / "uploads" / filename,
-            Path.cwd() / filename,
+            Path(track_path),
+            Path.cwd() / "downloads" / Path(track_path).name,
+            Path.cwd() / "uploads" / Path(track_path).name
         ]
         
         for path in possible_paths:
-            logger.info(f"🔍 Проверяем: {path}")
             if path.exists():
-                logger.info(f"✅ Аудио файл найден: {path}")
+                logger.debug(f"🔍 Найден файл трека: {path}")
                 return path
-        
-        logger.warning(f"⚠️ Аудио файл не найден: {filename}")
+                
+        logger.warning(f"⚠️ Файл трека не найден: {track_path}")
         return None
 
     def _load_tracks_from_json_optimized(self):
@@ -263,14 +263,6 @@ class ModernPresentationGenerator:
                 tracks = data
                 
             logger.info(f"🎵 Загружено {len(tracks)} треков")
-            
-            # Логируем информацию о первом треке для диагностики
-            if tracks:
-                first_track = tracks[0]
-                logger.info(f"🎵 Первый трек: {first_track.get('artist')} - {first_track.get('title')}")
-                logger.info(f"🎵 Путь к изображению: {first_track.get('image_path')}")
-                logger.info(f"🎵 Путь к аудио: {first_track.get('file_path')}")
-                
             return tracks
             
         except Exception as e:
@@ -282,6 +274,8 @@ class ModernPresentationGenerator:
             self._force_garbage_collection()
             
         try:
+            logger.debug(f"🎵 Обработка аудио для слайда {slide_num}")
+            
             tree = ET.parse(rels_path)
             root = tree.getroot()
             targets = [
@@ -290,6 +284,7 @@ class ModernPresentationGenerator:
                 if rel.attrib.get("Target", "").lower().endswith(".mp3")
             ]
             if not targets:
+                logger.warning(f"⚠️ Не найдены MP3 цели в rels файле: {rels_path}")
                 return None
 
             track_path = track.get("file_path") or track.get("path", "")
@@ -298,84 +293,123 @@ class ModernPresentationGenerator:
                 logger.warning(f"⚠️ Файл трека не найден: {track_path}")
                 return None
 
+            logger.debug(f"🔊 Загрузка аудио файла: {real_path}")
             audio = AudioSegment.from_file(real_path)
+            logger.debug(f"📊 Длина оригинального трека: {len(audio)}ms")
+            
             seg_start = int(float(track.get("segment_start", 0)) * 1000)
             seg_dur = int(float(track.get("segment_duration", self.default_ms / 1000)) * 1000)
             end_ms = min(len(audio), seg_start + seg_dur + self.buffer_ms)
             
+            logger.debug(f"✂️ Сегмент: {seg_start}ms - {end_ms}ms (длительность: {seg_dur}ms)")
+            
             if seg_start > 0 or end_ms < len(audio):
                 clip = audio[seg_start:end_ms]
+                logger.debug(f"✂️ Вырезан сегмент: {len(clip)}ms")
             else:
                 clip = audio
+                logger.debug("🎵 Используется полный трек")
 
             # Применяем нарастание и затухание
             clip = self._apply_fade_effects(clip)
 
             out_media_path = media_dir / os.path.basename(targets[0])
             
+            logger.debug(f"💾 Экспорт в: {out_media_path}")
             clip.export(out_media_path, format="mp3", bitrate="96k")
             
             del audio, clip
             self._force_garbage_collection()
 
+            logger.info(f"✅ Аудио обработано для слайда {slide_num}")
             return (slide_num, track)
 
         except Exception as e:
             logger.error(f"❌ Ошибка обработки аудио для слайда {slide_num}: {e}")
             return None
 
-    def _safe_mso_to_bool(self, mso_value):
-        """Безопасно конвертирует MSOTriState в bool"""
-        if mso_value is None:
-            return False
-        # Если это MSOTriState объект
-        if hasattr(mso_value, 'value'):
-            # MSOTriState.TRUE -> True, MSOTriState.FALSE -> False
-            return mso_value == MSOTriState.TRUE
-        # Если это уже bool
-        return bool(mso_value)
-
-    def _safe_set_font_property(self, font_property, value):
-        """Безопасно устанавливает свойство шрифта"""
+    def _safe_get_font_attr(self, font_attr, attr_name):
+        """Безопасное получение атрибутов шрифта с логированием"""
         try:
-            # Для MSOTriState используем правильные значения
-            if hasattr(font_property, '__class__') and font_property.__class__.__name__ == 'MSOTriState':
-                if value:
-                    return MSOTriState.TRUE
-                else:
-                    return MSOTriState.FALSE
+            if font_attr is None:
+                logger.debug(f"📝 {attr_name}: None")
+                return None
+                
+            if hasattr(font_attr, 'value'):
+                value = font_attr.value
+                logger.debug(f"📝 {attr_name}.value: {value} (тип: {type(value)})")
+                return value
             else:
-                return bool(value)
+                value = font_attr
+                logger.debug(f"📝 {attr_name}: {value} (тип: {type(value)})")
+                return value
+                
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка установки свойства шрифта: {e}")
-            return value
+            logger.error(f"❌ Ошибка получения {attr_name}: {e}")
+            return None
+
+    def _convert_mso_to_bool(self, mso_value):
+        """Конвертирует MSO TriState в bool с расширенным логированием"""
+        try:
+            logger.debug(f"🔄 Конвертация MSO: {mso_value} (тип: {type(mso_value)})")
+            
+            if mso_value is None:
+                logger.debug("🔘 MSO: None -> False")
+                return False
+                
+            # Если это enum с атрибутом value
+            if hasattr(mso_value, 'value'):
+                result = mso_value.value == True
+                logger.debug(f"🔘 MSO.value: {mso_value.value} -> {result}")
+                return result
+                
+            # Если это уже bool
+            if isinstance(mso_value, bool):
+                logger.debug(f"🔘 MSO уже bool: {mso_value}")
+                return mso_value
+                
+            # Пробуем конвертировать в bool
+            result = bool(mso_value)
+            logger.debug(f"🔘 MSO конвертирован в bool: {result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка конвертации MSO {mso_value}: {e}")
+            return False
 
     def _apply_text_formatting_with_style(self, original_run, new_text, is_artist, slide_num, artist_name=None):
-        """Применяет форматирование с правильной работой с MSOTriState"""
+        """Применяет форматирование с сохранением стиля оригинала и умным окрашиванием с кешированием"""
         try:
-            logger.info(f"🔧 Начало форматирования текста: '{new_text}'")
+            logger.info(f"🔧 Начало форматирования текста: '{new_text}' (артист: {is_artist}, слайд: {slide_num})")
         
             RED = RGBColor(255, 0, 0)
             BLACK = RGBColor(0, 0, 0)
         
-            # Сохраняем стиль оригинального run с правильной конвертацией MSOTriState
+            # Сохраняем стиль оригинального run с расширенным логированием
             font_name = original_run.font.name
             font_size = original_run.font.size
-            
-            # ПРАВИЛЬНАЯ КОНВЕРТАЦИЯ MSOTriState
-            font_bold = self._safe_mso_to_bool(original_run.font.bold)
-            font_italic = self._safe_mso_to_bool(original_run.font.italic)
 
+            # БЕЗОПАСНОЕ получение и конвертация булевых атрибутов
+            logger.debug("🔍 Анализ атрибутов шрифта:")
+            
+            raw_bold = self._safe_get_font_attr(original_run.font.bold, "font.bold")
+            raw_italic = self._safe_get_font_attr(original_run.font.italic, "font.italic")
+            
+            font_bold = self._convert_mso_to_bool(raw_bold)
+            font_italic = self._convert_mso_to_bool(raw_italic)
+            
             logger.info(f"📝 Параметры шрифта: name={font_name}, size={font_size}, bold={font_bold}, italic={font_italic}")
         
             special_chars = {'@', '#', '$', '&', '€', '£', '¥'}
             special_patterns = {'zz', 'xxx', 'www', 'qq', 'kk'}
         
             words = new_text.split()
+            logger.debug(f"📝 Слова для обработки: {words}")
         
             # Инициализируем счетчик для слайда если нужно
             if slide_num not in self._red_words_per_slide:
                 self._red_words_per_slide[slide_num] = 0
+                logger.debug(f"🔢 Инициализирован счетчик красных слов для слайда {slide_num}")
         
             # Если это артист и у нас есть кеш для него, используем его
             cached_red_words = set()
@@ -389,17 +423,23 @@ class ModernPresentationGenerator:
                 # Проверяем кеш для этого артиста
                 if word.lower() in cached_red_words:
                     paintable_words.append((word, True))
+                    logger.debug(f"🎨 Слово из кеша: '{word}'")
                     continue
                 
                 has_special_char = any(char in word for char in special_chars)
                 has_special_pattern = any(pattern in word.lower() for pattern in special_patterns)
+                
                 paintable_words.append((word, has_special_char or has_special_pattern))
-        
+                
+                if has_special_char or has_special_pattern:
+                    logger.debug(f"🔍 Слово с особыми символами/паттернами: '{word}'")
+
             # Гарантируем минимум 1 красное слово на слайд, но не более 1
             if (not any(paintable for _, paintable in paintable_words) and 
                 words and self._red_words_per_slide[slide_num] == 0):
                 random_index = random.randint(0, len(words) - 1)
                 paintable_words[random_index] = (words[random_index], True)
+                logger.debug(f"🎲 Случайно выбрано слово для покраски: '{words[random_index]}'")
         
             # Сохраняем выбранные красные слова в кеш для артиста
             red_words_for_artist = set()
@@ -427,22 +467,20 @@ class ModernPresentationGenerator:
                     for char in word:
                         new_run = parent_paragraph.add_run()
                         new_run.text = char
-                        # Сохраняем стиль оригинала с безопасной установкой
+                        # Сохраняем стиль оригинала
                         if font_name:
                             new_run.font.name = font_name
                         if font_size:
                             new_run.font.size = font_size
                     
-                        # БЕЗОПАСНАЯ УСТАНОВКА свойств шрифта
-                        try:
-                            new_run.font.bold = self._safe_set_font_property(new_run.font.bold, font_bold)
-                            new_run.font.italic = self._safe_set_font_property(new_run.font.italic, font_italic)
-                        except Exception as e:
-                            logger.warning(f"⚠️ Не удалось установить bold/italic: {e}")
+                        # БЕЗОПАСНОЕ установление булевых значений
+                        new_run.font.bold = font_bold
+                        new_run.font.italic = font_italic
                     
                         # Красим только специальные символы (или все если слово выбрано случайно)
                         if char in special_chars or (should_paint and not any(c in word for c in special_chars)):
                             new_run.font.color.rgb = RED
+                            logger.debug(f"🔴 Красный символ: '{char}'")
                         else:
                             new_run.font.color.rgb = BLACK
                 
@@ -453,15 +491,10 @@ class ModernPresentationGenerator:
                         space_run.font.name = font_name
                     if font_size:
                         space_run.font.size = font_size
-                    
-                    # БЕЗОПАСНАЯ УСТАНОВКА для пробела
-                    try:
-                        space_run.font.bold = self._safe_set_font_property(space_run.font.bold, font_bold)
-                        space_run.font.italic = self._safe_set_font_property(space_run.font.italic, font_italic)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Не удалось установить bold/italic для пробела: {e}")
-                    
+                    space_run.font.bold = font_bold
+                    space_run.font.italic = font_italic
                     space_run.font.color.rgb = BLACK
+                    
                 else:
                     # Обычное слово без окрашивания
                     new_run = parent_paragraph.add_run()
@@ -472,21 +505,26 @@ class ModernPresentationGenerator:
                     if font_size:
                         new_run.font.size = font_size
                 
-                    # БЕЗОПАСНАЯ УСТАНОВКА
-                    try:
-                        new_run.font.bold = self._safe_set_font_property(new_run.font.bold, font_bold)
-                        new_run.font.italic = self._safe_set_font_property(new_run.font.italic, font_italic)
-                    except Exception as e:
-                        logger.warning(f"⚠️ Не удалось установить bold/italic для слова: {e}")
-                    
+                    # БЕЗОПАСНОЕ установление булевых значений
+                    new_run.font.bold = font_bold
+                    new_run.font.italic = font_italic
                     new_run.font.color.rgb = BLACK
         
             logger.info(f"✅ Форматирование завершено для текста: '{new_text}'")
         
         except Exception as e:
             logger.error(f"❌ Критическая ошибка в _apply_text_formatting_with_style: {e}")
-            logger.error(f"📌 Тип font.bold: {type(original_run.font.bold)}, значение: {original_run.font.bold}")
-            logger.error(f"📌 Тип font.italic: {type(original_run.font.italic)}, значение: {original_run.font.italic}")
+            import traceback
+            logger.error(f"🔍 Трассировка ошибки:\n{traceback.format_exc()}")
+            
+            # Расширенное логирование состояния объекта
+            try:
+                logger.error(f"📌 Состояние original_run.font.bold: {original_run.font.bold} (тип: {type(original_run.font.bold)})")
+                logger.error(f"📌 Состояние original_run.font.italic: {original_run.font.italic} (тип: {type(original_run.font.italic)})")
+                logger.error(f"📌 Состояние original_run.font.name: {original_run.font.name} (тип: {type(original_run.font.name)})")
+                logger.error(f"📌 Состояние original_run.font.size: {original_run.font.size} (тип: {type(original_run.font.size)})")
+            except Exception as debug_e:
+                logger.error(f"💥 Не удалось получить отладочную информацию: {debug_e}")
         
             # Аварийное восстановление - просто устанавливаем текст
             try:
@@ -497,9 +535,9 @@ class ModernPresentationGenerator:
             raise
 
     def _move_button_to_corner(self, slide, slide_height, slide_width, mirror=False):
-        """Перемещает кнопку image42.png в угол"""
+        """Перемещает кнопку image42.png в угол и при необходимости отзеркаливает через отрицательное масштабирование"""
         try:
-            logger.info(f"🔍 Поиск кнопки image42.png на слайде")
+            logger.info(f"🔍 ПОИСК КНОПКИ IMAGE42.PNG НА СЛАЙДЕ (зеркало: {mirror})")
         
             for i, shape in enumerate(slide.shapes):
                 if hasattr(shape, 'image'):
@@ -517,18 +555,42 @@ class ModernPresentationGenerator:
                                     image_part = rel.target_part
                                     if hasattr(image_part, 'partname'):
                                         filename = image_part.partname.split('/')[-1]
-                                        logger.info(f"Фигура {i}: rId={rId}, filename={filename}")
+                                        logger.debug(f"Фигура {i}: rId={rId}, filename={filename}")
                                     
                                         if filename.lower() == 'image42.png':
+                                            old_left, old_top = shape.left, shape.top
+                                            old_width, old_height = shape.width, shape.height
+                                        
                                             if mirror:
-                                                # Левый нижний угол
-                                                shape.left = Inches(0.2)
-                                                shape.top = slide_height - shape.height - Inches(0.2)
+                                                # Левый нижний угол с отзеркаливанием через отрицательное масштабирование
+                                                new_left = Inches(0.2)
+                                                new_top = slide_height - shape.height - Inches(0.2)
+                                            
+                                                # Перемещаем кнопку
+                                                shape.left = new_left
+                                                shape.top = new_top
+                                            
+                                                # Зеркалим через отрицательную ширину
+                                                # Сохраняем оригинальные размеры
+                                                original_width = shape.width
+                                                original_height = shape.height
+                                            
+                                                # Устанавливаем отрицательную ширину для зеркального отображения
+                                                shape.width = -original_width
+                                            
+                                                # Корректируем позицию, т.к. при отрицательной ширине координаты меняются
+                                                shape.left = new_left + original_width
+                                            
+                                                logger.info(f"✅ Кнопка отзеркалена через отрицательное масштабирование!")
+                                                logger.info(f"📏 Было: {old_width}x{old_height}, стало: {shape.width}x{shape.height}")
+                                                logger.info(f"📍 Было: {old_left},{old_top}, стало: {shape.left},{shape.top}")
+                                            
                                             else:
-                                                # Правый нижний угол
+                                                # Правый нижний угол без изменений
                                                 shape.left = slide_width - shape.width - Inches(0.2)
                                                 shape.top = slide_height - shape.height - Inches(0.2)
-                                            logger.info(f"✅ Кнопка перемещена!")
+                                                logger.info(f"✅ Кнопка перемещена в правый нижний угол!")
+                                        
                                             return True
                     except Exception as e:
                         logger.debug(f"Ошибка при анализе фигуры {i}: {e}")
@@ -542,12 +604,8 @@ class ModernPresentationGenerator:
             return False
 
     def _insert_artist_photo(self, slide, processed_img, slide_height, slide_width, template_type):
-        """Вставляет фото артиста с проверкой на None"""
+        """Вставляет фото артиста согласно выбранному шаблону"""
         try:
-            if processed_img is None:
-                logger.warning("⚠️ Пропускаем вставку фото - изображение не загружено")
-                return
-                
             temp_img_path = Path(tempfile.gettempdir()) / f"temp_photo_{random.randint(1000,9999)}.png"
             processed_img.save(temp_img_path, "PNG", optimize=True)
 
@@ -558,21 +616,24 @@ class ModernPresentationGenerator:
             width_inches = img_width_px / dpi
             height_inches = img_height_px / dpi
             
+            logger.debug(f"📐 Размеры фото в дюймах: {width_inches:.2f}x{height_inches:.2f}")
+            
             # Увеличиваем фото для ВСЕХ шаблонов
             if template_type == 1:
-                # Шаблон 1: Вертикальное фото слева
-                scale_factor = 1.2
+                # Шаблон 1: Вертикальное фото слева - УВЕЛИЧИВАЕМ ЕЩЕ БОЛЬШЕ
+                scale_factor = 1.2  # Увеличиваем на 60%
                 width_inches *= scale_factor
                 height_inches *= scale_factor
                 
+                # Шаблон 1: Вертикальное фото слева снизу (БОЛЬШОЕ)
                 left = Inches(0)
                 top = slide_height - Inches(height_inches)
                 width = Inches(width_inches)
                 height = Inches(height_inches)
                 
             elif template_type == 2:
-                # Шаблон 2: Вертикальное фото справа
-                scale_factor = 1.15
+                # Шаблон 2: Вертикальное фото справа - ТОЖЕ УВЕЛИЧИВАЕМ
+                scale_factor = 1.15  # Увеличиваем на 50%
                 width_inches *= scale_factor
                 height_inches *= scale_factor
                 
@@ -582,8 +643,8 @@ class ModernPresentationGenerator:
                 height = Inches(height_inches)
                 
             elif template_type == 3:
-                # Шаблон 3: Горизонтальное фото
-                scale_factor = 1.1
+                # Шаблон 3: Горизонтальное фото - ТОЖЕ УВЕЛИЧИВАЕМ
+                scale_factor = 1.1  # Увеличиваем на 40%
                 width_inches *= scale_factor
                 height_inches *= scale_factor
                 
@@ -602,6 +663,8 @@ class ModernPresentationGenerator:
             if top + height > slide_height:
                 height = slide_height - top
 
+            logger.debug(f"📍 Позиция фото: left={left}, top={top}, width={width}, height={height}")
+            
             slide.shapes.add_picture(str(temp_img_path), left, top, width=width, height=height)
             
             try:
@@ -609,7 +672,7 @@ class ModernPresentationGenerator:
             except:
                 pass
 
-            logger.info(f"🖼️ Фото добавлено по шаблону {template_type}")
+            logger.info(f"🖼️ Фото добавлено по шаблону {template_type} (увеличено)")
 
         except Exception as e:
             logger.error(f"❌ Ошибка вставки фото: {e}")
@@ -618,8 +681,11 @@ class ModernPresentationGenerator:
         slide_height = prs.slide_height
         slide_width = prs.slide_width
         
+        logger.info(f"📐 Размеры слайда: {slide_width} x {slide_height}")
+        
         # Сбрасываем счетчик красных слов перед обработкой слайдов
         self._red_words_per_slide.clear()
+        logger.info("🧹 Счетчик красных слов сброшен")
         
         for i, slide in enumerate(prs.slides):
             if i % 5 == 0:
@@ -629,6 +695,7 @@ class ModernPresentationGenerator:
             slide_num = int(''.join(ch for ch in slide.part.partname if ch.isdigit()) or 0)
             
             if slide_num not in slide_track_map:
+                logger.debug(f"⏭️ Пропуск слайда {slide_num} - нет трека")
                 continue
 
             track = slide_track_map[slide_num]
@@ -658,7 +725,9 @@ class ModernPresentationGenerator:
                     self._insert_artist_photo(slide, processed_img, slide_height, slide_width, template_type)
                     del processed_img
                 else:
-                    logger.warning(f"⚠️ Не удалось загрузить изображение для слайда {slide_num}: {image_path}")
+                    logger.warning(f"⚠️ Не удалось обработать фото: {image_path}")
+            else:
+                logger.warning(f"⚠️ Нет пути к фото для слайда {slide_num}")
 
             # Ищем существующие текстовые блоки с плейсхолдерами и заменяем их
             artist_shapes = []
@@ -675,6 +744,8 @@ class ModernPresentationGenerator:
                         elif "{{TRACK}}" in run.text:
                             title_shapes.append((shape, run))
 
+            logger.debug(f"🔍 Найдено artist shapes: {len(artist_shapes)}, title shapes: {len(title_shapes)}")
+
             # Обрабатываем артиста
             if artist_shapes:
                 artist_shape, artist_run = artist_shapes[0]
@@ -682,8 +753,8 @@ class ModernPresentationGenerator:
                 # Позиционируем согласно шаблону
                 if template_type == 1:
                     # Шаблон 1: Вертикальное фото слева - текст ПРАВЕЕ и ВЫШЕ
-                    artist_shape.left = Inches(9.0)
-                    artist_shape.top = Inches(0.8)
+                    artist_shape.left = Inches(9.0)  # Еще правее
+                    artist_shape.top = Inches(0.8)   # Выше
                 elif template_type == 2:
                     # Шаблон 2: Вертикальное фото справа - текст слева сверху
                     artist_shape.left = Inches(0.5)
@@ -711,12 +782,15 @@ class ModernPresentationGenerator:
                     
                     # Позиционируем согласно шаблону
                     if template_type == 1:
-                        title_shape.left = Inches(9.0)
-                        title_shape.top = Inches(2.0)
+                        # Шаблон 1: Вертикальное фото слева - текст ПРАВЕЕ и ВЫШЕ
+                        title_shape.left = Inches(9.0)  # Еще правее
+                        title_shape.top = Inches(2.0)   # Выше и ближе к артисту
                     elif template_type == 2:
+                        # Шаблон 2: Вертикальное фото справа - текст слева сверху
                         title_shape.left = Inches(0.5)
                         title_shape.top = Inches(2.2)
                     elif template_type == 3:
+                        # Шаблон 3: Горизонтальное фото - текст справа сверху
                         title_shape.left = Inches(8.0)
                         title_shape.top = Inches(2.2)
                     
@@ -734,7 +808,11 @@ class ModernPresentationGenerator:
                     
                     # Удаляем остальные фигуры чтобы избежать колизий
                     for shape, run in artist_shapes[1:] + title_shapes[1:]:
-                        slide.shapes._spTree.remove(shape._element)
+                        try:
+                            slide.shapes._spTree.remove(shape._element)
+                            logger.debug("🗑️ Удалена дублирующая текстовая фигура")
+                        except Exception as e:
+                            logger.debug(f"⚠️ Не удалось удалить фигуру: {e}")
 
             # Обрабатываем кнопку согласно шаблону
             if template_type == 2:
@@ -748,7 +826,11 @@ class ModernPresentationGenerator:
 
     def _process_audio_sequential(self, audio_tasks):
         results = []
+        logger.info(f"🎵 Начало последовательной обработки {len(audio_tasks)} аудио задач")
+        
         for i, task in enumerate(audio_tasks):
+            logger.debug(f"🔊 Обработка аудио задачи {i+1}/{len(audio_tasks)}")
+            
             if i % 3 == 0:
                 if not self._check_memory_usage():
                     self._force_garbage_collection()
@@ -758,16 +840,20 @@ class ModernPresentationGenerator:
             if result:
                 results.append(result)
                 
+        logger.info(f"✅ Обработано {len(results)} аудио сегментов")
         return results
 
     def generate(self, game_title: str, tracks: list = None, make_bw: bool = False, use_parallel: bool = False):
         logger.info("🚀 Запуск оптимизированной генерации презентации")
+        self._log_memory_usage()
         
         # Очищаем кеши перед новой генерацией
         self._force_garbage_collection()
         self._image_cache.clear()
         self._red_words_per_slide.clear()
-        self._artist_red_words_cache.clear()
+        self._artist_red_words_cache.clear()  # Очищаем кеш красных слов
+        
+        logger.info("🧹 Кеши очищены перед генерацией")
         
         if not tracks:
             tracks = self._load_tracks_from_json_optimized()
@@ -792,6 +878,7 @@ class ModernPresentationGenerator:
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
+            logger.info(f"📦 Распаковка шаблона в: {extract_dir}")
             with zipfile.ZipFile(self.base_path, "r") as z:
                 z.extractall(extract_dir)
 
@@ -804,6 +891,7 @@ class ModernPresentationGenerator:
             out_root = Path.cwd() / "output" / f"presentation_{timestamp}"
             out_root.mkdir(parents=True, exist_ok=True)
 
+            # Замена заголовка в первом слайде
             slide1 = slides_dir / "slide1.xml"
             if slide1.exists():
                 content = slide1.read_text(encoding="utf-8")
@@ -816,6 +904,8 @@ class ModernPresentationGenerator:
                 key=lambda x: int(''.join(filter(str.isdigit, x.stem)) or 0)
             )
             
+            logger.info(f"📄 Найдено {len(rels_files)} rels файлов")
+            
             slide_track_map = {}
             audio_tasks = []
             track_index = 0
@@ -825,6 +915,7 @@ class ModernPresentationGenerator:
                 slide_num = int(''.join(filter(str.isdigit, rels_path.stem)) or 0)
                 
                 if slide_num in self.skip_slides:
+                    logger.debug(f"⏭️ Пропуск слайда {slide_num} (в skip_slides)")
                     continue
                 
                 if slide_num == 13:
@@ -834,15 +925,18 @@ class ModernPresentationGenerator:
                         audio_tasks.append((rels_path, track, slide_num, media_dir))
                         slide_track_map[slide_num] = track
                         track_index += 1
+                        logger.debug(f"🎵 Слайд 13: трек {track_index}")
                     continue
                 elif slide_num == 44:
                     if track_for_13_and_44:
                         track = track_for_13_and_44
                         audio_tasks.append((rels_path, track, slide_num, media_dir))
                         slide_track_map[slide_num] = track
+                        logger.debug(f"🎵 Слайд 44: повтор трека со слайда 13")
                     continue
                 else:
                     if track_index >= len(tracks):
+                        logger.debug(f"⏹️ Закончились треки на слайде {slide_num}")
                         break
                     
                     track = tracks[track_index]
@@ -850,6 +944,7 @@ class ModernPresentationGenerator:
                     
                     audio_tasks.append((rels_path, track, slide_num, media_dir))
                     slide_track_map[slide_num] = track
+                    logger.debug(f"🎵 Слайд {slide_num}: трек {track_index}")
 
             logger.info("🔄 Обработка аудио (последовательно для экономии памяти)...")
             results = self._process_audio_sequential(audio_tasks)
@@ -862,7 +957,9 @@ class ModernPresentationGenerator:
             final_pptx = out_root / f"presentation_{timestamp}.pptx"
             
             self._force_garbage_collection()
+            self._log_memory_usage()
             
+            logger.info("📦 Создание финального PPTX файла...")
             with zipfile.ZipFile(final_pptx, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zip_out:
                 for root, _, files in os.walk(extract_dir):
                     for file in files:
@@ -887,6 +984,8 @@ class ModernPresentationGenerator:
 
         except Exception as e:
             logger.error(f"❌ Ошибка при генерации презентации: {e}")
+            import traceback
+            logger.error(f"🔍 Трассировка ошибки:\n{traceback.format_exc()}")
             raise
         finally:
             self._image_cache.clear()
@@ -901,6 +1000,7 @@ class ModernPresentationGenerator:
 
 if __name__ == "__main__":
     try:
+        logger.info("🎬 Запуск генератора презентаций")
         generator = ModernPresentationGenerator("template.pptx")
         result_path = generator.generate(
             game_title="Моя оптимизированная викторина",
@@ -909,5 +1009,9 @@ if __name__ == "__main__":
             use_parallel=False
         )
         print(f"🎉 Презентация создана в: {result_path}")
+        logger.info(f"🎉 Презентация создана в: {result_path}")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
+        logger.error(f"❌ Ошибка: {e}")
+        import traceback
+        logger.error(f"🔍 Трассировка:\n{traceback.format_exc()}")

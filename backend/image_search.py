@@ -128,18 +128,21 @@ class SimpleArtistImageSearch:
         return s
 
     def _find_local_artist_photo(self, artist_name: str) -> Optional[str]:
-        """Точный поиск локального фото. Регистр учитывается."""
+        """Точный поиск локального фото. Регистр НЕ учитывается."""
         if not os.path.exists(self.artists_dir):
             return None
 
         logger.info(f"🔍 Поиск локального фото для: '{artist_name}'")
         supported_ext = {'.jpg', '.jpeg', '.png', '.webp'}
-        query_clean = self._clean_name(artist_name)
+        
+        # Приводим к нижнему регистру для сравнения
+        query_clean = self._clean_name(artist_name).lower()
 
         for f in Path(self.artists_dir).iterdir():
             if f.suffix.lower() not in supported_ext:
                 continue
-            if self._clean_name(f.stem) == query_clean:
+            # Сравниваем в нижнем регистре
+            if self._clean_name(f.stem).lower() == query_clean:
                 logger.info(f"✅ Найден локальный файл: {f}")
                 return str(f)
         return None
@@ -233,7 +236,8 @@ class SimpleArtistImageSearch:
         self.use_rembg = use_rembg
         
         try:
-            cache_key = f"{artist_name}_{track_id}_{use_rembg}"
+            # Используем нижний регистр для кэширования
+            cache_key = f"{artist_name.lower()}_{track_id}_{use_rembg}"
             if cache_key in self.artist_cache:
                 return self.artist_cache[cache_key]
             
@@ -321,10 +325,12 @@ class SimpleArtistImageSearch:
         return ImageFont.load_default()
 
     def _cache_push(self, artist_key: str, url: str):
-        arr = self.photo_cache.get(artist_key, [])
+        # Используем нижний регистр для ключей кэша
+        artist_key_lower = artist_key.lower()
+        arr = self.photo_cache.get(artist_key_lower, [])
         if url not in arr:
             arr.insert(0, url)
-            self.photo_cache[artist_key] = arr[:20]
+            self.photo_cache[artist_key_lower] = arr[:20]
             self._save_photo_cache()
 
 # Глобальный экземпляр
