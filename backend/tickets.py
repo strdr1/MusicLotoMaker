@@ -10,7 +10,6 @@ import logging
 from datetime import datetime
 from PyPDF2 import PdfMerger
 import zipfile
-import shutil
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -20,11 +19,11 @@ class TicketGenerator:
     def __init__(self, output_dir="output"):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
-        self._register_cyrillic_fonts()
+        self._register_fonts()
         logger.info(f"TicketGenerator initialized with output_dir: {output_dir}")
 
-    def _register_cyrillic_fonts(self):
-        """Регистрирует кириллические шрифты (Arial на Windows)."""
+    def _register_fonts(self):
+        """Регистрирует шрифты."""
         try:
             for path in ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"]:
                 if os.path.exists(path):
@@ -37,7 +36,7 @@ class TicketGenerator:
             pass
 
     def _get_safe_font(self, font_family, bold=False):
-        """Возвращает безопасный шрифт (Arial или Helvetica)."""
+        """Возвращает безопасный шрифт."""
         try:
             if pdfmetrics.getFont("Arial"):
                 if bold and pdfmetrics.getFont("Arial-Bold"):
@@ -50,49 +49,68 @@ class TicketGenerator:
     def _get_text_width(self, text, font, size):
         if not text:
             return 0
-        avg = size * 0.6
+        avg = size * 0.5
         wide = set('WMДЖЩФ')
         narrow = set('il1ft.,;:! ')
         w = 0
         for ch in text:
             if ch in wide:
-                w += size * 0.8
+                w += size * 0.7
             elif ch in narrow:
-                w += size * 0.3
+                w += size * 0.2
             else:
                 w += avg
         return w
 
-    def _get_centered_x(self, text, font, size, x, width):
-        return x + (width - self._get_text_width(text, font, size)) / 2
-
-    def _wrap_text(self, text, font, size, max_width):
+    def _wrap_text_smart(self, text, font, size, max_width):
+        """Очень агрессивный перенос текста с учетом границ ячейки."""
         if not text:
             return [""]
+        
+        # Если текст помещается в одну строку
         if self._get_text_width(text, font, size) <= max_width:
             return [text]
+        
         words = text.split()
-        if len(words) == 1:
-            approx_chars = max(1, int(max_width / (size * 0.6)) - 3)
-            return [text[:approx_chars] + ("..." if len(text) > approx_chars else "")]
-        lines, current = [], words[0]
-        for w in words[1:]:
-            if self._get_text_width(current + " " + w, font, size) <= max_width:
-                current += " " + w
+        lines = []
+        current_line = ""
+        
+        for word in words:
+            test_line = current_line + " " + word if current_line else word
+            
+            # ОЧЕНЬ АГРЕССИВНЫЙ ПЕРЕНОС - разбиваем при 60% ширины
+            if self._get_text_width(test_line, font, size) <= max_width * 0.6:
+                current_line = test_line
             else:
-                lines.append(current)
-                current = w
-            if len(lines) == 2:
-                break
-        lines.append(current)
-        result = []
-        for ln in lines[:2]:
-            if self._get_text_width(ln, font, size) > max_width:
-                approx_chars = max(1, int(max_width / (size * 0.6)) - 3)
-                result.append(ln[:approx_chars] + ("..." if len(ln) > approx_chars else ""))
-            else:
-                result.append(ln)
-        return result
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+                
+                # Если текущее слово уже не помещается, разбиваем его
+                if self._get_text_width(word, font, size) > max_width * 0.5:
+                    # Разбиваем слово на части посимвольно
+                    chars = list(word)
+                    part = ""
+                    for char in chars:
+                        test_part = part + char
+                        if self._get_text_width(test_part, font, size) <= max_width * 0.8:
+                            part = test_part
+                        else:
+                            if part:
+                                lines.append(part)
+                            part = char
+                    if part:
+                        current_line = part
+                else:
+                    current_line = word
+                
+                if len(lines) == 3:  # Максимум 4 строки
+                    break
+        
+        if current_line and len(lines) < 4:
+            lines.append(current_line)
+        
+        return lines[:4]
 
     def generate_modern_tickets(self, tracks, count=10, design=None):
         """Генерирует билеты и возвращает путь к ZIP архиву для скачивания"""
@@ -103,20 +121,19 @@ class TicketGenerator:
         folder = os.path.join(self.output_dir, f"tickets_{timestamp}")
         os.makedirs(folder, exist_ok=True)
 
-        d = design or {}
-        f_family = d.get("font_family", "Helvetica")
-        t_size = int(d.get("title_size", 8))
-        a_size = int(d.get("artist_size", 6))
-        text_color = d.get("text_color", "#000000")
-        accent_color = d.get("accent_color", "#2563eb")
-        bold = d.get("bold", False)
-        upper = d.get("uppercase", False)
-        pad = int(d.get("vertical_padding", 5))
-        title_pos = int(d.get("title_position", 30)) / 100.0
-        artist_pos = int(d.get("artist_position", 70)) / 100.0
+        # ФИКСИРОВАННЫЕ НАСТРОЙКИ - РАЗМЕР 11
+        t_size = 11  # РАЗМЕР 11
+        a_size = 11
+        text_color = "#000000"
+        accent_color = "#000000"
+        bold = True
+        upper = False
+        pad = 3
+        title_pos = 0.5
+        artist_pos = 0.5
 
-        title_font = self._get_safe_font(f_family, bold)
-        artist_font = self._get_safe_font(f_family, False)
+        title_font = self._get_safe_font("Arial", bold)
+        artist_font = self._get_safe_font("Arial", bold)
 
         ticket_sets = self._generate_random_ticket_sets(tracks, count, 36)
         generated_files = []
@@ -157,69 +174,105 @@ class TicketGenerator:
     def _generate_single_ticket(self, path, num, tracks, t_font, a_font,
                                t_size, a_size, text_color, accent_color,
                                upper, pad, title_pos, artist_pos):
-        c = canvas.Canvas(path, pagesize=A4)
-        w, h = A4
+        # 📄 Оригинальный A4 горизонтальный (297x210 мм)
+        page_width, page_height = A4
+        c = canvas.Canvas(path, pagesize=(page_height, page_width))
+        w, h = page_height, page_width
+
         m = 5 * mm
-        t_h = 190 * mm
-        t_w = w - 2 * m
-        stripe_h = 12 * mm
-        x = m
-        y = h - m - t_h
 
-        # фон билета
-        c.setFillColor(HexColor("#f8fafc"))
-        c.rect(x, y, t_w, t_h, fill=1, stroke=0)
+        # Квадратные ячейки: 6x6 - 60% ширины
+        table_width = (w - 2 * m) * 0.6  # 60% ширины страницы
+        cell_size = table_width / 6
+        grid_width = 6 * cell_size
+        grid_height = 6 * cell_size
 
-        # зелёная полоса
-        stripe_col = HexColor("#009956")
-        c.setFillColor(stripe_col)
-        c.rect(x, y + t_h - stripe_h, t_w, stripe_h, fill=1, stroke=0)
+        # Позиционируем таблицу по центру слева
+        left_x = m
+        left_y = m + ((h - 2 * m) - grid_height) / 2
 
-        # разделительная линия под полосой
-        c.setStrokeColor(HexColor("#dfeee6"))
-        c.setLineWidth(0.6)
-        c.line(x + 1 * mm, y + t_h - stripe_h - 0.5 * mm, x + t_w - 1 * mm, y + t_h - stripe_h - 0.5 * mm)
+        # Правая часть: отступ после таблицы
+        right_x = left_x + grid_width + 3 * mm
 
-        # надпись "Билет №N"
-        header_font = self._get_safe_font("Arial", True)
-        c.setFont(header_font, 16)
-        c.setFillColor(black)
-        c.drawCentredString(x + t_w / 2, y + t_h - stripe_h / 2 - 4, f"Билет №{num}")
+        # Фон
+        c.setFillColor(HexColor("#ffffff"))
+        c.rect(0, 0, w, h, fill=1, stroke=0)
 
-        # сетка
-        grid_y = y
-        grid_h = t_h - stripe_h - (4 * mm)
-        self._draw_ticket_grid(c, x, grid_y, t_w, grid_h, tracks, t_font, a_font,
-                               t_size, a_size, text_color, accent_color, upper, pad,
-                               title_pos, artist_pos)
+        # --- ТАБЛИЦА ТРЕКОВ ---
+        self._draw_ticket_grid_proper(
+            c, left_x, left_y, grid_width, grid_height,
+            tracks, t_font, a_font, t_size, a_size,
+            text_color, accent_color, upper, pad
+        )
 
-        # линия отреза
-        cut_y = y - 5 * mm
-        c.setStrokeColor(HexColor("#666666"))
-        c.setLineWidth(0.5)
-        c.setDash([2, 2])
-        c.line(x, cut_y, x + t_w, cut_y)
-        c.setDash()
-        c.setFont(a_font, 6)
-        c.setFillColor(HexColor("#666666"))
-        c.drawCentredString(x + t_w / 2, cut_y - 2 * mm, "Отрежьте по линии")
+        # --- БРЕНД (ЛОГОТИП) В ПРАВОМ ВЕРХНЕМ УГЛУ ---
+        brand_image_path = "Brand.png"
+        if os.path.exists(brand_image_path):
+            try:
+                brand_width = 50 * mm
+                brand_height = 20 * mm
+            
+                brand_x = w - brand_width - m
+                brand_y = h - brand_height - m
+            
+                c.drawImage(
+                    brand_image_path,
+                    brand_x,
+                    brand_y,
+                    width=brand_width,
+                    height=brand_height,
+                    preserveAspectRatio=True,
+                    mask='auto'
+                )
+            except Exception as e:
+                logger.exception(f"Ошибка при вставке бренда: {e}")
+        else:
+            logger.warning(f"Файл бренда не найден: {brand_image_path}")
+
+        # --- ИЗОБРАЖЕНИЕ С ПРАВИЛАМИ В ПРАВОМ НИЖНЕМ УГЛУ ---
+        rules_image_path = "tickerts_rule.png"
+        if os.path.exists(rules_image_path):
+            try:
+                max_img_width = w - right_x - m
+                rules_x = w - max_img_width
+                rules_y = 0
+            
+                c.drawImage(
+                    rules_image_path,
+                    rules_x,
+                    rules_y,
+                    width=max_img_width,
+                    height=None,
+                    preserveAspectRatio=True,
+                    anchor='sw',
+                    mask='auto'
+                )
+            except Exception as e:
+                logger.exception(f"Ошибка при вставке изображения: {e}")
+        else:
+            logger.warning(f"Файл не найден: {rules_image_path}")
 
         c.save()
 
-    def _draw_ticket_grid(self, c, x, y, w, h, tracks, t_font, a_font,
-                         t_size, a_size, t_col, a_col, upper, pad,
-                         title_pos, artist_pos):
+    def _draw_ticket_grid_proper(self, c, x, y, w, h, tracks, t_font, a_font,
+                                t_size, a_size, t_col, a_col, upper, pad):
+        """Правильная отрисовка таблицы с размером 11 и выравниванием по левому краю."""
         rows, cols = 6, 6
-        cw, ch = w / cols, h / rows
-        pad_pt = pad * 0.75
+        cell_size = min(w / cols, h / rows)
+        cw = ch = cell_size
+        
+        # Отступы внутри ячейки
+        pad_pt = 3
         max_w = cw - pad_pt * 2
 
         for r in range(rows):
             for col in range(cols):
                 cx = x + col * cw
                 cy = y + (rows - r - 1) * ch
+
+                # Рамка ячейки
                 c.setStrokeColor(black)
-                c.setLineWidth(0.4)
+                c.setLineWidth(1.0)
                 c.rect(cx, cy, cw, ch, stroke=1, fill=0)
 
                 idx = r * cols + col
@@ -229,35 +282,48 @@ class TicketGenerator:
                 t = tracks[idx]
                 title = (t.get("title") or "Без названия").strip()
                 artist = (t.get("artist") or "Неизвестный исполнитель").strip()
+                
                 if upper:
-                    title, artist = title.upper(), artist.upper()
+                    artist, title = artist.upper(), title.upper()
+                
+                full_text = f'{artist} "{title}"'
 
-                title_lines = self._wrap_text(title, t_font, t_size, max_w)
-                artist_lines = self._wrap_text(artist, a_font, a_size, max_w)
-                title_lines, artist_lines = title_lines[:2], artist_lines[:2]
+                # Разбиваем текст на строки с ОЧЕНЬ ЧАСТЫМИ переносами
+                text_lines = self._wrap_text_smart(full_text, t_font, t_size, max_w)
+                text_lines = text_lines[:4]  # Максимум 4 строки
 
-                title_h = len(title_lines) * (t_size + 2)
-                artist_h = len(artist_lines) * (a_size + 2)
+                # Вычисляем общую высоту текста
+                line_height = t_size + 1
+                total_text_height = len(text_lines) * line_height
+                
+                # Начальная позиция текста - ОПУСКАЕМ ОТ ВЕРХНЕГО КРАЯ
+                top_margin = 6  # Отступ от верхнего края ячейки
+                text_start_y = cy + ch - top_margin - line_height
 
-                # корректное направление (0% сверху, 100% снизу)
-                title_base_y = cy + ch * (1 - title_pos) - title_h / 2
-                artist_base_y = cy + ch * (1 - artist_pos) - artist_h / 2
-
-                # трек
+                # Выводим текст - ВЫРАВНИВАЕМ ПО ЛЕВОМУ КРАЮ
                 c.setFont(t_font, t_size)
-                c.setFillColor(HexColor(a_col))
-                for i, ln in enumerate(title_lines):
-                    line_y = title_base_y + (len(title_lines) - 1 - i) * (t_size + 2)
-                    line_x = self._get_centered_x(ln, t_font, t_size, cx, cw)
-                    c.drawString(line_x, line_y, ln)
-
-                # артист
-                c.setFont(a_font, a_size)
-                c.setFillColor(HexColor(t_col))
-                for i, ln in enumerate(artist_lines):
-                    line_y = artist_base_y + (len(artist_lines) - 1 - i) * (a_size + 2)
-                    line_x = self._get_centered_x(ln, a_font, a_size, cx, cw)
-                    c.drawString(line_x, line_y, ln)
+                c.setFillColor(black)
+                
+                for i, line in enumerate(text_lines):
+                    line_y = text_start_y - i * line_height
+                    
+                    # Проверяем, чтобы не вышли за нижнюю границу
+                    if line_y < cy + pad_pt:
+                        continue
+                    
+                    # ВЫРАВНИВАЕМ ПО ЛЕВОМУ КРАЮ с небольшим отступом
+                    left_margin = 4  # Небольшой отступ от левого края
+                    line_x = cx + left_margin
+                    
+                    # Проверяем, чтобы текст не выходил за правую границу
+                    text_width = self._get_text_width(line, t_font, t_size)
+                    if line_x + text_width > cx + cw - pad_pt:
+                        # Если не помещается, немного сдвигаем влево
+                        line_x = cx + cw - pad_pt - text_width
+                        if line_x < cx + left_margin:
+                            line_x = cx + left_margin
+                    
+                    c.drawString(line_x, line_y, line)
 
     def _generate_random_ticket_sets(self, tracks, count, slots_per_ticket=36):
         if not tracks:
@@ -285,6 +351,7 @@ class TicketGenerator:
             logger.info(f"✅ PDF файлы объединены: {output_file}")
         except Exception as e:
             logger.error(f"❌ Ошибка объединения PDF: {e}")
+            raise
 
     def _create_zip_archive(self, folder_path, zip_path):
         """Создает ZIP архив с билетами"""
@@ -295,9 +362,8 @@ class TicketGenerator:
                         file_path = os.path.join(root, file)
                         arcname = os.path.relpath(file_path, folder_path)
                         zipf.write(file_path, arcname)
-            
             logger.info(f"✅ ZIP архив создан: {zip_path}")
             return zip_path
         except Exception as e:
             logger.error(f"❌ Ошибка создания ZIP архива: {e}")
-            raise
+            raise   

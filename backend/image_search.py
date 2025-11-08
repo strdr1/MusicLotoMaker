@@ -3,7 +3,6 @@ import os, io, re, json, logging, requests
 from pathlib import Path
 from typing import List, Optional
 from PIL import Image, ImageOps, ImageFile, ImageDraw, ImageFont
-from difflib import SequenceMatcher
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,18 +39,15 @@ def smart_remove_background(image_bytes: bytes) -> bytes:
     try:
         output_bytes = _REMBG_FUNCTION(image_bytes, model="u2netp")
         
-        # Проверяем что результат адекватный
         img = Image.open(io.BytesIO(output_bytes))
         if img.mode == 'RGBA':
-            # Проверяем что не вырезано пол-изображения
             alpha = img.getchannel('A')
             alpha_data = list(alpha.getdata())
             transparent_pixels = sum(1 for a in alpha_data if a < 10)
             total_pixels = len(alpha_data)
             
-            if transparent_pixels > total_pixels * 0.8:  # Слишком много прозрачного
+            if transparent_pixels > total_pixels * 0.8:
                 logger.warning("⚠️ Rembg вырезал слишком много, используем оригинал")
-                # Возвращаем оригинал с белым фоном
                 original_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
                 bg = Image.new("RGB", original_img.size, (255, 255, 255))
                 bg.paste(original_img, (0, 0))
@@ -63,65 +59,7 @@ def smart_remove_background(image_bytes: bytes) -> bytes:
     except Exception as e:
         raise RuntimeError(f"Rembg error: {e}")
 
-# ----------------- Минимальный парсер имен -----------------
-def similarity(a: str, b: str) -> float:
-    """Вычисляет схожесть двух строк"""
-    a = a.lower().strip()
-    b = b.lower().strip()
-    return SequenceMatcher(None, a, b).ratio()
-
-def normalize_artist_name(name: str) -> str:
-    """Минимальная нормализация - только спецсимволы"""
-    name = name.lower().strip()
-    
-    # Убираем только мешающие символы
-    name = re.sub(r'[!?.,;:"()]', '', name)
-    
-    # Базовые замены
-    replacements = {
-        'ё': 'е',
-        '$': 's', 
-        '&': 'and', 
-        '+': 'and'
-    }
-    
-    for old, new in replacements.items():
-        name = name.replace(old, new)
-    
-    # Убираем лишние пробелы
-    name = re.sub(r'\s+', ' ', name).strip()
-    
-    return name
-
-def generate_search_variants(artist_name: str) -> List[str]:
-    """Генерирует варианты для поиска"""
-    variants = set()
-    
-    # Основные варианты
-    variants.add(artist_name)
-    variants.add(artist_name.lower())
-    variants.add(artist_name.upper())
-    variants.add(artist_name.title())
-    
-    # Без пунктуации
-    clean_name = re.sub(r'[!?.,;:"()]', '', artist_name)
-    variants.add(clean_name)
-    variants.add(clean_name.lower())
-    
-    # Нормализованные версии
-    normalized = normalize_artist_name(artist_name)
-    variants.add(normalized)
-    variants.add(normalized.replace(' ', '_'))
-    variants.add(normalized.replace(' ', ''))
-    
-    return sorted([v for v in variants if v and len(v) > 1], key=len, reverse=True)
-
 # ----------------- Утилиты -----------------
-def slugify(s: str) -> str:
-    s = re.sub(r"[^\w\s.-]+", "", s, flags=re.U)
-    s = re.sub(r"\s+", "_", s.strip(), flags=re.U)
-    return s[:140].lower()
-
 def ok_aspect(w: int, h: int) -> bool:
     if w <= 0 or h <= 0: return False
     r = h / float(w)
@@ -178,41 +116,32 @@ class SimpleArtistImageSearch:
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения кэша фото: {e}")
 
+    def _clean_name(self, s: str) -> str:
+        """
+        Удаляет ТОЛЬКО мешающие символы, сохраняя регистр и пробелы.
+        Удаляются: ! " № ; % : ? * ( ) _ - + = @ # $ ^ & \ /
+        """
+        bad_chars = '!\"№;%:?*()_-+=@#$%^&\\/'
+        for ch in bad_chars:
+            s = s.replace(ch, '')
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
     def _find_local_artist_photo(self, artist_name: str) -> Optional[str]:
-        """Простой поиск локального фото"""
+        """Точный поиск локального фото. Регистр учитывается."""
         if not os.path.exists(self.artists_dir):
             return None
 
         logger.info(f"🔍 Поиск локального фото для: '{artist_name}'")
+        supported_ext = {'.jpg', '.jpeg', '.png', '.webp'}
+        query_clean = self._clean_name(artist_name)
 
-        # Генерируем варианты для поиска
-        search_names = generate_search_variants(artist_name)
-        logger.info(f"🔍 Варианты поиска: {search_names}")
-
-        supported_ext = ['.jpg', '.jpeg', '.png', '.webp']
-        
-        # 1️⃣ Прямое совпадение по имени файла
-        for name in search_names:
-            for ext in supported_ext:
-                path = Path(self.artists_dir) / f"{name}{ext}"
-                if path.exists():
-                    logger.info(f"✅ Найдено точное совпадение: {path}")
-                    return str(path)
-
-        # 2️⃣ Поиск по всем файлам в папке
-        all_files = list(Path(self.artists_dir).glob("*"))
-        for f in all_files:
+        for f in Path(self.artists_dir).iterdir():
             if f.suffix.lower() not in supported_ext:
                 continue
-                
-            # Проверяем все варианты имен
-            filename_lower = f.stem.lower()
-            for search_name in search_names:
-                if filename_lower == search_name.lower():
-                    logger.info(f"✅ Найдено совпадение: {f}")
-                    return str(f)
-
-        logger.info(f"❌ Локальное фото для '{artist_name}' не найдено")
+            if self._clean_name(f.stem) == query_clean:
+                logger.info(f"✅ Найден локальный файл: {f}")
+                return str(f)
         return None
 
     def _search_yandex_music_smart(self, artist_name: str) -> Optional[str]:
@@ -229,77 +158,77 @@ class SimpleArtistImageSearch:
                 logger.info(f"🔍 Яндекс.Музыка: артист '{artist_name}' не найден")
                 return None
                 
-            # Берем самого релевантного артиста
             artist = search_result.artists.results[0]
             
-            # Пробуем разные источники фото
             if hasattr(artist, 'cover') and artist.cover:
                 cover_uri = getattr(artist.cover, 'uri', None)
                 if cover_uri:
                     photo_url = f"https://{cover_uri.replace('%%', '1000x1000')}"
-                    logger.info(f"✅ Яндекс.Музыка: найдено фото {photo_url}")
                     return photo_url
             
             if hasattr(artist, 'og_image') and artist.og_image:
                 og_image_url = artist.og_image.replace('%%', '1000x1000')
-                logger.info(f"✅ Яндекс.Музыка: найдено OG фото {og_image_url}")
                 return og_image_url
             
-            logger.info(f"🔍 Яндекс.Музыка: у артиста '{artist_name}' нет фото")
             return None
             
         except Exception as e:
             logger.warning(f"⚠️ Ошибка поиска в Яндекс.Музыке: {e}")
             return None
 
-    def _process_photo_smart(self, image_data: bytes, track_id: int, source: str = "internet") -> Optional[str]:
-        """Обработка фото"""
+    def _process_internet_photo(self, image_data: bytes, track_id: int) -> Optional[str]:
+        """Обработка ТОЛЬКО интернет-фото (с проверками и rembg)"""
         try:
             img = Image.open(io.BytesIO(image_data))
             w, h = img.size
             
-            # Проверяем размер и пропорции
             if w < MIN_W or h < MIN_H or not ok_aspect(w, h): 
-                logger.warning(f"⚠️ Плохое изображение: {w}x{h}")
+                logger.warning(f"⚠️ Плохое интернет-изображение: {w}x{h}")
                 return None
             
-            # Нормализуем размер
             img = normalize_img(img, min_side=1024)
             out_path = Path(self.images_dir) / f"{track_id}_artist.png"
 
-            # Для локальных PNG с прозрачностью - пропускаем удаление фона
-            if source == "local" and img.mode == 'RGBA':
-                alpha = img.getchannel('A')
-                alpha_data = list(alpha.getdata())
-                has_transparency = any(a < 255 for a in alpha_data)
-                
-                if has_transparency:
-                    logger.info("🖼️ PNG с прозрачностью - фон не трогаем")
-                    img.save(out_path, "PNG")
-                    return str(out_path)
-
-            # Удаление фона
             if self.use_rembg and _ensure_rembg():
                 try:
                     png_bytes = smart_remove_background(image_data)
                     with open(out_path, "wb") as f:
                         f.write(png_bytes)
-                    logger.info(f"✅ Фото обработано (удаление фона): {out_path}")
+                    logger.info(f"✅ Фото из интернета обработано (удаление фона): {out_path}")
                     return str(out_path)
                 except Exception as e:
                     logger.warning(f"⚠️ Удаление фона не удалось: {e}")
 
-            # Fallback - просто сохраняем как есть
             img.save(out_path, "PNG", optimize=True)
-            logger.info(f"✅ Фото сохранено (без удаления фона): {out_path}")
+            logger.info(f"✅ Фото из интернета сохранено: {out_path}")
             return str(out_path)
                 
         except Exception as e:
-            logger.error(f"❌ Ошибка обработки фото: {e}")
+            logger.error(f"❌ Ошибка обработки интернет-фото: {e}")
             return None
 
+    def _use_local_photo_as_is(self, local_path: str, track_id: int) -> str:
+        """Используем локальный файл КАК ЕСТЬ — без изменений!"""
+        try:
+            out_path = Path(self.images_dir) / f"{track_id}_artist.png"
+            
+            # Открываем и сохраняем как PNG для единообразия
+            img = Image.open(local_path)
+            # Сохраняем прозрачность, если есть
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                img = img.convert("RGBA")
+            else:
+                img = img.convert("RGB")
+            img.save(out_path, "PNG")
+            
+            logger.info(f"✅ Локальный файл использован как есть: {out_path}")
+            return str(out_path)
+        except Exception as e:
+            logger.error(f"❌ Ошибка копирования локального файла: {e}")
+            return self._create_placeholder_image("?", track_id)
+
     def fetch_artist_png(self, artist_name: str, track_id: int, use_rembg: bool = True):
-        """Умный поиск фото"""
+        """Умный поиск фото с абсолютным приоритетом локальных файлов"""
         original_rembg_setting = self.use_rembg
         self.use_rembg = use_rembg
         
@@ -310,41 +239,31 @@ class SimpleArtistImageSearch:
             
             logger.info(f"🎭 Поиск фото для: '{artist_name}' (ID: {track_id})")
             
-            # 1. Локальные фото (приоритет)
+            # 🔑 АБСОЛЮТНЫЙ ПРИОРИТЕТ: локальный файл
             local_photo = self._find_local_artist_photo(artist_name)
             if local_photo:
-                logger.info(f"📁 НАЙДЕН локальный файл: {local_photo}")
-                try:
-                    with open(local_photo, "rb") as f:
-                        image_data = f.read()
-                    processed_path = self._process_photo_smart(image_data, track_id, "local")
-                    if processed_path:
-                        self.artist_cache[cache_key] = processed_path
-                        self._cache_push(artist_name.strip().lower(), f"local://{local_photo}")
-                        logger.info(f"✅ ИСПОЛЬЗУЕТСЯ локальное фото: {local_photo}")
-                        return processed_path
-                    else:
-                        logger.warning(f"⚠️ Ошибка обработки локального фото: {local_photo}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Ошибка чтения локального фото: {e}")
+                logger.info(f"📁 ЛОКАЛЬНЫЙ ФАЙЛ НАЙДЕН — ИСПОЛЬЗУЕТСЯ БЕЗ ПРОВЕРОК!")
+                processed_path = self._use_local_photo_as_is(local_photo, track_id)
+                self.artist_cache[cache_key] = processed_path
+                self._cache_push(artist_name.strip().lower(), f"local://{local_photo}")
+                return processed_path
 
-            # 2. Яндекс.Музыка (только если локальное не найдено)
-            logger.info(f"🔍 Локальное фото не найдено, ищем в Яндекс.Музыке...")
+            # Интернет — только если локального нет
+            logger.info(f"🔍 Локальный файл НЕ найден, ищем в Яндекс.Музыке...")
             url = self._search_yandex_music_smart(artist_name)
             if url:
                 image_data = download_bytes(url)
                 if image_data:
-                    processed_path = self._process_photo_smart(image_data, track_id, "internet")
+                    processed_path = self._process_internet_photo(image_data, track_id)
                     if processed_path:
                         self._cache_push(artist_name.strip().lower(), url)
                         self.artist_cache[cache_key] = processed_path
                         logger.info(f"✅ Найдено в Яндекс.Музыке: {url}")
                         return processed_path
 
-            # 3. Placeholder
+            # Placeholder
             p = self._create_placeholder_image(artist_name, track_id)
             self.artist_cache[cache_key] = p
-            logger.info("🖼️ Создан placeholder")
             return p
             
         except Exception as e:
@@ -361,7 +280,6 @@ class SimpleArtistImageSearch:
             img = Image.new("RGB", (w, h), (60, 75, 115))
             draw = ImageDraw.Draw(img)
             
-            # Градиент
             for i in range(h):
                 r = max(40, min(60, 40 + i//20))
                 g = max(55, min(75, 55 + i//25)) 
@@ -372,7 +290,6 @@ class SimpleArtistImageSearch:
             text = artist_name if len(artist_name) <= 28 else artist_name[:25] + "..."
             tw = draw.textlength(text, font=font)
             
-            # Тень и текст
             draw.text(((w-tw)/2 + 2, (h-32)/2 + 2), text, fill=(20, 30, 50), font=font)
             draw.text(((w-tw)/2, (h-32)/2), text, fill=(235, 240, 255), font=font)
             

@@ -13,6 +13,7 @@ from PIL import Image, ImageOps
 from pptx import Presentation
 from pptx.util import Inches
 from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
 import gc
 import psutil
 import time
@@ -22,10 +23,8 @@ logging.basicConfig(level=logging.INFO)
 
 class ModernPresentationGenerator:
     def __init__(self, base_path: str):
-        # Добавлен конструктор с параметром base_path
         self.base_path = Path(base_path)
         
-        # Проверяем существование файла и пытаемся скачать если нет
         if not self.base_path.exists():
             logger.info(f"📦 Файл {base_path} не найден, пробуем скачать из Dropbox...")
             try:
@@ -42,15 +41,16 @@ class ModernPresentationGenerator:
         self.skip_slides = {1, 2, 3, 4, 45, 46, 47, 88, 89, 90, 131}
         self.buffer_ms = 5000
         self.default_ms = 35_000
-        self.photo_scale_factor = 1.3
+        self.fade_duration = 3000  # 3 секунды затухания
+        self.fade_in_duration = 1000  # 1 секунда нарастания
         
-        # Ограничения для экономии памяти
         self.max_workers = 2
         self.image_cache_size = 8
         self._image_cache = {}
+        self._red_words_per_slide = {}
+        self._artist_red_words_cache = {}  # Кеш красных слов для каждого артиста
 
     def _check_memory_usage(self):
-        """Проверяем использование памяти"""
         try:
             memory = psutil.virtual_memory()
             if memory.percent > 85:
@@ -58,15 +58,25 @@ class ModernPresentationGenerator:
                 return False
             return True
         except:
-            return True  # Если не можем проверить, продолжаем работу
+            return True
 
     def _force_garbage_collection(self):
-        """Принудительная очистка памяти"""
         gc.collect()
         time.sleep(0.1)
 
+    def _get_image_orientation(self, image_path: str):
+        """Определяет ориентацию изображения"""
+        try:
+            with Image.open(image_path) as img:
+                width, height = img.size
+                if width > height:
+                    return "horizontal"
+                else:
+                    return "vertical"
+        except:
+            return "vertical"  # По умолчанию вертикальное
+
     def _load_and_process_image_optimized(self, image_path: str, make_bw: bool):
-        """Оптимизированная загрузка изображений с контролем памяти"""
         if not self._check_memory_usage():
             self._force_garbage_collection()
             
@@ -74,7 +84,6 @@ class ModernPresentationGenerator:
         if cache_key in self._image_cache:
             return self._image_cache[cache_key]
             
-        # Ограничиваем размер кэша
         if len(self._image_cache) >= self.image_cache_size:
             self._image_cache.pop(next(iter(self._image_cache)))
             
@@ -83,16 +92,13 @@ class ModernPresentationGenerator:
             return None
             
         try:
-            # Загружаем с уменьшением качества для экономии памяти
             with Image.open(path) as img:
-                # Сразу уменьшаем размер если изображение слишком большое
-                max_pixels = 1024 * 1024  # 1MP
-                if img.width * img.height > max_pixels:
-                    ratio = (max_pixels / (img.width * img.height)) ** 0.5
-                    new_size = (int(img.width * ratio), int(img.height * ratio))
-                    img = img.resize(new_size, Image.LANCZOS)
+                # Сохраняем оригинальные размеры
+                original_width, original_height = img.size
                 
-                img = img.convert("RGBA")
+                # Конвертируем в RGBA если нужно
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
 
                 if make_bw:
                     grayscale = ImageOps.grayscale(img.convert("RGB"))
@@ -102,28 +108,29 @@ class ModernPresentationGenerator:
                     else:
                         img = grayscale.convert("RGBA")
 
-                # Увеличиваем на 30% но с ограничением
-                max_dim = Inches(14)
-                dpi = 96
-                target_px = int(max_dim.inches * dpi)
-                
-                new_width = int(img.width * self.photo_scale_factor)
-                new_height = int(img.height * self.photo_scale_factor)
-                
-                img_resized = img.resize((new_width, new_height), Image.LANCZOS)
-                
-                if new_width > target_px or new_height > target_px:
-                    img_resized.thumbnail((target_px, target_px), Image.LANCZOS)
-
-                self._image_cache[cache_key] = img_resized
-                return img_resized
+                # Возвращаем изображение без изменения размеров
+                self._image_cache[cache_key] = img
+                return img
                 
         except Exception as e:
             logger.error(f"❌ Ошибка обработки изображения {image_path}: {e}")
             return None
 
+    def _apply_fade_effects(self, audio_segment):
+        """Применяет нарастание в начале и затухание в конце трека"""
+        # Нарастание в начале (1 секунда)
+        fade_in_duration = min(self.fade_in_duration, len(audio_segment) // 3)
+        if fade_in_duration > 0:
+            audio_segment = audio_segment.fade_in(fade_in_duration)
+        
+        # Затухание в конце (3 секунды)
+        fade_out_duration = min(self.fade_duration, len(audio_segment) - 1000)
+        if fade_out_duration > 0:
+            audio_segment = audio_segment.fade_out(fade_out_duration)
+        
+        return audio_segment
+
     def _find_track_file_optimized(self, track_path: str):
-        """Оптимизированный поиск файлов треков"""
         possible_paths = [
             Path(track_path),
             Path.cwd() / "downloads" / Path(track_path).name,
@@ -132,7 +139,6 @@ class ModernPresentationGenerator:
         return next((p for p in possible_paths if p.exists()), None)
 
     def _load_tracks_from_json_optimized(self):
-        """Загружает треки с минимальным использованием памяти"""
         possible_paths = [
             Path.cwd() / "tracks.json",
             Path.cwd() / "Track_data.json", 
@@ -167,7 +173,6 @@ class ModernPresentationGenerator:
             return []
 
     def _process_audio_segment_optimized(self, rels_path, track, slide_num, media_dir):
-        """Оптимизированная обработка аудио с контролем памяти"""
         if not self._check_memory_usage():
             self._force_garbage_collection()
             
@@ -188,24 +193,23 @@ class ModernPresentationGenerator:
                 logger.warning(f"⚠️ Файл трека не найден: {track_path}")
                 return None
 
-            # Загружаем аудио с минимальным использованием памяти
             audio = AudioSegment.from_file(real_path)
             seg_start = int(float(track.get("segment_start", 0)) * 1000)
             seg_dur = int(float(track.get("segment_duration", self.default_ms / 1000)) * 1000)
             end_ms = min(len(audio), seg_start + seg_dur + self.buffer_ms)
             
-            # Вырезаем сегмент
             if seg_start > 0 or end_ms < len(audio):
                 clip = audio[seg_start:end_ms]
             else:
                 clip = audio
 
+            # Применяем нарастание и затухание
+            clip = self._apply_fade_effects(clip)
+
             out_media_path = media_dir / os.path.basename(targets[0])
             
-            # Используем более низкое качество для экономии памяти
             clip.export(out_media_path, format="mp3", bitrate="96k")
             
-            # Очищаем память
             del audio, clip
             self._force_garbage_collection()
 
@@ -215,13 +219,259 @@ class ModernPresentationGenerator:
             logger.error(f"❌ Ошибка обработки аудио для слайда {slide_num}: {e}")
             return None
 
-    def _replace_placeholders_and_photos_optimized(self, prs, slide_track_map, make_bw: bool):
-        """Оптимизированная вставка текста и фото с поэтапной обработкой"""
-        slide_height = prs.slide_height
+    def _apply_text_formatting_with_style(self, original_run, new_text, is_artist, slide_num, artist_name=None):
+        """Применяет форматирование с сохранением стиля оригинала и умным окрашиванием с кешированием"""
+        RED = RGBColor(255, 0, 0)
+        BLACK = RGBColor(0, 0, 0)
         
-        # Обрабатываем по одному слайду за раз
+        # Сохраняем стиль оригинального run
+        font_name = original_run.font.name
+        font_size = original_run.font.size
+        font_bold = original_run.font.bold
+        font_italic = original_run.font.italic
+        
+        special_chars = {'@', '#', '$', '&', '€', '£', '¥'}
+        special_patterns = {'zz', 'xxx', 'www', 'qq', 'kk'}
+        
+        words = new_text.split()
+        
+        # Инициализируем счетчик для слайда если нужно
+        if slide_num not in self._red_words_per_slide:
+            self._red_words_per_slide[slide_num] = 0
+        
+        # Если это артист и у нас есть кеш для него, используем его
+        cached_red_words = set()
+        if is_artist and artist_name and artist_name in self._artist_red_words_cache:
+            cached_red_words = self._artist_red_words_cache[artist_name]
+            logger.info(f"🎨 Используем кеш красных слов для артиста '{artist_name}': {cached_red_words}")
+        
+        # Находим слова для покраски
+        paintable_words = []
+        for word in words:
+            # Проверяем кеш для этого артиста
+            if word.lower() in cached_red_words:
+                paintable_words.append((word, True))
+                continue
+                
+            has_special_char = any(char in word for char in special_chars)
+            has_special_pattern = any(pattern in word.lower() for pattern in special_patterns)
+            paintable_words.append((word, has_special_char or has_special_pattern))
+        
+        # Гарантируем минимум 1 красное слово на слайд, но не более 1
+        if (not any(paintable for _, paintable in paintable_words) and 
+            words and self._red_words_per_slide[slide_num] == 0):
+            random_index = random.randint(0, len(words) - 1)
+            paintable_words[random_index] = (words[random_index], True)
+        
+        # Сохраняем выбранные красные слова в кеш для артиста
+        red_words_for_artist = set()
+        for word, should_paint in paintable_words:
+            if should_paint:
+                red_words_for_artist.add(word.lower())
+        
+        if is_artist and artist_name and red_words_for_artist:
+            self._artist_red_words_cache[artist_name] = red_words_for_artist
+            logger.info(f"💾 Сохранили в кеш для артиста '{artist_name}': {red_words_for_artist}")
+        
+        # Очищаем оригинальный run и создаем новые с сохранением стиля
+        original_run.text = ""
+        parent_paragraph = original_run._parent
+        
+        for word, should_paint in paintable_words:
+            # Проверяем лимит красных слов на слайд
+            can_paint_red = should_paint and self._red_words_per_slide[slide_num] < 1
+            
+            if can_paint_red:
+                self._red_words_per_slide[slide_num] += 1
+                # Обрабатываем слово посимвольно
+                for char in word:
+                    new_run = parent_paragraph.add_run()
+                    new_run.text = char
+                    # Сохраняем стиль оригинала
+                    if font_name:
+                        new_run.font.name = font_name
+                    if font_size:
+                        new_run.font.size = font_size
+                    new_run.font.bold = font_bold
+                    new_run.font.italic = font_italic
+                    
+                    # Красим только специальные символы (или все если слово выбрано случайно)
+                    if char in special_chars or (should_paint and not any(c in word for c in special_chars)):
+                        new_run.font.color.rgb = RED
+                    else:
+                        new_run.font.color.rgb = BLACK
+                
+                # Добавляем пробел
+                space_run = parent_paragraph.add_run()
+                space_run.text = " "
+                if font_name:
+                    space_run.font.name = font_name
+                if font_size:
+                    space_run.font.size = font_size
+                space_run.font.bold = font_bold
+                space_run.font.italic = font_italic
+                space_run.font.color.rgb = BLACK
+            else:
+                # Обычное слово без окрашивания
+                new_run = parent_paragraph.add_run()
+                new_run.text = word + " "
+                # Сохраняем стиль оригинала
+                if font_name:
+                    new_run.font.name = font_name
+                if font_size:
+                    new_run.font.size = font_size
+                new_run.font.bold = font_bold
+                new_run.font.italic = font_italic
+                new_run.font.color.rgb = BLACK
+
+    def _move_button_to_corner(self, slide, slide_height, slide_width, mirror=False):
+        """Перемещает кнопку image42.png в угол и при необходимости отзеркаливает через отрицательное масштабирование"""
+        try:
+            logger.info(f"🔍 ПОИСК КНОПКИ IMAGE42.PNG НА СЛАЙДЕ")
+        
+            for i, shape in enumerate(slide.shapes):
+                if hasattr(shape, 'image'):
+                    try:
+                        if hasattr(shape, '_element'):
+                            ns = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
+                            blip_elements = shape._element.findall('.//a:blip', ns)
+                        
+                            if blip_elements:
+                                blip = blip_elements[0]
+                                rId = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                            
+                                if rId and rId in slide.part.rels:
+                                    rel = slide.part.rels[rId]
+                                    image_part = rel.target_part
+                                    if hasattr(image_part, 'partname'):
+                                        filename = image_part.partname.split('/')[-1]
+                                        logger.info(f"Фигура {i}: rId={rId}, filename={filename}")
+                                    
+                                        if filename.lower() == 'image42.png':
+                                            old_left, old_top = shape.left, shape.top
+                                            old_width, old_height = shape.width, shape.height
+                                        
+                                            if mirror:
+                                                # Левый нижний угол с отзеркаливанием через отрицательное масштабирование
+                                                new_left = Inches(0.2)
+                                                new_top = slide_height - shape.height - Inches(0.2)
+                                            
+                                                # Перемещаем кнопку
+                                                shape.left = new_left
+                                                shape.top = new_top
+                                            
+                                                # Зеркалим через отрицательную ширину
+                                                # Сохраняем оригинальные размеры
+                                                original_width = shape.width
+                                                original_height = shape.height
+                                            
+                                                # Устанавливаем отрицательную ширину для зеркального отображения
+                                                shape.width = -original_width
+                                            
+                                                # Корректируем позицию, т.к. при отрицательной ширине координаты меняются
+                                                shape.left = new_left + original_width
+                                            
+                                                logger.info(f"✅ Кнопка отзеркалена через отрицательное масштабирование!")
+                                                logger.info(f"📏 Было: {old_width}x{old_height}, стало: {shape.width}x{shape.height}")
+                                                logger.info(f"📍 Было: {old_left},{old_top}, стало: {shape.left},{shape.top}")
+                                            
+                                            else:
+                                                # Правый нижний угол без изменений
+                                                shape.left = slide_width - shape.width - Inches(0.2)
+                                                shape.top = slide_height - shape.height - Inches(0.2)
+                                                logger.info(f"✅ Кнопка перемещена в правый нижний угол!")
+                                        
+                                            return True
+                    except Exception as e:
+                        logger.debug(f"Ошибка при анализе фигуры {i}: {e}")
+                        continue
+        
+            logger.info("❌ Кнопка image42.png не найдена")
+            return False
+        
+        except Exception as e:
+            logger.error(f"❌ Ошибка при поиске кнопки: {e}")
+            return False
+
+    def _insert_artist_photo(self, slide, processed_img, slide_height, slide_width, template_type):
+        """Вставляет фото артиста согласно выбранному шаблону"""
+        try:
+            temp_img_path = Path(tempfile.gettempdir()) / f"temp_photo_{random.randint(1000,9999)}.png"
+            processed_img.save(temp_img_path, "PNG", optimize=True)
+
+            img_width_px, img_height_px = processed_img.size
+            dpi = 96
+            
+            # Конвертируем пиксели в дюймы
+            width_inches = img_width_px / dpi
+            height_inches = img_height_px / dpi
+            
+            # Увеличиваем фото для ВСЕХ шаблонов
+            if template_type == 1:
+                # Шаблон 1: Вертикальное фото слева - УВЕЛИЧИВАЕМ ЕЩЕ БОЛЬШЕ
+                scale_factor = 1.2  # Увеличиваем на 60%
+                width_inches *= scale_factor
+                height_inches *= scale_factor
+                
+                # Шаблон 1: Вертикальное фото слева снизу (БОЛЬШОЕ)
+                left = Inches(0)
+                top = slide_height - Inches(height_inches)
+                width = Inches(width_inches)
+                height = Inches(height_inches)
+                
+            elif template_type == 2:
+                # Шаблон 2: Вертикальное фото справа - ТОЖЕ УВЕЛИЧИВАЕМ
+                scale_factor = 1.15  # Увеличиваем на 50%
+                width_inches *= scale_factor
+                height_inches *= scale_factor
+                
+                left = slide_width - Inches(width_inches)
+                top = slide_height - Inches(height_inches)
+                width = Inches(width_inches)
+                height = Inches(height_inches)
+                
+            elif template_type == 3:
+                # Шаблон 3: Горизонтальное фото - ТОЖЕ УВЕЛИЧИВАЕМ
+                scale_factor = 1.1  # Увеличиваем на 40%
+                width_inches *= scale_factor
+                height_inches *= scale_factor
+                
+                left = Inches(0)
+                top = slide_height - Inches(height_inches)
+                width = Inches(width_inches)
+                height = Inches(height_inches)
+
+            # Проверяем, чтобы фото не выходило за границы слайда
+            if left < Inches(0):
+                left = Inches(0)
+            if top < Inches(0):
+                top = Inches(0)
+            if left + width > slide_width:
+                width = slide_width - left
+            if top + height > slide_height:
+                height = slide_height - top
+
+            slide.shapes.add_picture(str(temp_img_path), left, top, width=width, height=height)
+            
+            try:
+                temp_img_path.unlink(missing_ok=True)
+            except:
+                pass
+
+            logger.debug(f"🖼️ Фото добавлено по шаблону {template_type} (увеличено)")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка вставки фото: {e}")
+
+    def _replace_placeholders_and_photos_optimized(self, prs, slide_track_map, make_bw: bool):
+        slide_height = prs.slide_height
+        slide_width = prs.slide_width
+        
+        # Сбрасываем счетчик красных слов перед обработкой слайдов
+        self._red_words_per_slide.clear()
+        
         for i, slide in enumerate(prs.slides):
-            if i % 5 == 0:  # Проверяем память каждые 5 слайдов
+            if i % 5 == 0:
                 if not self._check_memory_usage():
                     self._force_garbage_collection()
             
@@ -234,7 +484,33 @@ class ModernPresentationGenerator:
             artist = track.get("artist", "Неизвестный исполнитель")
             title = track.get("title", "Без названия")
 
-            # Замена текста
+            logger.info(f"🎨 Обработка слайда {slide_num}: {artist} - {title}")
+
+            # Определяем ориентацию фото и выбираем шаблон
+            image_path = track.get("image_path", "")
+            template_type = 1  # По умолчанию первый шаблон
+            
+            if image_path:
+                orientation = self._get_image_orientation(image_path)
+                if orientation == "vertical":
+                    # Случайный выбор между шаблонами 1 и 2 для вертикальных фото
+                    template_type = random.choice([1, 2])
+                else:
+                    # Горизонтальные фото - шаблон 3
+                    template_type = 3
+                
+                logger.info(f"📐 Ориентация фото: {orientation}, выбран шаблон {template_type}")
+                
+                # Загружаем и обрабатываем фото
+                processed_img = self._load_and_process_image_optimized(image_path, make_bw)
+                if processed_img:
+                    self._insert_artist_photo(slide, processed_img, slide_height, slide_width, template_type)
+                    del processed_img
+
+            # Ищем существующие текстовые блоки с плейсхолдерами и заменяем их
+            artist_shapes = []
+            title_shapes = []
+            
             for shape in slide.shapes:
                 if not shape.has_text_frame:
                     continue
@@ -242,75 +518,81 @@ class ModernPresentationGenerator:
                 for paragraph in shape.text_frame.paragraphs:
                     for run in paragraph.runs:
                         if "{{ARTIST}}" in run.text:
-                            self._replace_placeholder_optimized(paragraph, run, artist)
+                            artist_shapes.append((shape, run))
                         elif "{{TRACK}}" in run.text:
-                            self._replace_placeholder_optimized(paragraph, run, title)
+                            title_shapes.append((shape, run))
 
-            # Обработка и вставка фото (только если нужно для этого слайда)
-            image_path = track.get("image_path", "")
-            if image_path:
-                processed_img = self._load_and_process_image_optimized(image_path, make_bw)
-                if processed_img:
-                    self._insert_processed_image_optimized(slide, processed_img, slide_num, slide_height)
-                    # Очищаем ссылку на изображение
-                    del processed_img
+            # Обрабатываем артиста
+            if artist_shapes:
+                artist_shape, artist_run = artist_shapes[0]
+                
+                # Позиционируем согласно шаблону
+                if template_type == 1:
+                    # Шаблон 1: Вертикальное фото слева - текст ПРАВЕЕ и ВЫШЕ
+                    artist_shape.left = Inches(9.0)  # Еще правее
+                    artist_shape.top = Inches(0.8)   # Выше
+                elif template_type == 2:
+                    # Шаблон 2: Вертикальное фото справа - текст слева сверху
+                    artist_shape.left = Inches(0.5)
+                    artist_shape.top = Inches(1.0)
+                elif template_type == 3:
+                    # Шаблон 3: Горизонтальное фото - текст справа сверху
+                    artist_shape.left = Inches(8.0)
+                    artist_shape.top = Inches(1.0)
+                
+                artist_shape.text_frame.word_wrap = False
+                artist_shape.text_frame.auto_size = True
+                for paragraph in artist_shape.text_frame.paragraphs:
+                    paragraph.alignment = PP_ALIGN.LEFT
+                
+                self._apply_text_formatting_with_style(artist_run, artist, True, slide_num, artist)
+                
+                # Обрабатываем трек
+                if title_shapes:
+                    title_shape, title_run = title_shapes[0]
+                    
+                    # Позиционируем согласно шаблону
+                    if template_type == 1:
+                        # Шаблон 1: Вертикальное фото слева - текст ПРАВЕЕ и ВЫШЕ
+                        title_shape.left = Inches(9.0)  # Еще правее
+                        title_shape.top = Inches(2.0)   # Выше и ближе к артисту
+                    elif template_type == 2:
+                        # Шаблон 2: Вертикальное фото справа - текст слева сверху
+                        title_shape.left = Inches(0.5)
+                        title_shape.top = Inches(2.2)
+                    elif template_type == 3:
+                        # Шаблон 3: Горизонтальное фото - текст справа сверху
+                        title_shape.left = Inches(8.0)
+                        title_shape.top = Inches(2.2)
+                    
+                    title_shape.text_frame.word_wrap = False
+                    title_shape.text_frame.auto_size = True
+                    for paragraph in title_shape.text_frame.paragraphs:
+                        paragraph.alignment = PP_ALIGN.LEFT
+                    
+                    self._apply_text_formatting_with_style(title_run, title, False, slide_num, artist)
+                    
+                    # Удаляем остальные фигуры чтобы избежать колизий
+                    for shape, run in artist_shapes[1:] + title_shapes[1:]:
+                        slide.shapes._spTree.remove(shape._element)
+
+            # Обрабатываем кнопку согласно шаблону
+            if template_type == 2:
+                # Шаблон 2: перемещаем в левый угол и зеркалим
+                self._move_button_to_corner(slide, slide_height, slide_width, mirror=True)
+            else:
+                # Шаблоны 1 и 3: оставляем кнопку на месте
+                self._move_button_to_corner(slide, slide_height, slide_width, mirror=False)
 
         logger.info("✅ Замена текста и добавление фото завершены")
 
-    def _replace_placeholder_optimized(self, paragraph, run, text):
-        """Оптимизированная замена плейсхолдера"""
-        font_name = run.font.name
-        font_size = run.font.size
-        font_bold = run.font.bold
-        font_italic = run.font.italic
-        
-        paragraph.clear()
-        for word in text.split():
-            new_run = paragraph.add_run()
-            new_run.text = word + " "
-            if font_name:
-                new_run.font.name = font_name
-            if font_size:
-                new_run.font.size = font_size
-            new_run.font.bold = font_bold
-            new_run.font.italic = font_italic
-            new_run.font.color.rgb = (
-                RGBColor(255, 0, 0) if random.random() < 0.5 else RGBColor(0, 0, 0)
-            )
-
-    def _insert_processed_image_optimized(self, slide, processed_img, slide_num, slide_height):
-        """Оптимизированная вставка изображения"""
-        try:
-            temp_img_path = Path(tempfile.gettempdir()) / f"temp_photo_{slide_num}_{os.getpid()}.png"
-            processed_img.save(temp_img_path, "PNG", optimize=True)
-
-            dpi = 96
-            width = Inches(processed_img.width / dpi)
-            height = Inches(processed_img.height / dpi)
-            left = Inches(0)
-            top = slide_height - height
-
-            slide.shapes.add_picture(str(temp_img_path), left, top, width=width, height=height)
-            
-            # Сразу удаляем временный файл
-            try:
-                temp_img_path.unlink(missing_ok=True)
-            except:
-                pass
-
-            logger.debug(f"🖼️ Фото добавлено на слайд {slide_num}")
-
-        except Exception as e:
-            logger.error(f"❌ Ошибка вставки фото для слайда {slide_num}: {e}")
-
     def _process_audio_sequential(self, audio_tasks):
-        """Последовательная обработка аудио для экономии памяти"""
         results = []
         for i, task in enumerate(audio_tasks):
-            if i % 3 == 0:  # Проверяем память каждые 3 задачи
+            if i % 3 == 0:
                 if not self._check_memory_usage():
                     self._force_garbage_collection()
-                    time.sleep(0.5)  # Даем системе время освободить память
+                    time.sleep(0.5)
                     
             result = self._process_audio_segment_optimized(*task)
             if result:
@@ -319,14 +601,14 @@ class ModernPresentationGenerator:
         return results
 
     def generate(self, game_title: str, tracks: list = None, make_bw: bool = False, use_parallel: bool = False):
-        """Оптимизированная генерация презентации для сервера с 512MB RAM"""
-        
         logger.info("🚀 Запуск оптимизированной генерации презентации")
         
-        # Принудительная очистка памяти перед началом
+        # Очищаем кеши перед новой генерацией
         self._force_garbage_collection()
+        self._image_cache.clear()
+        self._red_words_per_slide.clear()
+        self._artist_red_words_cache.clear()  # Очищаем кеш красных слов
         
-        # Загружаем треки
         if not tracks:
             tracks = self._load_tracks_from_json_optimized()
         
@@ -345,13 +627,11 @@ class ModernPresentationGenerator:
 
         logger.info(f"🎵 Используется треков: {len(tracks)}")
 
-        # Создаем временную директорию
         tmp = Path(tempfile.mkdtemp(prefix="pptx_opt_"))
         extract_dir = tmp / "extracted"
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            # Извлекаем шаблон
             with zipfile.ZipFile(self.base_path, "r") as z:
                 z.extractall(extract_dir)
 
@@ -364,7 +644,6 @@ class ModernPresentationGenerator:
             out_root = Path.cwd() / "output" / f"presentation_{timestamp}"
             out_root.mkdir(parents=True, exist_ok=True)
 
-            # Замена заголовка
             slide1 = slides_dir / "slide1.xml"
             if slide1.exists():
                 content = slide1.read_text(encoding="utf-8")
@@ -372,7 +651,6 @@ class ModernPresentationGenerator:
                     slide1.write_text(content.replace("{{TITLE}}", game_title), encoding="utf-8")
                     logger.info(f"📝 Заголовок заменен на: {game_title}")
 
-            # Подготавливаем задачи для обработки аудио
             rels_files = sorted(
                 [f for f in slides_rels_dir.glob("slide*.xml.rels")],
                 key=lambda x: int(''.join(filter(str.isdigit, x.stem)) or 0)
@@ -395,6 +673,7 @@ class ModernPresentationGenerator:
                         track = track_for_13_and_44
                         audio_tasks.append((rels_path, track, slide_num, media_dir))
                         slide_track_map[slide_num] = track
+                        track_index += 1
                     continue
                 elif slide_num == 44:
                     if track_for_13_and_44:
@@ -412,20 +691,16 @@ class ModernPresentationGenerator:
                     audio_tasks.append((rels_path, track, slide_num, media_dir))
                     slide_track_map[slide_num] = track
 
-            # Обработка аудио - используем последовательную обработку для экономии памяти
             logger.info("🔄 Обработка аудио (последовательно для экономии памяти)...")
             results = self._process_audio_sequential(audio_tasks)
             
-            # Обновляем карту треков
             for slide_num, processed_track in results:
                 slide_track_map[slide_num] = processed_track
 
             logger.info(f"📊 Распределено треков по слайдам: {len(slide_track_map)}")
 
-            # Создаем финальный PPTX
             final_pptx = out_root / f"presentation_{timestamp}.pptx"
             
-            # Очищаем память перед сборкой
             self._force_garbage_collection()
             
             with zipfile.ZipFile(final_pptx, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zip_out:
@@ -435,17 +710,14 @@ class ModernPresentationGenerator:
                         arcname = os.path.relpath(fp, extract_dir)
                         zip_out.write(fp, arcname)
 
-            # Очищаем кэш изображений перед финальной обработкой
             self._image_cache.clear()
             self._force_garbage_collection()
 
-            # Финальная обработка текста и фото
             logger.info("🎨 Замена текста и добавление фото...")
             prs = Presentation(final_pptx)
             self._replace_placeholders_and_photos_optimized(prs, slide_track_map, make_bw)
             prs.save(final_pptx)
 
-            # Финальная очистка памяти
             del prs
             self._force_garbage_collection()
 
@@ -457,7 +729,6 @@ class ModernPresentationGenerator:
             logger.error(f"❌ Ошибка при генерации презентации: {e}")
             raise
         finally:
-            # Тщательная очистка
             self._image_cache.clear()
             self._force_garbage_collection()
             
@@ -468,7 +739,6 @@ class ModernPresentationGenerator:
                 logger.warning(f"⚠️ Не удалось полностью очистить временные файлы: {e}")
 
 
-# Пример использования
 if __name__ == "__main__":
     try:
         generator = ModernPresentationGenerator("template.pptx")
