@@ -5,18 +5,63 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime
-from pydub import AudioSegment
 import json
 import logging
 import random
+import gc
+import psutil
+import time
+import subprocess
+import sys
+
+# Функция для автоматической установки недостающих библиотек
+def install_missing_packages():
+    """Автоматически устанавливает недостающие пакеты"""
+    required_packages = {
+        'pydub': 'pydub>=0.25.1',
+        'PIL': 'Pillow>=10.0.0', 
+        'pptx': 'python-pptx>=0.6.23',
+        'psutil': 'psutil>=5.9.0'
+    }
+    
+    missing_packages = []
+    
+    for package, pip_name in required_packages.items():
+        try:
+            if package == 'PIL':
+                import PIL
+            else:
+                __import__(package)
+            logging.info(f"✅ {package} уже установлен")
+        except ImportError:
+            missing_packages.append(pip_name)
+            logging.warning(f"⚠️ {package} не найден, будет установлен")
+    
+    if missing_packages:
+        logging.info(f"📦 Устанавливаем недостающие пакеты: {', '.join(missing_packages)}")
+        try:
+            # Устанавливаем все недостающие пакеты одной командой
+            subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing_packages)
+            logging.info("✅ Все пакеты успешно установлены")
+            
+            # Перезагружаем текущий модуль чтобы импорты заработали
+            import importlib
+            importlib.invalidate_caches()
+            
+        except subprocess.CalledProcessError as e:
+            logging.error(f"❌ Ошибка установки пакетов: {e}")
+            raise
+
+# Устанавливаем недостающие пакеты при импорте
+install_missing_packages()
+
+# Теперь импортируем основные библиотеки
+from pydub import AudioSegment
 from PIL import Image, ImageOps
 from pptx import Presentation
 from pptx.util import Inches
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
-import gc
-import psutil
-import time
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +73,13 @@ class ModernPresentationGenerator:
         if not self.base_path.exists():
             logger.info(f"📦 Файл {base_path} не найден, пробуем скачать из Dropbox...")
             try:
-                from backend.dropbox_storage import DropboxStorage
+                # Пытаемся импортировать dropbox, если нет - установим при необходимости
+                try:
+                    from backend.dropbox_storage import DropboxStorage
+                except ImportError:
+                    logger.warning("⚠️ DropboxStorage не найден, пропускаем скачивание")
+                    raise FileNotFoundError(f"❌ Шаблон не найден: {self.base_path}")
+                
                 dropbox_storage = DropboxStorage()
                 if dropbox_storage.download_base_pptx(str(self.base_path)):
                     logger.info(f"✅ Файл успешно скачан: {self.base_path}")
@@ -571,7 +622,12 @@ class ModernPresentationGenerator:
                 for paragraph in artist_shape.text_frame.paragraphs:
                     paragraph.alignment = PP_ALIGN.LEFT
                 
-                self._apply_text_formatting_with_style(artist_run, artist, True, slide_num, artist)
+                try:
+                    self._apply_text_formatting_with_style(artist_run, artist, True, slide_num, artist)
+                except Exception as e:
+                    logger.error(f"❌ Ошибка форматирования артиста '{artist}': {e}")
+                    # Запасной вариант
+                    artist_run.text = artist
                 
                 # Обрабатываем трек
                 if title_shapes:
@@ -596,7 +652,12 @@ class ModernPresentationGenerator:
                     for paragraph in title_shape.text_frame.paragraphs:
                         paragraph.alignment = PP_ALIGN.LEFT
                     
-                    self._apply_text_formatting_with_style(title_run, title, False, slide_num, artist)
+                    try:
+                        self._apply_text_formatting_with_style(title_run, title, False, slide_num, artist)
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка форматирования трека '{title}': {e}")
+                        # Запасной вариант
+                        title_run.text = title
                     
                     # Удаляем остальные фигуры чтобы избежать колизий
                     for shape, run in artist_shapes[1:] + title_shapes[1:]:
