@@ -170,31 +170,49 @@ class ModernPresentationGenerator:
             return "vertical"  # По умолчанию вертикальное
 
     def _load_and_process_image_optimized(self, image_path: str, make_bw: bool):
+        """Загружает и обрабатывает изображение с улучшенной обработкой ошибок"""
         if not self._check_memory_usage():
             self._force_garbage_collection()
-            
+        
         cache_key = f"{image_path}_{make_bw}"
         if cache_key in self._image_cache:
             logger.debug(f"🎨 Используем кешированное изображение: {cache_key}")
             return self._image_cache[cache_key]
-            
+        
         if len(self._image_cache) >= self.image_cache_size:
             removed_key = next(iter(self._image_cache))
             del self._image_cache[removed_key]
             logger.debug(f"🗑️ Удален из кеша: {removed_key}")
-            
+        
         path = Path(image_path)
         if not path.exists():
             logger.error(f"❌ Файл изображения не найден: {image_path}")
             return None
-            
+        
         try:
             logger.debug(f"🖼️ Загрузка изображения: {image_path}, BW: {make_bw}")
+        
+            # Проверяем доступность файла
+            if not path.is_file():
+                logger.error(f"❌ {image_path} не является файлом")
+                return None
+            
+            # Проверяем размер файла
+            file_size = path.stat().st_size
+            if file_size == 0:
+                logger.error(f"❌ Файл {image_path} пустой")
+                return None
+            
             with Image.open(path) as img:
+                # Проверяем, что изображение загружено корректно
+                if img is None:
+                    logger.error(f"❌ Не удалось загрузить изображение: {image_path}")
+                    return None
+                
                 # Сохраняем оригинальные размеры
                 original_width, original_height = img.size
                 logger.debug(f"📏 Размеры оригинала: {original_width}x{original_height}, режим: {img.mode}")
-                
+            
                 # Конвертируем в RGBA если нужно
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
@@ -214,9 +232,11 @@ class ModernPresentationGenerator:
                 self._image_cache[cache_key] = img
                 logger.debug(f"✅ Изображение успешно обработано и закешировано")
                 return img
-                
+            
         except Exception as e:
             logger.error(f"❌ Ошибка обработки изображения {image_path}: {e}")
+            import traceback
+            logger.error(f"🔍 Детали ошибки изображения:\n{traceback.format_exc()}")
             return None
 
     def _apply_fade_effects(self, audio_segment):
@@ -627,48 +647,68 @@ class ModernPresentationGenerator:
     def _insert_artist_photo(self, slide, processed_img, slide_height, slide_width, template_type):
         """Вставляет фото артиста согласно выбранному шаблону"""
         try:
+            # Проверяем, что processed_img не None
+            if processed_img is None:
+                logger.error("❌ processed_img is None, невозможно вставить фото")
+                return
+            
             temp_img_path = Path(tempfile.gettempdir()) / f"temp_photo_{random.randint(1000,9999)}.png"
+        
+            # Сохраняем изображение во временный файл
             processed_img.save(temp_img_path, "PNG", optimize=True)
+        
+            # Проверяем, что файл создался и доступен для чтения
+            if not temp_img_path.exists():
+                logger.error(f"❌ Временный файл не создан: {temp_img_path}")
+                return
+            
+            try:
+                # Проверяем, что файл можно открыть
+                with open(temp_img_path, 'rb') as f:
+                    f.read(100)  # Читаем первые 100 байт для проверки
+            except Exception as e:
+                logger.error(f"❌ Временный файл поврежден: {e}")
+                return
 
             img_width_px, img_height_px = processed_img.size
             dpi = 96
-            
+        
             # Конвертируем пиксели в дюймы
             width_inches = img_width_px / dpi
             height_inches = img_height_px / dpi
-            
+        
             logger.debug(f"📐 Размеры фото в дюймах: {width_inches:.2f}x{height_inches:.2f}")
-            
+        
             # Увеличиваем фото для ВСЕХ шаблонов
             if template_type == 1:
                 # Шаблон 1: Вертикальное фото слева - УВЕЛИЧИВАЕМ ЕЩЕ БОЛЬШЕ
                 scale_factor = 1.2  # Увеличиваем на 60%
                 width_inches *= scale_factor
                 height_inches *= scale_factor
-                
+            
                 # Шаблон 1: Вертикальное фото слева снизу (БОЛЬШОЕ)
                 left = Inches(0)
                 top = slide_height - Inches(height_inches)
                 width = Inches(width_inches)
                 height = Inches(height_inches)
-                
+            
             elif template_type == 2:
                 # Шаблон 2: Вертикальное фото справа - ТОЖЕ УВЕЛИЧИВАЕМ
                 scale_factor = 1.15  # Увеличиваем на 50%
                 width_inches *= scale_factor
                 height_inches *= scale_factor
-                
+            
                 left = slide_width - Inches(width_inches)
                 top = slide_height - Inches(height_inches)
                 width = Inches(width_inches)
                 height = Inches(height_inches)
-                
+            
             elif template_type == 3:
                 # Шаблон 3: Горизонтальное фото - ТОЖЕ УВЕЛИЧИВАЕМ
                 scale_factor = 1.1  # Увеличиваем на 40%
                 width_inches *= scale_factor
                 height_inches *= scale_factor
-                
+            
                 left = Inches(0)
                 top = slide_height - Inches(height_inches)
                 width = Inches(width_inches)
@@ -685,18 +725,22 @@ class ModernPresentationGenerator:
                 height = slide_height - top
 
             logger.debug(f"📍 Позиция фото: left={left}, top={top}, width={width}, height={height}")
-            
+        
+            # Вставляем фото в слайд
             slide.shapes.add_picture(str(temp_img_path), left, top, width=width, height=height)
-            
+        
+            # Очищаем временный файл
             try:
                 temp_img_path.unlink(missing_ok=True)
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"⚠️ Не удалось удалить временный файл: {e}")
 
             logger.info(f"🖼️ Фото добавлено по шаблону {template_type} (увеличено)")
 
         except Exception as e:
             logger.error(f"❌ Ошибка вставки фото: {e}")
+            import traceback
+            logger.error(f"🔍 Детали ошибки:\n{traceback.format_exc()}")
 
     def _replace_placeholders_and_photos_optimized(self, prs, slide_track_map, make_bw: bool):
         slide_height = prs.slide_height
