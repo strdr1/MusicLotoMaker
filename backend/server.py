@@ -1945,7 +1945,336 @@ async def download_file(filename: str):
         logger.error(f"❌ Критическая ошибка при загрузке файла {filename}: {e}")
         logger.exception("Полная трассировка ошибки:")
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
+# =========================
+# IMPORT/EXPORT SYSTEM (LOW RAM USAGE)
+# =========================
 
+import zipfile
+import shutil
+from pathlib import Path
+
+@app.get("/api/export/all-data")
+async def export_all_data():
+    """Экспорт всех данных в ZIP архив (максимум 100MB RAM)"""
+    try:
+        logger.info("📦 Начало экспорта всех данных (LOW RAM mode)...")
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_filename = f"music_loto_export_{timestamp}.zip"
+        zip_path = os.path.join(BASE_DIR, "temp", zip_filename)
+        
+        # ОЧЕНЬ АГРЕССИВНАЯ ОПТИМИЗАЦИЯ ПАМЯТИ
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as zipf:
+            # 1. track_data.json (маленький файл)
+            track_data_path = os.path.join(BASE_DIR, "track_data.json")
+            if os.path.exists(track_data_path):
+                zipf.write(track_data_path, "track_data.json")
+                logger.info("✅ track_data.json добавлен")
+            
+            # 2. Папка images - ОЧЕНЬ экономно
+            images_dir = os.path.join(BASE_DIR, "images")
+            if os.path.exists(images_dir):
+                image_files = []
+                for root, dirs, files in os.walk(images_dir):
+                    for file in files:
+                        if file.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                            image_files.append(os.path.join(root, file))
+                
+                # Обрабатываем по 10 файлов за раз
+                for i, file_path in enumerate(image_files):
+                    if i % 10 == 0 and i > 0:
+                        logger.info(f"🖼️ Обработано {i}/{len(image_files)} изображений")
+                        import gc
+                        gc.collect()  # Принудительная очистка памяти
+                    
+                    arcname = os.path.join("images", os.path.relpath(file_path, images_dir))
+                    zipf.write(file_path, arcname)
+                
+                logger.info(f"✅ Изображений добавлено: {len(image_files)}")
+            
+            # 3. Папка downloads - САМАЯ ЭКОНОМНАЯ ОБРАБОТКА
+            downloads_dir = os.path.join(BASE_DIR, "downloads")
+            if os.path.exists(downloads_dir):
+                # Получаем список файлов БЕЗ загрузки в память
+                audio_files = []
+                total_size = 0
+                
+                for root, dirs, files in os.walk(downloads_dir):
+                    for file in files:
+                        if file.lower().endswith(('.mp3', '.wav', '.flac', '.m4a', '.aac')):
+                            file_path = os.path.join(root, file)
+                            file_size = os.path.getsize(file_path)
+                            
+                            # ФИЛЬТР: пропускаем очень большие файлы (>50MB)
+                            if file_size > 50 * 1024 * 1024:
+                                logger.warning(f"⚠️ Пропущен большой файл: {file} ({file_size/1024/1024:.1f}MB)")
+                                continue
+                                
+                            audio_files.append((file_path, file_size))
+                            total_size += file_size
+                
+                logger.info(f"🎵 Найдено {len(audio_files)} аудиофайлов (~{total_size/1024/1024:.1f}MB)")
+                
+                # Обрабатываем по 5 файлов за раз для экономии RAM
+                processed = 0
+                skipped_due_to_size = 0
+                
+                for i, (file_path, file_size) in enumerate(audio_files):
+                    # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА РАЗМЕРА
+                    if file_size > 30 * 1024 * 1024:  # >30MB
+                        skipped_due_to_size += 1
+                        continue
+                    
+                    if processed % 5 == 0 and processed > 0:
+                        logger.info(f"🎵 Добавлено {processed}/{len(audio_files)} аудиофайлов")
+                        import gc
+                        gc.collect()  # Жесткая очистка памяти
+                    
+                    try:
+                        arcname = os.path.join("downloads", os.path.relpath(file_path, downloads_dir))
+                        zipf.write(file_path, arcname)
+                        processed += 1
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка добавления {file_path}: {e}")
+                        continue
+                
+                logger.info(f"✅ Аудиофайлов добавлено: {processed}, пропущено: {skipped_due_to_size}")
+        
+        final_size = os.path.getsize(zip_path)
+        logger.info(f"✅ Экспорт завершен: {zip_filename} ({final_size / 1024 / 1024:.2f} MB)")
+        
+        # Получаем актуальные данные для ответа
+        tracks_count = media_library.get_tracks_count()
+        images_count = len([f for f in os.listdir(images_dir) if os.path.isfile(os.path.join(images_dir, f))]) if os.path.exists(images_dir) else 0
+        downloads_count = len([f for f in os.listdir(downloads_dir) if os.path.isfile(os.path.join(downloads_dir, f))]) if os.path.exists(downloads_dir) else 0
+        
+        return {
+            "success": True,
+            "message": "Экспорт данных завершен",
+            "filename": zip_filename,
+            "download_url": f"/api/download/{zip_filename}",
+            "size": final_size,
+            "info": {
+                "tracks_count": tracks_count,
+                "images_count": images_count,
+                "downloads_count": downloads_count,
+                "estimated_size_mb": round(final_size / 1024 / 1024, 2)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка экспорта данных: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/import/all-data")
+async def import_all_data(file: UploadFile = File(...)):
+    """Импорт данных из ZIP архива (максимум 100MB RAM)"""
+    try:
+        logger.info(f"📥 Начало импорта (LOW RAM mode)...")
+        
+        if not file.filename.endswith('.zip'):
+            raise HTTPException(status_code=400, detail="Файл должен быть в формате ZIP")
+        
+        # СОЗДАЕМ ВРЕМЕННУЮ ПАПКУ
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        import_dir = os.path.join(BASE_DIR, "temp", f"import_{timestamp}")
+        os.makedirs(import_dir, exist_ok=True)
+        
+        zip_path = os.path.join(import_dir, file.filename)
+        
+        # ЗАПИСЫВАЕМ ФАЙЛ ЧАНКАМИ (не загружаем весь файл в RAM)
+        with open(zip_path, "wb") as f:
+            # Читаем файл частями по 1MB
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1MB chunks
+                if not chunk:
+                    break
+                f.write(chunk)
+        
+        logger.info("✅ Файл сохранен, начинаем распаковку...")
+        
+        # РАСПАКОВКА С КОНТРОЛЕМ ПАМЯТИ
+        imported_items = []
+        
+        with zipfile.ZipFile(zip_path, 'r') as zipf:
+            # Получаем список файлов БЕЗ распаковки
+            file_list = zipf.namelist()
+            
+            # 1. Восстанавливаем track_data.json первым (маленький файл)
+            if "track_data.json" in file_list:
+                zipf.extract("track_data.json", import_dir)
+                track_data_src = os.path.join(import_dir, "track_data.json")
+                track_data_dst = os.path.join(BASE_DIR, "track_data.json")
+                
+                shutil.copy2(track_data_src, track_data_dst)
+                imported_items.append("track_data.json")
+                
+                # Перезагружаем медиатеку
+                media_library.load_from_file()
+                logger.info("✅ track_data.json восстановлен")
+            
+            # 2. Восстанавливаем images по частям
+            image_files = [f for f in file_list if f.startswith("images/") and not f.endswith('/')]
+            if image_files:
+                images_dst = os.path.join(BASE_DIR, "images")
+                if os.path.exists(images_dst):
+                    shutil.rmtree(images_dst)
+                os.makedirs(images_dst)
+                
+                # Распаковываем по 20 файлов за раз
+                for i in range(0, len(image_files), 20):
+                    batch = image_files[i:i+20]
+                    for file_in_zip in batch:
+                        zipf.extract(file_in_zip, import_dir)
+                    
+                    # Очищаем память после каждой пачки
+                    if i > 0 and i % 100 == 0:
+                        import gc
+                        gc.collect()
+                
+                # Копируем всю папку images
+                images_src = os.path.join(import_dir, "images")
+                if os.path.exists(images_src):
+                    for item in os.listdir(images_src):
+                        s = os.path.join(images_src, item)
+                        d = os.path.join(images_dst, item)
+                        if os.path.isdir(s):
+                            shutil.copytree(s, d)
+                        else:
+                            shutil.copy2(s, d)
+                    
+                    image_count = len([f for f in os.listdir(images_dst) if os.path.isfile(os.path.join(images_dst, f))])
+                    imported_items.append(f"images ({image_count} файлов)")
+                    logger.info(f"✅ Папка images восстановлена ({image_count} файлов)")
+            
+            # 3. Восстанавливаем downloads по частям (САМОЕ ЭКОНОМНО)
+            audio_files = [f for f in file_list if f.startswith("downloads/") and not f.endswith('/')]
+            if audio_files:
+                downloads_dst = os.path.join(BASE_DIR, "downloads")
+                if os.path.exists(downloads_dst):
+                    shutil.rmtree(downloads_dst)
+                os.makedirs(downloads_dst)
+                
+                # Распаковываем по 10 файлов за раз (аудио тяжелые)
+                processed = 0
+                for i in range(0, len(audio_files), 10):
+                    batch = audio_files[i:i+10]
+                    for file_in_zip in batch:
+                        try:
+                            zipf.extract(file_in_zip, import_dir)
+                            processed += 1
+                            
+                            # Логируем прогресс каждые 50 файлов
+                            if processed % 50 == 0:
+                                logger.info(f"🎵 Распаковано {processed}/{len(audio_files)} аудиофайлов")
+                                import gc
+                                gc.collect()
+                                
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка распаковки {file_in_zip}: {e}")
+                            continue
+                
+                # Копируем аудиофайлы
+                downloads_src = os.path.join(import_dir, "downloads")
+                if os.path.exists(downloads_src):
+                    audio_count = 0
+                    for root, dirs, files in os.walk(downloads_src):
+                        for file in files:
+                            if file.lower().endswith(('.mp3', '.wav', '.flac', '.m4a', '.aac')):
+                                src_path = os.path.join(root, file)
+                                dst_path = os.path.join(downloads_dst, file)
+                                shutil.copy2(src_path, dst_path)
+                                audio_count += 1
+                                
+                                # Очистка памяти каждые 30 файлов
+                                if audio_count % 30 == 0:
+                                    import gc
+                                    gc.collect()
+                    
+                    imported_items.append(f"downloads ({audio_count} файлов)")
+                    logger.info(f"✅ Папка downloads восстановлена ({audio_count} файлов)")
+        
+        # ФИНАЛЬНАЯ ОЧИСТКА
+        shutil.rmtree(import_dir)
+        
+        tracks_count = media_library.get_tracks_count()
+        logger.info(f"✅ Импорт завершен: {len(imported_items)} компонентов, {tracks_count} треков")
+        
+        return {
+            "success": True,
+            "message": "Импорт данных завершен успешно",
+            "imported_items": imported_items,
+            "tracks_count": tracks_count
+        }
+        
+    except zipfile.BadZipFile:
+        logger.error("❌ Ошибка: поврежденный ZIP архив")
+        return {"success": False, "error": "Файл поврежден или не является ZIP архивом"}
+    except Exception as e:
+        logger.error(f"❌ Ошибка импорта данных: {e}")
+        # Очищаем временные файлы при ошибке
+        try:
+            if 'import_dir' in locals() and os.path.exists(import_dir):
+                shutil.rmtree(import_dir)
+        except:
+            pass
+        return {"success": False, "error": str(e)}
+
+@app.get("/api/export/info")
+async def get_export_info():
+    """Получить точную информацию о данных для экспорта"""
+    try:
+        tracks_count = media_library.get_tracks_count()
+        
+        images_dir = os.path.join(BASE_DIR, "images")
+        downloads_dir = os.path.join(BASE_DIR, "downloads")
+        
+        # ТОЧНЫЙ ПОДСЧЕТ
+        images_count = 0
+        downloads_count = 0
+        total_size = 0
+        
+        if os.path.exists(images_dir):
+            for file in os.listdir(images_dir):
+                file_path = os.path.join(images_dir, file)
+                if os.path.isfile(file_path) and file.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    images_count += 1
+                    total_size += os.path.getsize(file_path)
+        
+        if os.path.exists(downloads_dir):
+            for file in os.listdir(downloads_dir):
+                file_path = os.path.join(downloads_dir, file)
+                if os.path.isfile(file_path) and file.lower().endswith(('.mp3', '.wav', '.flac', '.m4a', '.aac')):
+                    downloads_count += 1
+                    total_size += os.path.getsize(file_path)
+        
+        # Добавляем размер track_data.json
+        track_data_path = os.path.join(BASE_DIR, "track_data.json")
+        if os.path.exists(track_data_path):
+            total_size += os.path.getsize(track_data_path)
+        
+        # Реальный размер с учетом компрессии (примерно 60% от исходного)
+        estimated_size_mb = round((total_size * 0.6) / 1024 / 1024, 2)
+        
+        return {
+            "success": True,
+            "export_info": {
+                "tracks_count": tracks_count,
+                "images_count": images_count,
+                "downloads_count": downloads_count,
+                "estimated_size_mb": estimated_size_mb,
+                "actual_size_mb": round(total_size / 1024 / 1024, 2),
+                "components": [
+                    "track_data.json (метаданные треков)",
+                    "images/ (фото артистов)",
+                    "downloads/ (аудиофайлы)"
+                ]
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения информации об экспорте: {e}")
+        return {"success": False, "error": str(e)}
 if __name__ == "__main__":
     import uvicorn
     logger.info("🎵 Music Loto Maker Server v3.0 Starting...")

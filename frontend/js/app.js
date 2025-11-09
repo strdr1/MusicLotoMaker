@@ -207,7 +207,552 @@ function setupEventListeners() {
         });
     }
 }
+// =========================
+// IMPORT/EXPORT FUNCTIONS (COMPLETE)
+// =========================
 
+let operationsHistory = JSON.parse(localStorage.getItem('importExportHistory') || '[]');
+
+// Загрузка статистики для экспорта
+async function loadExportStats() {
+    try {
+        const response = await fetch(`${API_BASE}/export/info`);
+        const data = await response.json();
+
+        if (data.success) {
+            const info = data.export_info;
+
+            // Обновляем статистику - проверяем на undefined
+            document.getElementById('statTracks').textContent = info.tracks_count || 0;
+            document.getElementById('statImages').textContent = info.images_count || 0;
+            document.getElementById('statDownloads').textContent = info.downloads_count || 0;
+
+            // Используем actual_size_mb если есть, иначе estimated_size_mb
+            const size = info.actual_size_mb || info.estimated_size_mb || 0;
+            document.getElementById('totalSize').innerHTML = `Примерный размер: <strong>${size} MB</strong>`;
+
+            updateOperationsHistory();
+        } else {
+            console.error('Ошибка загрузки статистики:', data.error);
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки статистики:', error);
+    }
+}
+
+// Показать прогресс операции
+function showImportExportProgress(message, percent) {
+    const progressSection = document.getElementById('importExportProgress');
+    const statusElement = document.getElementById('importExportStatus');
+    const percentElement = document.getElementById('importExportPercent');
+    const progressBar = document.getElementById('importExportProgressBar');
+
+    if (progressSection) {
+        progressSection.style.display = 'block';
+        statusElement.textContent = message;
+        percentElement.textContent = `${percent}%`;
+        progressBar.style.width = `${percent}%`;
+
+        if (percent < 30) {
+            progressBar.style.background = 'var(--warning)';
+        } else if (percent < 70) {
+            progressBar.style.background = 'var(--primary)';
+        } else {
+            progressBar.style.background = 'var(--success)';
+        }
+    }
+}
+
+// Скрыть прогресс
+function hideImportExportProgress() {
+    const progressSection = document.getElementById('importExportProgress');
+    if (progressSection) {
+        progressSection.style.display = 'none';
+    }
+}
+
+// Добавить операцию в историю
+function addOperationToHistory(type, filename, size, success = true) {
+    const operation = {
+        id: Date.now(),
+        type: type,
+        filename: filename,
+        size: size,
+        success: success,
+        date: new Date().toLocaleString('ru-RU'),
+        timestamp: Date.now()
+    };
+
+    operationsHistory.unshift(operation);
+    operationsHistory = operationsHistory.slice(0, 10);
+
+    localStorage.setItem('importExportHistory', JSON.stringify(operationsHistory));
+    updateOperationsHistory();
+}
+
+// Обновить отображение истории операций
+function updateOperationsHistory() {
+    const operationsList = document.getElementById('operationsList');
+    if (!operationsList) return;
+
+    if (operationsHistory.length === 0) {
+        operationsList.innerHTML = `
+            <div class="empty-state">
+                <div class="icon">📊</div>
+                <p>Операции не выполнялись</p>
+            </div>
+        `;
+        return;
+    }
+
+    operationsList.innerHTML = operationsHistory.map(op => `
+        <div class="operation-item ${op.success ? '' : 'failed'}">
+            <div class="operation-info">
+                <div class="operation-icon ${op.type}">
+                    ${op.type === 'export' ? '📤' : '📥'}
+                </div>
+                <div class="operation-details">
+                    <div class="operation-type">
+                        ${op.type === 'export' ? 'Экспорт данных' : 'Импорт данных'}
+                        ${!op.success ? ' (Ошибка)' : ''}
+                    </div>
+                    <div class="operation-date">${op.date}</div>
+                </div>
+            </div>
+            <div class="operation-size">
+                ${op.size ? `${(op.size / 1024 / 1024).toFixed(1)} MB` : '—'}
+            </div>
+        </div>
+    `).join('');
+}
+
+// Функция экспорта всех данных
+async function exportAllData() {
+    const exportBtn = document.getElementById('exportBtn');
+    const originalText = exportBtn.innerHTML;
+
+    try {
+        exportBtn.disabled = true;
+        exportBtn.innerHTML = '📦 Подготовка...';
+
+        showImportExportProgress('Получение информации об экспорте...', 10);
+
+        const infoResponse = await fetch(`${API_BASE}/export/info`);
+        const infoData = await infoResponse.json();
+
+        if (!infoData.success) {
+            throw new Error(infoData.error || 'Ошибка получения информации');
+        }
+
+        const exportInfo = infoData.export_info;
+
+        showImportExportProgress('Подтверждение операции...', 20);
+
+        const confirmed = confirm(
+            `Экспорт всех данных:\n\n` +
+            `🎵 Треков: ${exportInfo.tracks_count || 0}\n` +
+            `🖼️ Фото: ${exportInfo.images_count || 0}\n` +
+            `🎵 Аудиофайлов: ${exportInfo.downloads_count || 0}\n` +
+            `📊 Примерный размер: ${exportInfo.estimated_size_mb || exportInfo.actual_size_mb || 0} MB\n\n` +
+            `Продолжить экспорт?`
+        );
+
+        if (!confirmed) {
+            showNotification('Экспорт отменен', 'info');
+            hideImportExportProgress();
+            return;
+        }
+
+        showImportExportProgress('Создание архива...', 40);
+        showNotification('📦 Создание архива данных...', 'info');
+
+        const response = await fetch(`${API_BASE}/export/all-data`);
+        const result = await response.json();
+
+        showImportExportProgress('Финальная обработка...', 80);
+
+        if (result.success) {
+            const downloadLink = document.createElement('a');
+            downloadLink.href = result.download_url;
+            downloadLink.download = result.filename;
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+
+            showImportExportProgress('Экспорт завершен!', 100);
+
+            addOperationToHistory('export', result.filename, result.size, true);
+
+            showNotification(`✅ Экспорт завершен! Файл: ${result.filename}`, 'success');
+
+            setTimeout(() => {
+                showExportResults(result);
+                hideImportExportProgress();
+            }, 2000);
+        } else {
+            throw new Error(result.error || 'Ошибка экспорта');
+        }
+
+    } catch (error) {
+        console.error('❌ Ошибка экспорта:', error);
+        showImportExportProgress('Ошибка экспорта', 0);
+        showNotification(`❌ Ошибка экспорта: ${error.message}`, 'error');
+
+        addOperationToHistory('export', null, null, false);
+
+        setTimeout(hideImportExportProgress, 3000);
+    } finally {
+        exportBtn.disabled = false;
+        exportBtn.innerHTML = originalText;
+    }
+}
+
+// Функция импорта всех данных
+async function importAllData() {
+    const importBtn = document.getElementById('importBtn');
+    const originalText = importBtn.innerHTML;
+
+    try {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.zip';
+
+        input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) {
+                importBtn.disabled = false;
+                importBtn.innerHTML = originalText;
+                return;
+            }
+
+            await processImportFile(file, importBtn, originalText);
+        };
+
+        importBtn.disabled = true;
+        importBtn.innerHTML = '📥 Выбор файла...';
+        input.click();
+
+    } catch (error) {
+        console.error('❌ Ошибка импорта:', error);
+        showNotification(`❌ Ошибка импорта: ${error.message}`, 'error');
+        importBtn.disabled = false;
+        importBtn.innerHTML = originalText;
+    }
+}
+
+// Обработка файла импорта с прогрессом
+async function processImportFile(file, importBtn, originalText) {
+    try {
+        showImportExportProgress('Проверка файла...', 5);
+
+        // ПРЕДУПРЕЖДЕНИЕ О БОЛЬШИХ ФАЙЛАХ
+        if (file.size > 500 * 1024 * 1024) {
+            const confirmed = confirm(
+                `ВНИМАНИЕ! Большой файл (${(file.size / 1024 / 1024).toFixed(1)}MB)\n\n` +
+                `Импорт может занять несколько минут.\n` +
+                `Продолжить импорт?`
+            );
+
+            if (!confirmed) {
+                showNotification('Импорт отменен', 'info');
+                hideImportExportProgress();
+                importBtn.disabled = false;
+                importBtn.innerHTML = originalText;
+                return;
+            }
+        }
+
+        const confirmed = confirm(
+            `ВНИМАНИЕ!\n\n` +
+            `Импорт данных ЗАМЕНИТ все текущие данные:\n` +
+            `• Метаданные треков\n` +
+            `• Фото артистов\n` +
+            `• Аудиофайлы\n\n` +
+            `Текущие данные будут потеряны!\n\n` +
+            `Продолжить импорт?`
+        );
+
+        if (!confirmed) {
+            showNotification('Импорт отменен', 'info');
+            hideImportExportProgress();
+            importBtn.disabled = false;
+            importBtn.innerHTML = originalText;
+            return;
+        }
+
+        showImportExportProgress('Подготовка...', 10);
+        showNotification('📥 Начало импорта данных...', 'info');
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        // Используем XMLHttpRequest для отслеживания прогресса загрузки
+        const xhr = new XMLHttpRequest();
+
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+                const percent = Math.min(90, 10 + (e.loaded / e.total) * 80);
+                showImportExportProgress(`Загрузка архива... ${Math.round(percent)}%`, percent);
+            }
+        };
+
+        const importPromise = new Promise((resolve, reject) => {
+            xhr.onload = () => {
+                if (xhr.status === 200) {
+                    try {
+                        const result = JSON.parse(xhr.responseText);
+                        resolve(result);
+                    } catch (e) {
+                        reject(new Error('Ошибка parsing ответа'));
+                    }
+                } else {
+                    reject(new Error(`HTTP error: ${xhr.status}`));
+                }
+            };
+
+            xhr.onerror = () => reject(new Error('Network error'));
+            xhr.ontimeout = () => reject(new Error('Timeout'));
+        });
+
+        xhr.open('POST', `${API_BASE}/import/all-data`);
+        xhr.timeout = 600000; // 10 минут таймаут
+        xhr.send(formData);
+
+        showImportExportProgress('Обработка архива...', 90);
+
+        const result = await importPromise;
+
+        showImportExportProgress('Завершение...', 95);
+
+        if (result.success) {
+            showImportExportProgress('Импорт завершен!', 100);
+
+            addOperationToHistory('import', file.name, file.size, true);
+
+            showNotification(`✅ Импорт завершен успешно!`, 'success');
+
+            // Отложенная перезагрузка данных
+            setTimeout(() => {
+                loadTracks();
+                loadLocalFilesInfo();
+                updateTracksCount();
+                loadSystemStatus();
+                loadExportStats();
+                hideImportExportProgress();
+            }, 1000);
+
+            // Показываем детали импорта
+            showImportResults(result);
+        } else {
+            throw new Error(result.error || 'Ошибка импорта');
+        }
+
+    } catch (error) {
+        console.error('❌ Ошибка обработки файла:', error);
+        showImportExportProgress('Ошибка импорта', 0);
+        showNotification(`❌ Ошибка импорта: ${error.message}`, 'error');
+
+        addOperationToHistory('import', file ? file.name : null, file ? file.size : null, false);
+
+        setTimeout(hideImportExportProgress, 3000);
+    } finally {
+        importBtn.disabled = false;
+        importBtn.innerHTML = originalText;
+    }
+}
+
+// Показать результаты экспорта
+function showExportResults(result) {
+    const info = result.info || {};
+    const message =
+        `📊 Результаты экспорта:\n\n` +
+        `🎵 Треков: ${info.tracks_count || 'N/A'}\n` +
+        `🖼️ Фото: ${info.images_count || 'N/A'}\n` +
+        `🎵 Аудиофайлов: ${info.downloads_count || 'N/A'}\n` +
+        `📁 Файл: ${result.filename}\n` +
+        `📦 Размер: ${(result.size / 1024 / 1024).toFixed(2)} MB`;
+
+    alert(message);
+}
+
+// Показать результаты импорта
+function showImportResults(result) {
+    const items = result.imported_items?.join('\n• ') || 'Нет данных';
+    const message =
+        `📊 Результаты импорта:\n\n` +
+        `Импортированные компоненты:\n• ${items}\n\n` +
+        `🎵 Треков в медиатеке: ${result.tracks_count || 0}`;
+
+    alert(message);
+}
+
+// Добавить HTML секцию импорта/экспорта в интерфейс
+function addImportExportSection() {
+    const statusTab = document.getElementById('status');
+    if (!statusTab) return;
+
+    // Проверяем, не добавлена ли уже секция
+    if (document.getElementById('importExportSection')) return;
+
+    const importExportHTML = `
+        <div class="import-export-section" id="importExportSection">
+            <div class="generator-card">
+                <h2>📦 Импорт/Экспорт данных</h2>
+                <p class="subtitle">Резервное копирование и восстановление всех данных системы</p>
+                
+                <div class="info-box" style="background: var(--info-bg); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <h4>🔄 Что входит в архивацию:</h4>
+                    <div class="export-components">
+                        <div class="component-item">
+                            <span class="component-icon">📊</span>
+                            <div class="component-info">
+                                <strong>track_data.json</strong>
+                                <span>Все метаданные треков</span>
+                            </div>
+                        </div>
+                        <div class="component-item">
+                            <span class="component-icon">🖼️</span>
+                            <div class="component-info">
+                                <strong>Папка images/</strong>
+                                <span>Фото артистов</span>
+                            </div>
+                        </div>
+                        <div class="component-item">
+                            <span class="component-icon">🎵</span>
+                            <div class="component-info">
+                                <strong>Папка downloads/</strong>
+                                <span>Аудиофайлы треков</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="import-export-stats" id="exportStats" style="margin-bottom: 20px;">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-icon">🎵</div>
+                            <div class="stat-info">
+                                <span class="stat-label">Треков</span>
+                                <span class="stat-value" id="statTracks">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">🖼️</div>
+                            <div class="stat-info">
+                                <span class="stat-label">Фото</span>
+                                <span class="stat-value" id="statImages">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">🎵</div>
+                            <div class="stat-info">
+                                <span class="stat-label">Аудиофайлов</span>
+                                <span class="stat-value" id="statDownloads">0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="total-size" id="totalSize">
+                        Примерный размер: <strong>0 MB</strong>
+                    </div>
+                </div>
+
+                <div class="import-export-actions">
+                    <button class="btn btn-primary btn-large" onclick="exportAllData()" id="exportBtn">
+                        <span class="btn-icon">📤</span>
+                        <span class="btn-text">Экспорт всех данных</span>
+                    </button>
+                    
+                    <button class="btn btn-warning btn-large" onclick="importAllData()" id="importBtn">
+                        <span class="btn-icon">📥</span>
+                        <span class="btn-text">Импорт данных</span>
+                    </button>
+                </div>
+
+                <div class="warning-box">
+                    <div class="warning-icon">⚠️</div>
+                    <div class="warning-content">
+                        <strong>Внимание!</strong> При импорте все текущие данные будут полностью заменены. 
+                        Создавайте резервные копии перед импортом.
+                    </div>
+                </div>
+
+                <!-- Прогресс-бар для операций -->
+                <div id="importExportProgress" class="progress-section" style="display: none; margin-top: 20px;">
+                    <div class="progress-header">
+                        <span id="importExportStatus">Обработка...</span>
+                        <span id="importExportPercent">0%</span>
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-bar" id="importExportProgressBar" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- История операций -->
+                <div class="operations-history" style="margin-top: 25px;">
+                    <h4>📋 Последние операции:</h4>
+                    <div id="operationsList" class="operations-list">
+                        <div class="empty-state">
+                            <div class="icon">📊</div>
+                            <p>Операции не выполнялись</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Вставляем после основного контента статуса
+    const statusContent = statusTab.querySelector('.generator-card');
+    if (statusContent) {
+        statusContent.insertAdjacentHTML('afterend', importExportHTML);
+    } else {
+        statusTab.innerHTML += importExportHTML;
+    }
+
+    // Загружаем статистику
+    loadExportStats();
+}
+
+// Инициализация при загрузке страницы
+document.addEventListener('DOMContentLoaded', function () {
+    // Добавляем секцию импорта/экспорта
+    setTimeout(addImportExportSection, 1000);
+
+    // Обновляем статистику при переключении на вкладку статуса
+    const statusTab = document.querySelector('[data-tab="status"]');
+    if (statusTab) {
+        statusTab.addEventListener('click', function () {
+            setTimeout(loadExportStats, 500);
+        });
+    }
+});
+
+// Обновляем инициализацию вкладок
+function initTabs() {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+            btn.classList.add('active');
+            document.getElementById(btn.dataset.tab).classList.add('active');
+
+            if (btn.dataset.tab === 'status') {
+                loadSystemStatus();
+                loadExportStats(); // Загружаем статистику экспорта
+            } else if (btn.dataset.tab === 'presentation') {
+                updateTracksCount();
+            } else if (btn.dataset.tab === 'local') {
+                loadLocalFilesInfo();
+            }
+        });
+    });
+}
+
+// Добавляем в глобальную область видимости
+window.exportAllData = exportAllData;
+window.importAllData = importAllData;
+window.loadExportStats = loadExportStats;
 // =========================
 // INTERNET TRACK DOWNLOAD FUNCTIONS WITH IMPROVED PROGRESS
 // =========================
