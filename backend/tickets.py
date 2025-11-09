@@ -1,5 +1,4 @@
-﻿# tickets.py
-from reportlab.pdfgen import canvas
+﻿from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.colors import HexColor, white, black
 from reportlab.lib.units import mm, cm
@@ -24,76 +23,56 @@ class TicketGenerator:
         logger.info(f"TicketGenerator initialized with output_dir: {output_dir}")
 
     def _register_fonts(self):
-        """Регистрирует шрифты с поддержкой кириллицы."""
-        try:
-            font_paths = [
-                "C:/Windows/Fonts/arial.ttf",
-                "C:/Windows/Fonts/arialbd.ttf",
-                "./fonts/arial.ttf",
-                "./fonts/arialbd.ttf",
-            ]
-            
-            os.makedirs("./fonts", exist_ok=True)
-            
-            registered = False
-            
-            for path in font_paths:
-                if os.path.exists(path):
-                    try:
-                        if "arialbd" in path.lower():
-                            pdfmetrics.registerFont(TTFont("Arial-Bold", path))
-                            logger.info(f"✅ Зарегистрирован шрифт Arial-Bold: {path}")
-                            registered = True
-                        else:
-                            pdfmetrics.registerFont(TTFont("Arial", path))
-                            logger.info(f"✅ Зарегистрирован шрифт Arial: {path}")
-                            registered = True
-                    except Exception as e:
-                        logger.warning(f"⚠️ Не удалось зарегистрировать шрифт {path}: {e}")
-                        continue
-            
-            if not registered:
-                logger.warning("⚠️ Не найдены кириллические шрифты, используем Helvetica")
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка регистрации шрифтов: {e}")
+        """Регистрирует Open Sans с поддержкой кириллицы."""
+        font_paths = [
+            "./fonts/OpenSans-Regular.ttf",
+            "./fonts/OpenSans-Bold.ttf",
+        ]
+        registered = False
+        for path in font_paths:
+            if os.path.exists(path):
+                try:
+                    if "Bold" in path:
+                        pdfmetrics.registerFont(TTFont("OpenSans-Bold", path))
+                        logger.info(f"✅ Зарегистрирован OpenSans-Bold: {path}")
+                    else:
+                        pdfmetrics.registerFont(TTFont("OpenSans", path))
+                        logger.info(f"✅ Зарегистрирован OpenSans: {path}")
+                    registered = True
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось зарегистрировать шрифт {path}: {e}")
+        if not registered:
+            logger.warning("⚠️ Шрифты OpenSans не найдены, используем Helvetica")
 
-    def _get_safe_font(self, font_family, bold=False):
-        """Возвращает безопасный шрифт с поддержкой кириллицы."""
+    def _get_safe_font(self, bold=False):
+        """Возвращает OpenSans или Helvetica."""
         try:
             if bold:
-                if pdfmetrics.getFont("Arial-Bold"):
-                    return "Arial-Bold"
-                elif pdfmetrics.getFont("Arial"):
-                    return "Arial"
+                if pdfmetrics.getFont("OpenSans-Bold"):
+                    return "OpenSans-Bold"
             else:
-                if pdfmetrics.getFont("Arial"):
-                    return "Arial"
+                if pdfmetrics.getFont("OpenSans"):
+                    return "OpenSans"
         except Exception:
             pass
-        
         return "Helvetica-Bold" if bold else "Helvetica"
 
     def _wrap_text_centered(self, text, font_name, font_size, max_width):
         if not text:
             return [""]
-
         try:
             words = text.split()
             lines = []
             current_line = []
-
             for word in words:
                 test_line = ' '.join(current_line + [word])
                 test_width = pdfmetrics.stringWidth(test_line, font_name, font_size)
-
                 if test_width <= max_width:
                     current_line.append(word)
                 else:
                     if current_line:
                         lines.append(' '.join(current_line))
                     current_line = [word]
-
                     if pdfmetrics.stringWidth(word, font_name, font_size) > max_width:
                         chars = list(word)
                         part = ""
@@ -107,17 +86,13 @@ class TicketGenerator:
                                 part = char
                         if part:
                             current_line = [part]
-
             if current_line:
                 lines.append(' '.join(current_line))
-
             return lines[:4]
-
         except Exception:
             words = text.split()
             lines = []
             current_line = ""
-
             for word in words:
                 test_line = current_line + " " + word if current_line else word
                 if len(test_line) * font_size * 0.5 <= max_width:
@@ -128,14 +103,11 @@ class TicketGenerator:
                     current_line = word
                     if len(lines) == 3:
                         break
-
             if current_line and len(lines) < 4:
                 lines.append(current_line)
-
             return lines[:4]
 
     def generate_modern_tickets(self, tracks, count=10, design=None, progress_callback=None):
-        """Генерирует билеты. progress_callback — синхронная функция!"""
         if not tracks:
             raise ValueError("Нет треков для генерации билетов")
 
@@ -147,7 +119,7 @@ class TicketGenerator:
         text_color = "#000000"
         bold = True
         upper = True
-        font_name = self._get_safe_font("Arial", bold)
+        font_name = self._get_safe_font(bold=bold)
 
         logger.info(f"🎫 === НАЧАЛО ГЕНЕРАЦИИ БИЛЕТОВ ===")
         logger.info(f"🎫 Параметры: {count} билетов, {len(tracks)} треков")
