@@ -24,3 +24,4 @@ rembg
 psutil
 jinja2
 weasyprint
+websocket
