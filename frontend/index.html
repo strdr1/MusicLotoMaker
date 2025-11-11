@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Music Loto Maker</title>
     <link rel="stylesheet" href="static/css/style.css">
-
 </head>
 <body>
     <div class="container">
@@ -33,6 +32,7 @@
                     🗑️ Очистить все
                 </button>
             </div>
+
             <!-- Блок скачивания треков из интернета -->
             <div class="list-search-section">
                 <h3>📥 Скачать треки из интернета</h3>
@@ -106,6 +106,7 @@ Michael Jackson - Billie Jean"></textarea>
 
             <div id="mediaStatus" class="status"></div>
         </div>
+
         <!-- Вкладка Файлы -->
         <div id="local" class="tab-content">
             <div class="local-header">
@@ -181,8 +182,8 @@ Michael Jackson - Billie Jean"></textarea>
                     <!-- Фото из папки artists -->
                 </div>
             </div>
-
         </div>
+
         <!-- Вкладка Презентация -->
         <div id="presentation" class="tab-content">
             <div class="generator-card simple">
@@ -209,7 +210,7 @@ Michael Jackson - Billie Jean"></textarea>
                     🎬 Сгенерировать презентацию
                 </button>
 
-                <!-- Простой прогресс-бар генерации (в стиле билетов) -->
+                <!-- Простой прогресс-бар генерации -->
                 <div id="presentationProgress" class="progress-section" style="display: none; margin-top: 20px;">
                     <div class="progress-header">
                         <span>Генерация:</span>
@@ -240,7 +241,7 @@ Michael Jackson - Billie Jean"></textarea>
             <div class="generator-card">
                 <h2>🎫 Генератор билетов</h2>
                 <p>Создавайте билеты лото из треков медиатеки</p>
-                <!-- Статистика треков -->
+
                 <div class="stats-card">
                     <div class="stats-grid">
                         <div class="stat-item">
@@ -253,7 +254,6 @@ Michael Jackson - Billie Jean"></textarea>
                     </button>
                 </div>
 
-                <!-- Панель генерации -->
                 <div class="generation-card">
                     <h3>🚀 Генерация билетов</h3>
 
@@ -300,7 +300,6 @@ Michael Jackson - Billie Jean"></textarea>
                     </div>
                 </div>
 
-                <!-- Секция скачивания -->
                 <div id="downloadSection" class="download-card" style="display: none;">
                     <h3>📥 Результаты генерации</h3>
                     <div class="download-info">
@@ -322,7 +321,6 @@ Michael Jackson - Billie Jean"></textarea>
                     </button>
                 </div>
 
-                <!-- Информационная панель -->
                 <div class="info-card">
                     <h3>ℹ️ Информация</h3>
                     <ul class="info-list">
@@ -344,7 +342,6 @@ Michael Jackson - Billie Jean"></textarea>
                     <p>🔄 Загружаем информацию...</p>
                 </div>
             </div>
-
         </div>
     </div>
 
@@ -479,6 +476,28 @@ Michael Jackson - Billie Jean"></textarea>
                     <button class="btn btn-primary" onclick="saveSegment()">💾 Сохранить отрезок</button>
                     <button class="btn btn-secondary" onclick="closeAudioEditor()">❌ Закрыть</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- МОДАЛЬНОЕ ОКНО ИЗМЕНЕНИЯ ID (НОВОЕ) -->
+    <div id="changeIdModal" class="modal" style="display: none;">
+        <div class="modal-content" style="max-width: 500px; width: 90%;">
+            <div class="modal-header">
+                <h3>#️⃣ Изменить ID трека</h3>
+                <span class="close" onclick="closeChangeIdModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p><strong>Трек:</strong> <span id="changeIdTrackInfo">—</span></p>
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="changeIdNewId">Новый ID:</label>
+                    <input type="number" id="changeIdNewId" class="form-input" min="1" placeholder="Введите новый ID" required>
+                    <small class="text-muted">Если указать ID другого трека — они поменяются местами</small>
+                </div>
+            </div>
+            <div class="modal-actions" style="margin-top: 20px; display: flex; gap: 10px;">
+                <button class="btn btn-primary" onclick="changeTrackId()">💾 Сохранить</button>
+                <button class="btn btn-secondary" onclick="closeChangeIdModal()">❌ Отмена</button>
             </div>
         </div>
     </div>

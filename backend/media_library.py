@@ -406,6 +406,36 @@ class MediaLibrary:
             export_data['tracks'].append(track_data)
         
         return export_data
+    def change_track_id(self, old_id: int, new_id: int) -> bool:
+        """Изменить ID трека. new_id должен быть свободен."""
+        track = self.get_track(old_id)
+        if not track:
+            return False
+        if self.get_track(new_id):
+            raise ValueError("Новый ID уже занят")
+        track['id'] = new_id
+        self.save_to_file()
+        logger.info(f"🔄 ID трека изменён: {old_id} → {new_id}")
+        return True
 
+    def swap_track_ids(self, id1: int, id2: int) -> bool:
+        """Поменять местами ID двух треков."""
+        track1 = self.get_track(id1)
+        track2 = self.get_track(id2)
+        if not track1 or not track2:
+            return False
+        track1['id'], track2['id'] = track2['id'], track1['id']
+        self.save_to_file()
+        logger.info(f"🔄 ID треков поменяны местами: {id1} ↔ {id2}")
+        return True
+
+    def compact_ids(self) -> bool:
+        """Уплотнить ID: сделать их последовательными 1..N без пропусков."""
+        self.tracks.sort(key=lambda x: x['id'])
+        for i, track in enumerate(self.tracks, start=1):
+            track['id'] = i
+        self.save_to_file()
+        logger.info(f"📦 ID уплотнены. Теперь треков: {len(self.tracks)}")
+        return True
 # Создаем глобальный экземпляр медиатеки
 media_library = MediaLibrary()

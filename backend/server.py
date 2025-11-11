@@ -30,7 +30,14 @@ from typing import List
 from backend.dropbox_storage import DropboxStorage
 dropbox_storage = DropboxStorage()
 PORT = int(os.environ.get("PORT", 8000))
+from pydantic import BaseModel
 
+class IDChangeRequest(BaseModel):
+    new_id: int
+
+class IDSwapRequest(BaseModel):
+    track1_id: int
+    track2_id: int
 # === LOGGING CONFIGURATION ===
 LOG_DIR = r"E:\1\MusicLotoMaker\MusicLotoMaker\logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -1041,7 +1048,54 @@ from pydantic import BaseModel
 class SegmentUpdate(BaseModel):
     start_time: float
     duration: float = 30
+@app.post("/api/tracks/reorder-by-ids")
+async def reorder_tracks_by_ids(request: dict):
+    """Переупорядочить треки по переданному списку ID и присвоить новые последовательные ID"""
+    track_ids = request.get("track_ids")
+    if not isinstance(track_ids, list):
+        raise HTTPException(status_code=400, detail="track_ids должен быть списком")
+    
+    # Получаем текущие треки
+    current_tracks = {t['id']: t for t in media_library.get_tracks()}
+    ordered_tracks = []
 
+    for i, track_id in enumerate(track_ids):
+        if track_id not in current_tracks:
+            continue
+        track = current_tracks[track_id]
+        track['id'] = i + 1  # Новый порядковый ID
+        ordered_tracks.append(track)
+
+    # Обновляем медиатеку
+    media_library.tracks = ordered_tracks
+    media_library.save_to_file()
+    logger.info(f"🔄 Треки переупорядочены. Новых ID: {len(ordered_tracks)}")
+    return {"success": True, "message": f"Переупорядочено {len(ordered_tracks)} треков"}
+@app.put("/api/tracks/{track_id}/change-id")
+async def change_track_id_endpoint(track_id: int, request: IDChangeRequest):
+    """Изменить ID трека. new_id должен быть свободен."""
+    if media_library.get_track(request.new_id):
+        raise HTTPException(status_code=400, detail="ID уже занят")
+    if media_library.change_track_id(track_id, request.new_id):
+        return {"success": True, "message": f"ID изменён: {track_id} → {request.new_id}"}
+    raise HTTPException(status_code=404, detail="Трек не найден")
+
+@app.put("/api/tracks/swap-ids")
+async def swap_track_ids_endpoint(request: IDSwapRequest):
+    """Поменять местами ID двух треков."""
+    if media_library.swap_track_ids(request.track1_id, request.track2_id):
+        return {
+            "success": True,
+            "message": f"ID поменяны местами: {request.track1_id} ↔ {request.track2_id}"
+        }
+    raise HTTPException(status_code=404, detail="Один из треков не найден")
+
+@app.post("/api/tracks/compact")
+async def compact_track_ids_endpoint():
+    """Уплотнить ID треков (1, 2, 3, ..., N)."""
+    if media_library.compact_ids():
+        return {"success": True, "message": "ID успешно уплотнены"}
+    return {"success": False, "message": "Не удалось уплотнить ID"}
 @app.put("/api/tracks/{track_id}/segment")
 async def update_track_segment_endpoint(track_id: int, update: SegmentUpdate):
     """Обновить отрезок трека (начало и длительность)"""
