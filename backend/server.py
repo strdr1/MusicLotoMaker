@@ -2536,6 +2536,9 @@ async def get_export_info():
     except Exception as e:
         logger.error(f"❌ Ошибка получения информации об экспорте: {e}")
         return {"success": False, "error": str(e)}
+
+
+
 if __name__ == "__main__":
     import uvicorn
     logger.info("🎵 Music Loto Maker Server v3.0 Starting...")
