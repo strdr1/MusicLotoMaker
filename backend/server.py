@@ -1071,7 +1071,7 @@ async def download_tracks_from_list(request_data: dict):
         })
         
         # ПАРАЛЛЕЛЬНОЕ скачивание по 5 треков одновременно
-        BATCH_SIZE = 5
+        BATCH_SIZE = 3
         all_results = []
         
         for batch_start in range(0, len(tracks_to_download), BATCH_SIZE):
