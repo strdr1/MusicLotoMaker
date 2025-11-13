@@ -2835,3 +2835,133 @@ header {
     .track-item.before-placeholder {
         transform: translateY(-10px);
     }
+
+/* яндекс токен стили */
+.yandex-token-section {
+    margin-top: 30px;
+}
+
+.token-status-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.token-status-container {
+    margin: 15px 0;
+}
+
+.token-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 6px;
+    font-weight: 600;
+}
+
+    .token-status.valid {
+        background: var(--success-bg);
+        border: 1px solid var(--success);
+        color: var(--success);
+    }
+
+    .token-status.invalid {
+        background: var(--error-bg);
+        border: 1px solid var(--error);
+        color: var(--error);
+    }
+
+    .token-status.missing {
+        background: var(--warning-bg);
+        border: 1px solid var(--warning);
+        color: var(--warning);
+    }
+
+    .token-status.loading {
+        background: var(--info-bg);
+        border: 1px solid var(--info);
+        color: var(--info);
+    }
+
+.account-info-container {
+    margin-top: 15px;
+}
+
+.account-info {
+    background: var(--bg-dark);
+    padding: 15px;
+    border-radius: 6px;
+    border-left: 4px solid var(--primary);
+}
+
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+    .info-item:last-child {
+        margin-bottom: 0;
+    }
+
+    .info-item .label {
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+
+    .info-item .value {
+        color: var(--text-light);
+        font-family: monospace;
+    }
+
+.token-form-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.management-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.token-info {
+    background: var(--info-bg);
+    border: 1px solid var(--info);
+    border-radius: 8px;
+}
+
+    .token-info h4 {
+        color: var(--info);
+        margin-bottom: 10px;
+    }
+
+    .token-info ul {
+        color: var(--text-muted);
+    }
+
+    .token-info li {
+        margin-bottom: 5px;
+    }
+
+/* јдаптивность */
+@media (max-width: 768px) {
+    .management-actions {
+        flex-direction: column;
+    }
+
+        .management-actions .btn {
+            width: 100%;
+        }
+
+    .info-item {
+        flex-direction: column;
+        gap: 5px;
+    }
+}

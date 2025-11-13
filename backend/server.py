@@ -70,7 +70,58 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+def parse_track_list(track_list_text: str) -> List[dict]:
+    """
+    Разбирает текстовый список треков на структурированные данные
+    Поддерживает форматы:
+    - "Исполнитель - Название трека"
+    - "Исполнитель — Название трека" 
+    - "Artist - Song Title"
+    """
+    tracks = []
+    
+    # Разделяем текст на строки
+    lines = track_list_text.strip().split('\n')
+    
+    for line_num, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Пробуем разные разделители
+        if ' - ' in line:
+            parts = line.split(' - ', 1)
+        elif ' — ' in line:
+            parts = line.split(' — ', 1)
+        elif '-' in line:
+            parts = line.split('-', 1)
+        else:
+            # Если разделитель не найден, используем всю строку как название
+            # а артиста оставляем пустым
+            parts = ['', line]
+        
+        if len(parts) == 2:
+            artist = parts[0].strip()
+            title = parts[1].strip()
+            
+            # Очищаем от лишних символов
+            artist = re.sub(r'^\d+\.\s*', '', artist)  # Убираем нумерацию "1. "
+            title = re.sub(r'^\d+\.\s*', '', title)
+            
+            # Убираем кавычки если есть
+            artist = artist.strip('"\'')
+            title = title.strip('"\'')
+            
+            if artist or title:
+                tracks.append({
+                    'artist': artist if artist else 'Неизвестный исполнитель',
+                    'title': title if title else 'Без названия',
+                    'original_line': line,
+                    'line_number': line_num
+                })
+    
+    logger.info(f"📝 Разобрано {len(tracks)} треков из {len(lines)} строк")
+    return tracks
 # === frontend logging endpoint ===
 @app.post("/api/log/frontend")
 async def frontend_log(request: Request):
@@ -429,7 +480,180 @@ except Exception as e:
     logger.error(f"❌ Другая ошибка при подключении tickets router: {e}")
 
 # =========================
-# YANDEX MUSIC DOWNLOAD WITH IMPROVED PROGRESS REPORTING
+# YANDEX TOKEN MANAGEMENT API
+# =========================
+
+YANDEX_TOKEN_FILE = os.path.join(BASE_DIR, "config", "yandex_token.txt")
+
+def save_yandex_token(token):
+    """Сохранить Яндекс токен в файл"""
+    try:
+        config_dir = os.path.dirname(YANDEX_TOKEN_FILE)
+        os.makedirs(config_dir, exist_ok=True)
+        
+        with open(YANDEX_TOKEN_FILE, 'w', encoding='utf-8') as f:
+            f.write(token.strip())
+        
+        logger.info("✅ Яндекс токен сохранен")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения Яндекс токена: {e}")
+        return False
+
+def load_yandex_token():
+    """Загрузить Яндекс токен из файла"""
+    try:
+        if os.path.exists(YANDEX_TOKEN_FILE):
+            with open(YANDEX_TOKEN_FILE, 'r', encoding='utf-8') as f:
+                token = f.read().strip()
+                if token:
+                    logger.info("✅ Яндекс токен загружен из файла")
+                    return token
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки Яндекс токена: {e}")
+    
+    return None
+
+def get_yandex_token_status():
+    """Проверить статус Яндекс токена"""
+    token = load_yandex_token()
+    if not token:
+        return {
+            "has_token": False,
+            "is_valid": False,
+            "message": "Токен не установлен"
+        }
+    
+    # Проверяем валидность токена
+    try:
+        from yandex_music import Client
+        client = Client(token).init()
+        # Простая проверка - пытаемся получить информацию об аккаунте
+        account = client.account_status()
+        return {
+            "has_token": True,
+            "is_valid": True,
+            "message": "✅ Токен действителен",
+            "account_info": {
+                "login": account.account.login,
+                "uid": account.account.uid
+            }
+        }
+    except Exception as e:
+        logger.warning(f"⚠️ Яндекс токен недействителен: {e}")
+        return {
+            "has_token": True,
+            "is_valid": False,
+            "message": f"❌ Токен недействителен: {str(e)}"
+        }
+
+@app.get("/api/yandex/token/status")
+async def get_yandex_token_status_endpoint():
+    """Получить статус Яндекс токена"""
+    try:
+        status = get_yandex_token_status()
+        return {
+            "success": True,
+            "status": status
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки статуса токена: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.post("/api/yandex/token/save")
+async def save_yandex_token_endpoint(request_data: dict):
+    """Сохранить Яндекс токен"""
+    try:
+        token = request_data.get('token', '').strip()
+        if not token:
+            return {
+                "success": False,
+                "error": "Токен не может быть пустым"
+            }
+        
+        # Проверяем валидность токена
+        try:
+            from yandex_music import Client
+            client = Client(token).init()
+            # Быстрая проверка
+            client.account_status()
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Недействительный токен: {str(e)}"
+            }
+        
+        # Сохраняем токен
+        if save_yandex_token(token):
+            return {
+                "success": True,
+                "message": "✅ Яндекс токен успешно сохранен и проверен"
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Ошибка сохранения токена"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения Яндекс токена: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+@app.delete("/api/yandex/token/delete")
+async def delete_yandex_token():
+    """Удалить Яндекс токен"""
+    try:
+        if os.path.exists(YANDEX_TOKEN_FILE):
+            os.remove(YANDEX_TOKEN_FILE)
+            logger.info("🗑️ Яндекс токен удален")
+            return {
+                "success": True,
+                "message": "✅ Яндекс токен удален"
+            }
+        else:
+            return {
+                "success": False,
+                "error": "Токен не найден"
+            }
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления Яндекс токена: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+# =========================
+# ADDITIONAL TRACKS ENDPOINTS FOR COMPATIBILITY
+# =========================
+
+@app.get("/api/tracks/list")
+async def get_tracks_list():
+    """Алиас для /api/tracks для совместимости"""
+    return await get_tracks()
+
+@app.get("/api/tracks/all")
+async def get_tracks_all():
+    """Алиас для /api/tracks для совместимости"""
+    return await get_tracks()
+
+@app.get("/api/media/tracks")
+async def get_media_tracks():
+    """Алиас для /api/tracks для совместимости"""
+    return await get_tracks()
+
+@app.get("/api/library/tracks")
+async def get_library_tracks():
+    """Алиас для /api/tracks для совместимости"""
+    return await get_tracks()
+
+# =========================
+# YANDEX MUSIC & YOUTUBE DOWNLOAD - ПАРАЛЛЕЛЬНАЯ ВЕРСИЯ
 # =========================
 
 # Глобальная переменная для отслеживания прогресса скачивания
@@ -455,73 +679,23 @@ def update_download_status(current: int, current_track: str, results: list = Non
     download_status["current_track"] = current_track
     if results is not None:
         download_status["results"] = results
-        # Автоматически классифицируем результаты для фронтенда
         download_status["successful_tracks"] = [r for r in results if r.get('success')]
         download_status["duplicate_tracks"] = [r for r in results if r.get('duplicate')]
         download_status["failed_tracks"] = [r for r in results if not r.get('success') and not r.get('duplicate')]
 
-def parse_track_list(track_list_text: str) -> list:
-    """Парсит текст со списком треков в структурированный формат"""
-    tracks = []
-    lines = track_list_text.strip().split('\n')
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-            
-        artist, title = parse_track_line(line)
-        if artist or title:
-            tracks.append({
-                'original_line': line,
-                'artist': artist,
-                'title': title,
-                'search_query': f"{artist} {title}" if artist and title else line
-            })
-    
-    return tracks
-
-def parse_track_line(line: str) -> tuple:
-    """Парсит строку с информацией о треке"""
-    # УДАЛЯЕМ НУМЕРАЦИЮ в начале строки
-    line = re.sub(r'^\d+\.\s*', '', line)  # "1. ", "2. ", "123. "
-    line = re.sub(r'^\d+\)\s*', '', line)  # "1) ", "2) "
-    line = re.sub(r'^-\s*', '', line)      # "- "
-    
-    line = re.sub(r'[\(\)\[\]\{\}]', '', line).strip()
-    
-    separators = [' - ', ' – ', ' — ', ' | ']
-    
-    for sep in separators:
-        if sep in line:
-            parts = line.split(sep, 1)
-            if len(parts) == 2:
-                artist = parts[0].strip()
-                title = parts[1].strip()
-                return artist, title
-    
-    match = re.match(r'(.+?)\s+\((.+?)\)$', line)
-    if match:
-        title = match.group(1).strip()
-        artist = match.group(2).strip()
-        return artist, title
-    
-    return "", line
-
-async def download_single_track(track_info: dict):
-    """Скачивание одного трека с проверкой дубликатов и улучшенной обработкой ошибок"""
+async def download_single_track_from_youtube(track_info: dict):
+    """БЫСТРЫЙ скачивальщик с YouTube"""
     artist = track_info.get("artist", "")
     title = track_info.get("title", "")
     
-    logger.info(f"🔍 Обработка: {artist} - {title}")
+    logger.info(f"🎵 YouTube: {artist} - {title}")
     
-    # ПРОВЕРКА ДУБЛИКАТА ПЕРЕД СКАЧИВАНИЕМ
+    # БЫСТРАЯ ПРОВЕРКА ДУБЛИКАТА
     if media_library.track_exists(artist, title):
         existing_track = media_library.get_track_by_artist_title(artist, title)
-        logger.warning(f"🚫 Дубликат, пропускаем: {artist} - {title} (ID: {existing_track['id']})")
         return {
             "success": False, 
-            "error": f"Трек уже существует в медиатеке (ID: {existing_track['id']})",
+            "error": f"Трек уже существует (ID: {existing_track['id']})",
             "artist": artist,
             "title": title,
             "duplicate": True,
@@ -529,178 +703,299 @@ async def download_single_track(track_info: dict):
         }
     
     try:
-        # Ищем трек в Яндекс.Музыке
-        from yandex_music import Client as YandexClient
+        import yt_dlp
         
-        def _sync_search():
-            try:
-                YANDEX_MUSIC_TOKEN = "y0__xC-3q2iAxje-AYglImpghUw9pW0kAgCx0SZ5vnWcYWpiGpLqwVPsGWEfg"
-                client = YandexClient(YANDEX_MUSIC_TOKEN).init()
-                search_result = client.search(f"{artist} {title}")
-                
-                if not search_result or not search_result.best:
-                    return None, "Трек не найден в Яндекс.Музыке"
-                
-                best = search_result.best
-                
-                # ПРОВЕРЯЕМ ТИП РЕЗУЛЬТАТА
-                if not hasattr(best, 'type') or not hasattr(best, 'result'):
-                    return None, "Некорректный результат поиска"
-                
-                result_type = best.type
-                result_obj = best.result
-                
-                logger.info(f"🔍 Тип результата для '{artist} - {title}': {result_type}")
-                
-                # Если это не трек, а артист, альбом и т.д. - это ошибка для нас
-                if result_type != 'track':
-                    if result_type == 'artist':
-                        artist_name = getattr(result_obj, 'name', 'Неизвестный артист')
-                        return None, f"Найден артист '{artist_name}', но не трек '{title}'"
-                    elif result_type == 'album':
-                        album_title = getattr(result_obj, 'title', 'Неизвестный альбом')
-                        return None, f"Найден альбом '{album_title}', но не трек '{title}'"
-                    elif result_type == 'playlist':
-                        return None, f"Найден плейлист, но не трек '{artist} - {title}'"
-                    elif result_type == 'podcast':
-                        return None, f"Найден подкаст, но не трек '{artist} - {title}'"
-                    elif result_type == 'podcast_episode':
-                        return None, f"Найден эпизод подкаста, но не трек '{artist} - {title}'"
-                    else:
-                        return None, f"Найден объект типа '{result_type}', но не трек '{artist} - {title}'"
-                
-                # Теперь точно работаем с треком
-                track = result_obj
-                
-                if not track:
-                    return None, "Трек не найден в Яндекс.Музыке"
-                
-                # Получаем информацию для скачивания
-                download_info_list = track.get_download_info()
-                if not download_info_list:
-                    return None, "Нет доступных ссылок для скачивания"
-                
-                # Ищем подходящий формат для скачивания (предпочтительно MP3)
-                best_download_info = None
-                for download_info in download_info_list:
-                    codec = getattr(download_info, 'codec', '').lower()
-                    # Предпочитаем MP3, но берем любой доступный формат
-                    if not best_download_info or codec == 'mp3':
-                        best_download_info = download_info
-                        if codec == 'mp3':
-                            break
-                
-                if not best_download_info:
-                    return None, "Нет подходящих форматов для скачивания"
-                
-                # Получаем прямую ссылку для скачивания
-                direct_link = best_download_info.get_direct_link()
-                if not direct_link:
-                    return None, "Не удалось получить ссылку для скачивания"
-                
-                return direct_link, None
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Yandex search error for {artist} - {title}: {e}")
-                return None, f"Ошибка поиска: {str(e)}"
-
-        # Ищем трек
-        loop = asyncio.get_event_loop()
-        mp3_url, search_error = await loop.run_in_executor(None, _sync_search)
-        
-        if search_error:
-            return {
-                "success": False, 
-                "error": search_error,
-                "artist": artist,
-                "title": title,
-                "search_query": f"{artist} {title}"
-            }
-
-        if not mp3_url:
-            return {
-                "success": False, 
-                "error": "Трек не найден в Яндекс.Музыке",
-                "artist": artist,
-                "title": title,
-                "search_query": f"{artist} {title}"
-            }
-
-        # Создаем безопасное имя файла
+        # Создаем имя файла
         safe_artist = "".join(c for c in artist if c.isalnum() or c in (' ', '-', '_')).strip()
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
-        filename_safe = f"{safe_artist[:50]} - {safe_title[:50]}.mp3".replace('  ', ' ').replace('__', '_')
+        filename_safe = f"{safe_artist} - {safe_title}.mp3"
         
         downloads_dir = os.path.join(BASE_DIR, "downloads")
         os.makedirs(downloads_dir, exist_ok=True)
         final_path = os.path.join(downloads_dir, filename_safe)
-
-        # Проверяем, не существует ли уже файл (на случай параллельных загрузок)
+        
+        # БЫСТРАЯ ПРОВЕРКА существования файла
         if os.path.exists(final_path):
-            logger.info(f"📁 Файл уже существует: {filename_safe}")
-            # Проверяем, не добавился ли трек в медиатеку параллельно
-            if media_library.track_exists(artist, title):
-                existing_track = media_library.get_track_by_artist_title(artist, title)
+            file_size = os.path.getsize(final_path)
+            if file_size > 0 and file_size < 50 * 1024 * 1024:
+                if media_library.track_exists(artist, title):
+                    existing_track = media_library.get_track_by_artist_title(artist, title)
+                    return {
+                        "success": False, 
+                        "error": f"Трек уже добавлен (ID: {existing_track['id']})",
+                        "artist": artist,
+                        "title": title,
+                        "duplicate": True
+                    }
+        
+        # МАКСИМАЛЬНО БЫСТРЫЕ НАСТРОЙКИ
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': final_path.replace('.mp3', ''),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'noplaylist': True,
+            'no_warnings': True,
+            'quiet': True,
+            'socket_timeout': 5,
+            'retries': 1,
+            'extractaudio': True,
+            'audioformat': 'mp3',
+            'nocheckcertificate': True,
+            'ignoreerrors': False,
+            'logtostderr': False,
+            'no_color': True,
+            'http_chunk_size': 5242880,  # 5MB chunks
+        }
+        
+        search_query = f"{artist} {title}"
+        
+        def _sync_youtube_download():
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    search_results = ydl.extract_info(f"ytsearch1:{search_query}", download=False)
+                    
+                    if not search_results or 'entries' not in search_results or not search_results['entries']:
+                        return None, "Трек не найден"
+                    
+                    video_info = search_results['entries'][0]
+                    video_url = video_info.get('webpage_url')
+                    
+                    if not video_url:
+                        return None, "Не удалось получить ссылку"
+                    
+                    ydl.download([video_url])
+                    return final_path, None
+                    
+            except Exception as e:
+                error_msg = str(e)
+                return None, f"Ошибка: {error_msg}"
+        
+        # Запускаем скачивание с коротким таймаутом
+        loop = asyncio.get_event_loop()
+        try:
+            downloaded_path, download_error = await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_youtube_download),
+                timeout=60  # 1 минута максимум
+            )
+        except asyncio.TimeoutError:
+            return {
+                "success": False, 
+                "error": "Таймаут при скачивании с YouTube",
+                "artist": artist,
+                "title": title
+            }
+        
+        if download_error:
+            return {
+                "success": False, 
+                "error": download_error,
+                "artist": artist,
+                "title": title
+            }
+        
+        if not os.path.exists(final_path):
+            return {
+                "success": False, 
+                "error": "Файл не был создан",
+                "artist": artist,
+                "title": title
+            }
+        
+        # Быстрая проверка файла
+        file_size = os.path.getsize(final_path)
+        if file_size == 0 or file_size > 40 * 1024 * 1024:
+            if os.path.exists(final_path):
+                os.remove(final_path)
+            return {
+                "success": False, 
+                "error": "Файл невалидный",
+                "artist": artist,
+                "title": title
+            }
+        
+        # Быстрое добавление в медиатеку
+        result = media_library.add_track(final_path, filename_safe, {
+            "artist": artist,
+            "title": title,
+            "source": "youtube"
+        })
+        
+        if not result.get('success'):
+            if result.get('error') == 'duplicate':
+                existing_track = result.get('existing_track')
                 return {
                     "success": False, 
-                    "error": f"Трек уже был добавлен параллельно (ID: {existing_track['id']})",
+                    "error": f"Трек уже существует (ID: {existing_track['id']})",
                     "artist": artist,
                     "title": title,
-                    "duplicate": True,
-                    "existing_track_id": existing_track['id']
+                    "duplicate": True
                 }
-        else:
-            # Скачиваем MP3
-            async with aiohttp.ClientSession() as session:
-                async with session.get(mp3_url, timeout=60) as resp:
-                    if resp.status != 200:
-                        error_msg = f"Ошибка скачивания: HTTP {resp.status}"
-                        if resp.status == 404:
-                            error_msg = "Файл не найден на сервере Яндекс.Музыки"
-                        elif resp.status == 403:
-                            error_msg = "Доступ к треку запрещен"
-                        elif resp.status >= 500:
-                            error_msg = "Ошибка сервера Яндекс.Музыки"
-                            
-                        return {
-                            "success": False, 
-                            "error": error_msg,
-                            "artist": artist,
-                            "title": title
-                        }
-                    
-                    try:
-                        with open(final_path, "wb") as f:
-                            async for chunk in resp.content.iter_chunked(8192):
-                                f.write(chunk)
-                    except IOError as e:
-                        return {
-                            "success": False, 
-                            "error": f"Ошибка записи файла: {str(e)}",
-                            "artist": artist,
-                            "title": title
-                        }
-
-            # Проверяем размер после скачивания
-            MAX_SIZE_BYTES = 40 * 1024 * 1024
-            if os.path.getsize(final_path) > MAX_SIZE_BYTES:
-                os.remove(final_path)
+            else:
                 return {
                     "success": False, 
-                    "error": "Файл слишком большой (>40MB)",
+                    "error": "Ошибка добавления в медиатеку",
                     "artist": artist,
                     "title": title
                 }
+        
+        track = result['track']
+        track_id = track["id"]
+        
+        # ОТЛОЖЕННЫЕ ОПЕРАЦИИ (не блокируем скачивание)
+        async def background_tasks():
+            try:
+                # Анализ сегмента
+                segment_result = audio_editor.suggest_best_segment(final_path)
+                if segment_result is not None:
+                    media_library.update_track_segment(track_id, segment_result, 30)
+                
+                # Поиск фото
+                photo_path = image_searcher.fetch_artist_png(artist, track_id)
+                if photo_path and os.path.exists(photo_path):
+                    media_library.update_track(track_id, {"image_path": photo_path})
+            except Exception as e:
+                pass  # Игнорируем ошибки в фоновых задачах
+        
+        asyncio.create_task(background_tasks())
+        
+        return {
+            "success": True, 
+            "file_path": final_path, 
+            "track_id": track_id, 
+            "artist": artist,
+            "title": title,
+            "filename": filename_safe,
+            "source": "youtube"
+        }
+        
+    except Exception as e:
+        return {
+            "success": False, 
+            "error": f"Ошибка YouTube: {str(e)}",
+            "artist": artist,
+            "title": title
+        }
 
-            # Проверяем, что файл не пустой
-            if os.path.getsize(final_path) == 0:
-                os.remove(final_path)
-                return {
-                    "success": False, 
-                    "error": "Скачанный файл пустой",
-                    "artist": artist,
-                    "title": title
-                }
+async def download_from_yandex_with_fallback(track_info: dict):
+    """Скачивание с Яндекс.Музыки с автоматическим fallback на YouTube при ЛЮБОЙ ошибке"""
+    artist = track_info.get("artist", "")
+    title = track_info.get("title", "")
+    
+    # СНАЧАЛА проверяем дубликат
+    if media_library.track_exists(artist, title):
+        existing_track = media_library.get_track_by_artist_title(artist, title)
+        return {
+            "success": False, 
+            "error": f"Трек уже существует (ID: {existing_track['id']})",
+            "artist": artist,
+            "title": title,
+            "duplicate": True
+        }
+    
+    # ПРОБУЕМ Яндекс.Музыку
+    yandex_result = await try_yandex_music(track_info)
+    
+    # ЕСЛИ Яндекс не сработал - СРАЗУ переходим на YouTube
+    if not yandex_result.get('success'):
+        logger.info(f"🔄 Яндекс не сработал, пробуем YouTube: {artist} - {title}")
+        youtube_result = await download_single_track_from_youtube(track_info)
+        return youtube_result
+    
+    return yandex_result
+
+async def try_yandex_music(track_info: dict):
+    """Попытка скачать с Яндекс.Музыки"""
+    artist = track_info.get("artist", "")
+    title = track_info.get("title", "")
+    
+    try:
+        from yandex_music import Client as YandexClient
+        
+        def _sync_search():
+            try:
+                saved_token = load_yandex_token()
+                YANDEX_MUSIC_TOKEN = saved_token or "y0__xC-3q2iAxje-AYglImpghUw9pW0kAgCx0SZ5vnWcYWpiGpLqwVPsGWEfg"
+                
+                client = YandexClient(YANDEX_MUSIC_TOKEN).init()
+                search_result = client.search(f"{artist} {title}")
+                
+                if not search_result or not search_result.best:
+                    return None, "Трек не найден"
+                
+                best = search_result.best
+                if not hasattr(best, 'type') or best.type != 'track':
+                    return None, "Не трек"
+                
+                track = best.result
+                if not track:
+                    return None, "Трек не найден"
+                
+                download_info_list = track.get_download_info()
+                if not download_info_list:
+                    return None, "Нет ссылок для скачивания"
+                
+                # Ищем MP3 или любой доступный формат
+                best_download_info = None
+                for download_info in download_info_list:
+                    codec = getattr(download_info, 'codec', '').lower()
+                    if codec == 'mp3':
+                        best_download_info = download_info
+                        break
+                    elif not best_download_info:
+                        best_download_info = download_info
+                
+                if not best_download_info:
+                    return None, "Нет подходящих форматов"
+                
+                direct_link = best_download_info.get_direct_link()
+                if not direct_link:
+                    return None, "Не удалось получить ссылку"
+                
+                return direct_link, None
+                
+            except Exception as e:
+                return None, f"Ошибка Яндекс: {str(e)}"
+
+        # Быстрый поиск с таймаутом
+        loop = asyncio.get_event_loop()
+        try:
+            mp3_url, search_error = await asyncio.wait_for(
+                loop.run_in_executor(None, _sync_search),
+                timeout=15  # Всего 15 секунд на поиск в Яндекс
+            )
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "Таймаут Яндекс"}
+        
+        if search_error or not mp3_url:
+            return {"success": False, "error": search_error or "Неизвестная ошибка Яндекс"}
+
+        # Скачивание файла
+        safe_artist = "".join(c for c in artist if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
+        filename_safe = f"{safe_artist} - {safe_title}.mp3"
+        
+        downloads_dir = os.path.join(BASE_DIR, "downloads")
+        final_path = os.path.join(downloads_dir, filename_safe)
+
+        # Скачиваем с таймаутом
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            async with session.get(mp3_url) as resp:
+                if resp.status != 200:
+                    return {"success": False, "error": "Ошибка скачивания"}
+                
+                with open(final_path, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(65536):  # 64KB chunks
+                        f.write(chunk)
+
+        # Быстрая проверка файла
+        file_size = os.path.getsize(final_path)
+        if file_size == 0 or file_size > 40 * 1024 * 1024:
+            os.remove(final_path)
+            return {"success": False, "error": "Файл невалидный"}
 
         # Добавляем в медиатеку
         result = media_library.add_track(final_path, filename_safe, {
@@ -710,90 +1005,49 @@ async def download_single_track(track_info: dict):
         })
         
         if not result.get('success'):
-            error_msg = result.get('error', 'Неизвестная ошибка добавления в медиатеку')
             if result.get('error') == 'duplicate':
-                existing_track = result.get('existing_track')
-                return {
-                    "success": False, 
-                    "error": f"Трек уже существует в медиатеке (ID: {existing_track['id']})",
-                    "artist": artist,
-                    "title": title,
-                    "duplicate": True,
-                    "existing_track_id": existing_track['id']
-                }
-            else:
-                return {
-                    "success": False, 
-                    "error": error_msg,
-                    "artist": artist,
-                    "title": title
-                }
-
-        track = result['track']
-        track_id = track["id"]
+                return {"success": False, "error": "Дубликат", "duplicate": True}
+            return {"success": False, "error": "Ошибка добавления"}
         
-        # Анализ сегмента
-        try:
-            segment_result = audio_editor.suggest_best_segment(final_path)
-            if segment_result is not None:
-                media_library.update_track_segment(track_id, segment_result, 30)
-                logger.info(f"🎵 Установлен умный отрезок для {artist} - {title}: {segment_result}с")
-        except Exception as e:
-            logger.warning(f"⚠️ Не удалось установить сегмент для {artist} - {title}: {e}")
-
-        # Поиск фото (опционально)
-        try:
-            photo_path = image_searcher.fetch_artist_png(artist, track_id)
-            if photo_path and os.path.exists(photo_path):
-                media_library.update_track(track_id, {"image_path": photo_path})
-                logger.info(f"✅ Фото сохранено для: {artist}")
-        except Exception as e:
-            logger.warning(f"⚠️ Ошибка поиска фото для {artist}: {e}")
-
-        logger.info(f"✅ Успешно обработан: {artist} - {title} (ID: {track_id})")
-
+        track = result['track']
+        
+        # Фоновые задачи
+        async def background_tasks():
+            try:
+                segment_result = audio_editor.suggest_best_segment(final_path)
+                if segment_result is not None:
+                    media_library.update_track_segment(track['id'], segment_result, 30)
+                
+                photo_path = image_searcher.fetch_artist_png(artist, track['id'])
+                if photo_path:
+                    media_library.update_track(track['id'], {"image_path": photo_path})
+            except Exception:
+                pass
+        
+        asyncio.create_task(background_tasks())
+        
         return {
             "success": True, 
             "file_path": final_path, 
-            "track_id": track_id, 
+            "track_id": track['id'], 
             "artist": artist,
             "title": title,
             "filename": filename_safe,
-            "segment_start": track.get('segment_start', 0)
+            "source": "yandex_music"
         }
-
-    except asyncio.TimeoutError:
-        logger.error(f"⏰ Таймаут при обработке {artist} - {title}")
-        return {
-            "success": False, 
-            "error": "Таймаут при скачивании трека",
-            "artist": artist,
-            "title": title
-        }
-    except aiohttp.ClientError as e:
-        logger.error(f"🌐 Ошибка сети при обработке {artist} - {title}: {e}")
-        return {
-            "success": False, 
-            "error": f"Ошибка сети: {str(e)}",
-            "artist": artist,
-            "title": title
-        }
+        
     except Exception as e:
-        logger.error(f"❌ Неожиданная ошибка при обработке {artist} - {title}: {e}")
-        return {
-            "success": False, 
-            "error": f"Неожиданная ошибка: {str(e)}",
-            "artist": artist,
-            "title": title
-        }
+        return {"success": False, "error": f"Ошибка Яндекс: {str(e)}"}
 
 @app.post("/api/tracks/download-from-list")
 async def download_tracks_from_list(request_data: dict):
-    """Скачивание треков из Яндекс.Музыки по списку названий с улучшенной обработкой ошибок"""
+    """ПАРАЛЛЕЛЬНОЕ скачивание треков"""
     global download_status
     
     try:
         track_list_text = request_data.get('track_list', '')
+        source = request_data.get('source', 'yandex_music')
+        
         if not track_list_text.strip():
             raise HTTPException(status_code=400, detail="Список треков пуст")
         
@@ -801,93 +1055,95 @@ async def download_tracks_from_list(request_data: dict):
         if not tracks_to_download:
             raise HTTPException(status_code=400, detail="Не удалось распознать список треков")
         
-        logger.info(f"🎵 Начало скачивания {len(tracks_to_download)} треков с Яндекс.Музыки")
+        logger.info(f"🎵 ПАРАЛЛЕЛЬНОЕ скачивание {len(tracks_to_download)} треков с {source}")
         
-        # Инициализируем статус скачивания
+        # Инициализируем статус
         download_status.update({
             "is_running": True,
             "total": len(tracks_to_download),
             "current": 0,
-            "current_track": "Подготовка к скачиванию...",
+            "current_track": "Подготовка...",
             "results": [],
             "failed_tracks": [],
             "duplicate_tracks": [],
-            "successful_tracks": []
+            "successful_tracks": [],
+            "source": source
         })
         
-        # Скачиваем треки с обновлением прогресса
-        results = []
-        for i, track_info in enumerate(tracks_to_download):
-            track_name = f"{track_info.get('artist', '')} - {track_info.get('title', '')}".strip(' - ')
-            
-            # Обновляем статус перед началом скачивания каждого трека
-            download_status["current"] = i
-            download_status["current_track"] = f"Обработка: {track_name}"
-            
-            logger.info(f"📊 Прогресс: {i+1}/{len(tracks_to_download)} - {track_name}")
-            
-            # Скачиваем один трек
-            result = await download_single_track(track_info)
-            results.append(result)
-            
-            # Обновляем статус после завершения скачивания
-            download_status["current"] = i + 1
-            download_status["current_track"] = f"Завершено: {track_name}"
-            download_status["results"] = results
-            
-            # Логируем результат
-            if result.get('success'):
-                logger.info(f"✅ Успех: {track_name}")
-            elif result.get('duplicate'):
-                logger.warning(f"🚫 Дубликат: {track_name}")
-            else:
-                logger.error(f"❌ Ошибка: {track_name} - {result.get('error', 'Неизвестная ошибка')}")
-            
-            # Небольшая задержка для стабильности и чтобы не нагружать API
-            await asyncio.sleep(1)
+        # ПАРАЛЛЕЛЬНОЕ скачивание по 5 треков одновременно
+        BATCH_SIZE = 5
+        all_results = []
         
-        # Анализируем результаты
-        successful_count = len([r for r in results if r.get('success')])
-        duplicate_count = len([r for r in results if r.get('duplicate')])
-        failed_count = len([r for r in results if not r.get('success') and not r.get('duplicate')])
+        for batch_start in range(0, len(tracks_to_download), BATCH_SIZE):
+            batch = tracks_to_download[batch_start:batch_start + BATCH_SIZE]
+            batch_tasks = []
+            
+            # Создаем задачи для батча
+            for track_info in batch:
+                if source == "youtube":
+                    task = download_single_track_from_youtube(track_info)
+                else:
+                    task = download_from_yandex_with_fallback(track_info)
+                batch_tasks.append(task)
+            
+            # Запускаем ВСЕ задачи батча параллельно
+            logger.info(f"🚀 Запуск батча {batch_start//BATCH_SIZE + 1}: {len(batch_tasks)} треков")
+            batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+            
+            # Обрабатываем результаты батча
+            for i, result in enumerate(batch_results):
+                if isinstance(result, Exception):
+                    track_info = batch[i]
+                    result = {
+                        "success": False,
+                        "error": f"Исключение: {str(result)}",
+                        "artist": track_info.get('artist', ''),
+                        "title": track_info.get('title', '')
+                    }
+                
+                all_results.append(result)
+                
+                # Обновляем прогресс
+                current_index = batch_start + i + 1
+                download_status["current"] = current_index
+                download_status["current_track"] = f"Обработано: {current_index}/{len(tracks_to_download)}"
+                download_status["results"] = all_results
+                
+                # Логируем результат
+                artist = result.get('artist', '')
+                title = result.get('title', '')
+                if result.get('success'):
+                    logger.info(f"✅ Успех: {artist} - {title}")
+                elif result.get('duplicate'):
+                    logger.warning(f"🚫 Дубликат: {artist} - {title}")
+                else:
+                    logger.error(f"❌ Ошибка: {artist} - {title}: {result.get('error')}")
         
-        # Классифицируем результаты для детального отчета
-        successful_tracks = [r for r in results if r.get('success')]
-        duplicate_tracks = [r for r in results if r.get('duplicate')]
-        failed_tracks = [r for r in results if not r.get('success') and not r.get('duplicate')]
+        # Финальная статистика
+        successful_count = len([r for r in all_results if r.get('success')])
+        duplicate_count = len([r for r in all_results if r.get('duplicate')])
+        failed_count = len([r for r in all_results if not r.get('success') and not r.get('duplicate')])
         
-        # Финальный статус
         download_status.update({
             "is_running": False,
             "current": len(tracks_to_download),
             "current_track": f"Завершено: {successful_count} успешно, {duplicate_count} дубликатов, {failed_count} ошибок",
-            "results": results,
-            "successful_tracks": successful_tracks,
-            "duplicate_tracks": duplicate_tracks,
-            "failed_tracks": failed_tracks
+            "results": all_results,
+            "successful_tracks": [r for r in all_results if r.get('success')],
+            "duplicate_tracks": [r for r in all_results if r.get('duplicate')],
+            "failed_tracks": [r for r in all_results if not r.get('success') and not r.get('duplicate')]
         })
         
-        logger.info(f"🎉 Скачивание завершено: {successful_count} успешно, {duplicate_count} дубликатов, {failed_count} ошибок")
-        
-        # Детальный лог ошибок
-        if duplicate_tracks:
-            logger.info("🚫 Пропущенные дубликаты:")
-            for track in duplicate_tracks:
-                logger.info(f"   - {track.get('artist')} - {track.get('title')}")
-        
-        if failed_tracks:
-            logger.info("❌ Треки с ошибками:")
-            for track in failed_tracks:
-                logger.info(f"   - {track.get('artist')} - {track.get('title')}: {track.get('error')}")
+        logger.info(f"🎉 ПАРАЛЛЕЛЬНОЕ скачивание завершено: {successful_count} успешно, {duplicate_count} дубликатов, {failed_count} ошибок")
         
         return {
             "success": True,
-            "message": f"Обработано {len(results)} треков",
-            "results": results,
+            "message": f"Обработано {len(all_results)} треков",
+            "results": all_results,
             "downloaded": successful_count,
             "duplicates": duplicate_count,
             "failed": failed_count,
-            "source": "yandex_music",
+            "source": source,
             "statistics": {
                 "total": len(tracks_to_download),
                 "successful": successful_count,
@@ -898,61 +1154,12 @@ async def download_tracks_from_list(request_data: dict):
         }
         
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка скачивания треков: {e}")
+        logger.error(f"❌ Критическая ошибка скачивания: {e}")
         download_status.update({
             "is_running": False,
             "current_track": f"Критическая ошибка: {str(e)}"
         })
-        raise HTTPException(status_code=500, detail=f"Критическая ошибка скачивания: {str(e)}")
-
-@app.get("/api/download/statistics")
-async def get_download_statistics():
-    """Получить статистику по последнему скачиванию"""
-    try:
-        successful_count = len(download_status.get("successful_tracks", []))
-        duplicate_count = len(download_status.get("duplicate_tracks", []))
-        failed_count = len(download_status.get("failed_tracks", []))
-        total = download_status.get("total", 0)
-        
-        return {
-            "success": True,
-            "statistics": {
-                "total_tracks": total,
-                "successful": successful_count,
-                "duplicates": duplicate_count,
-                "failed": failed_count,
-                "success_rate": round((successful_count / total) * 100, 1) if total > 0 else 0,
-                "last_update": datetime.now().isoformat()
-            },
-            "last_download": {
-                "is_running": download_status.get("is_running", False),
-                "current_track": download_status.get("current_track", ""),
-                "total_results": len(download_status.get("results", []))
-            }
-        }
-    except Exception as e:
-        logger.error(f"❌ Ошибка получения статистики: {e}")
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-@app.post("/api/download/clear-status")
-async def clear_download_status():
-    """Очистить статус скачивания"""
-    global download_status
-    download_status.update({
-        "is_running": False,
-        "total": 0,
-        "current": 0,
-        "current_track": "",
-        "results": [],
-        "failed_tracks": [],
-        "duplicate_tracks": [],
-        "successful_tracks": []
-    })
-    return {"success": True, "message": "Статус скачивания очищен"}
-
+        raise HTTPException(status_code=500, detail=f"Критическая ошибка: {str(e)}")
 # =========================
 # PRESENTATION GENERATION API
 # =========================

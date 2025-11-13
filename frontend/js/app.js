@@ -2903,5 +2903,293 @@ async function saveTrackOrder() {
         showNotification('❌ Ошибка сохранения порядка', 'error');
     }
 }
+// =========================
+// YANDEX TOKEN MANAGEMENT FUNCTIONS
+// =========================
 
+let yandexTokenStatus = {
+    has_token: false,
+    is_valid: false,
+    message: "Не проверено"
+};
+
+// Загрузить статус Яндекс токена
+async function loadYandexTokenStatus() {
+    try {
+        const response = await fetch(`${API_BASE}/yandex/token/status`);
+        const data = await response.json();
+
+        if (data.success) {
+            yandexTokenStatus = data.status;
+            updateYandexTokenDisplay();
+        } else {
+            console.error('Ошибка загрузки статуса токена:', data.error);
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки статуса Яндекс токена:', error);
+    }
+}
+
+// Обновить отображение статуса токена
+function updateYandexTokenDisplay() {
+    const statusElement = document.getElementById('yandexTokenStatus');
+    const accountInfoElement = document.getElementById('yandexAccountInfo');
+    const manageSection = document.getElementById('yandexTokenManage');
+    const formSection = document.getElementById('yandexTokenForm');
+
+    if (!statusElement) return;
+
+    let statusHTML = '';
+    let accountHTML = '';
+
+    if (yandexTokenStatus.has_token) {
+        if (yandexTokenStatus.is_valid) {
+            statusHTML = `
+                <div class="token-status valid">
+                    <span class="status-icon">✅</span>
+                    <span class="status-text">${yandexTokenStatus.message}</span>
+                </div>
+            `;
+
+            if (yandexTokenStatus.account_info) {
+                accountHTML = `
+                    <div class="account-info">
+                        <div class="info-item">
+                            <span class="label">Логин:</span>
+                            <span class="value">${yandexTokenStatus.account_info.login || 'Неизвестно'}</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">UID:</span>
+                            <span class="value">${yandexTokenStatus.account_info.uid || 'Неизвестно'}</span>
+                        </div>
+                    </div>
+                `;
+            }
+        } else {
+            statusHTML = `
+                <div class="token-status invalid">
+                    <span class="status-icon">❌</span>
+                    <span class="status-text">${yandexTokenStatus.message}</span>
+                </div>
+            `;
+        }
+    } else {
+        statusHTML = `
+            <div class="token-status missing">
+                <span class="status-icon">⚠️</span>
+                <span class="status-text">${yandexTokenStatus.message}</span>
+            </div>
+        `;
+    }
+
+    statusElement.innerHTML = statusHTML;
+
+    if (accountInfoElement) {
+        accountInfoElement.innerHTML = accountHTML;
+    }
+
+    // Показываем/скрываем секции в зависимости от наличия токена
+    if (manageSection) {
+        manageSection.style.display = yandexTokenStatus.has_token ? 'block' : 'none';
+    }
+    if (formSection) {
+        formSection.style.display = yandexTokenStatus.has_token ? 'none' : 'block';
+    }
+}
+
+// Сохранить Яндекс токен
+async function saveYandexToken() {
+    const tokenInput = document.getElementById('yandexTokenInput');
+    if (!tokenInput) return;
+
+    const token = tokenInput.value.trim();
+    if (!token) {
+        showNotification('Введите Яндекс токен', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/yandex/token/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification(data.message, 'success');
+            tokenInput.value = '';
+            // Обновляем статус
+            await loadYandexTokenStatus();
+        } else {
+            showNotification(`❌ ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Ошибка сохранения Яндекс токена:', error);
+        showNotification('❌ Ошибка сохранения токена', 'error');
+    }
+}
+
+// Удалить Яндекс токен
+async function deleteYandexToken() {
+    if (!confirm('Вы уверены, что хотите удалить Яндекс токен?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/yandex/token/delete`, {
+            method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showNotification(data.message, 'success');
+            // Обновляем статус
+            await loadYandexTokenStatus();
+        } else {
+            showNotification(`❌ ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Ошибка удаления Яндекс токена:', error);
+        showNotification('❌ Ошибка удаления токена', 'error');
+    }
+}
+
+// Показать/скрыть форму ввода токена
+function toggleTokenForm() {
+    const form = document.getElementById('yandexTokenForm');
+    const manage = document.getElementById('yandexTokenManage');
+
+    if (form && manage) {
+        if (form.style.display === 'none') {
+            form.style.display = 'block';
+            manage.style.display = 'none';
+        } else {
+            form.style.display = 'none';
+            manage.style.display = 'block';
+        }
+    }
+}
+
+// Показать информацию о получении токена
+function showTokenHelp() {
+    const helpText = `
+🎵 Как получить Яндекс токен:
+
+1. Откройте Яндекс.Музыку в браузере
+2. Нажмите F12 → вкладка "Network" (Сеть)
+3. Обновите страницу (F5)
+4. Найдите запросы к api.music.yandex.net
+5. В заголовках запроса найдите "Authorization"
+6. Скопируйте токен (после слова "OAuth")
+
+📝 Пример:
+Authorization: OAuth y0_AgAAAABv6Kb3AAABcQAAAAECbS4YAAd7vVKb3Y63eSEXAmAbC5SfQ
+
+⚠️ Внимание:
+• Никому не передавайте свой токен
+• Токен дает доступ к вашему аккаунту
+• Сохраняйте токен в безопасном месте
+    `;
+
+    alert(helpText);
+}
+
+// Добавляем HTML секцию Яндекс токена в интерфейс
+function addYandexTokenSection() {
+    const statusTab = document.getElementById('status');
+    if (!statusTab) return;
+
+    // Проверяем, не добавлена ли уже секция
+    if (document.getElementById('yandexTokenSection')) return;
+
+    const yandexTokenHTML = `
+        <div class="yandex-token-section" id="yandexTokenSection">
+            <div class="generator-card">
+                <h2>🎵 Яндекс.Музыка Токен</h2>
+                <p class="subtitle">Управление токеном для доступа к Яндекс.Музыке</p>
+                
+                <div class="token-status-card">
+                    <h4>📊 Статус токена:</h4>
+                    <div id="yandexTokenStatus" class="token-status-container">
+                        <div class="token-status loading">
+                            <span class="status-icon">🔄</span>
+                            <span class="status-text">Загрузка...</span>
+                        </div>
+                    </div>
+                    <div id="yandexAccountInfo" class="account-info-container"></div>
+                </div>
+                
+                <div class="token-form-section" id="yandexTokenForm" style="display: none;">
+                    <div class="form-group">
+                        <label for="yandexTokenInput">Токен Яндекс.Музыки:</label>
+                        <input type="password" id="yandexTokenInput" class="form-input" 
+                               placeholder="OAuth y0_AgAAAABv6Kb3AAABcQAAAAECbS4YAAd7vVKb3Y63eSEXAmAbC5SfQ">
+                        <small class="text-muted">
+                            🔒 Токен сохраняется локально и используется только для скачивания треков
+                        </small>
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn btn-primary" onclick="saveYandexToken()">
+                            💾 Сохранить токен
+                        </button>
+                        <button class="btn btn-secondary" onclick="showTokenHelp()">
+                            ❓ Как получить токен?
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="token-management" id="yandexTokenManage" style="display: none;">
+                    <div class="management-actions">
+                        <button class="btn btn-warning" onclick="toggleTokenForm()">
+                            🔄 Изменить токен
+                        </button>
+                        <button class="btn btn-danger" onclick="deleteYandexToken()">
+                            🗑️ Удалить токен
+                        </button>
+                        <button class="btn btn-secondary" onclick="showTokenHelp()">
+                            ❓ Помощь
+                        </button>
+                    </div>
+                </div>
+                
+                
+            </div>
+        </div>
+    `;
+
+    // Вставляем после основного контента статуса
+    const statusContent = statusTab.querySelector('.generator-card');
+    if (statusContent) {
+        statusContent.insertAdjacentHTML('afterend', yandexTokenHTML);
+    } else {
+        statusTab.innerHTML += yandexTokenHTML;
+    }
+
+    // Загружаем статус токена
+    loadYandexTokenStatus();
+}
+
+// Инициализация при загрузке страницы
+document.addEventListener('DOMContentLoaded', function () {
+    // Добавляем секцию Яндекс токена
+    setTimeout(addYandexTokenSection, 1000);
+
+    // Обновляем статус токена при переключении на вкладку статуса
+    const statusTab = document.querySelector('[data-tab="status"]');
+    if (statusTab) {
+        statusTab.addEventListener('click', function () {
+            setTimeout(loadYandexTokenStatus, 500);
+        });
+    }
+});
+
+// Экспорт в глобальную область
+window.saveYandexToken = saveYandexToken;
+window.deleteYandexToken = deleteYandexToken;
+window.toggleTokenForm = toggleTokenForm;
+window.showTokenHelp = showTokenHelp;
+window.loadYandexTokenStatus = loadYandexTokenStatus;
 console.log('🎵 Music Loto Maker frontend загружен!');
