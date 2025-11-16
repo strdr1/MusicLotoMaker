@@ -1281,7 +1281,6 @@ function renderTracks(tracks) {
         return;
     }
 
-    // Просто рендерим в том порядке, в котором пришли треки (уже отсортированы по ID на бэкенде)
     container.innerHTML = tracks.map(track => `
         <div class="track-item draggable" draggable="true" data-track-id="${track.id}">
             <div class="col-id">
@@ -1290,11 +1289,13 @@ function renderTracks(tracks) {
             </div>
             <div class="col-artist">
                 ${track.image_path ?
-            `<img src="${API_BASE}/tracks/${track.id}/artist-photo?t=${Date.now()}" 
-                          alt="${escapeHtml(track.artist)}" 
-                          class="track-cover"
-                          onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
-                          onload="this.nextElementSibling.style.display='none';">` :
+            `<span onclick="openPhotoEditor(${track.id})" style="cursor: pointer; display: inline-block;">
+                        <img src="${API_BASE}/tracks/${track.id}/artist-photo?t=${Date.now()}" 
+                             alt="${escapeHtml(track.artist)}" 
+                             class="track-cover"
+                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
+                             onload="this.nextElementSibling.style.display='none';">
+                    </span>` :
             ''
         }
                 <div class="track-cover-placeholder" style="${track.image_path ? 'display: none;' : ''}">🎵</div>
@@ -1308,13 +1309,12 @@ function renderTracks(tracks) {
             <div class="col-actions">
                 <button class="btn btn-secondary btn-small" onclick="openAudioEditor(${track.id})" title="Аудио редактор">🎚️</button>
                 <button class="btn btn-secondary btn-small" onclick="editTrack(${track.id})" title="Редактировать метаданные">✏️</button>
-                <button class="btn btn-secondary btn-small" onclick="addArtistPhoto(${track.id})" title="Добавить фото артиста">📷</button>
+                <!-- 📷 КНОПКА УДАЛЕНА -->
                 <button class="btn btn-danger btn-small" onclick="deleteTrack(${track.id})" title="Удалить">🗑️</button>
             </div>
         </div>
     `).join('');
 
-    // Назначаем обработчики drag
     setupDragHandlers();
 }
 // Загрузка файлов

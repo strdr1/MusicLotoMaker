@@ -38,6 +38,11 @@ class IDChangeRequest(BaseModel):
 class IDSwapRequest(BaseModel):
     track1_id: int
     track2_id: int
+
+class SegmentUpdate(BaseModel):
+    start_time: float
+    duration: float = 30
+
 # === LOGGING CONFIGURATION ===
 LOG_DIR = r"E:\1\MusicLotoMaker\MusicLotoMaker\logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -70,6 +75,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 def parse_track_list(track_list_text: str) -> List[dict]:
     """
     Разбирает текстовый список треков на структурированные данные
@@ -88,17 +94,16 @@ def parse_track_list(track_list_text: str) -> List[dict]:
         if not line:
             continue
             
-        # Пробуем разные разделители
-        if ' - ' in line:
-            parts = line.split(' - ', 1)
-        elif ' — ' in line:
-            parts = line.split(' — ', 1)
-        elif '-' in line:
-            parts = line.split('-', 1)
+        separators = [' - ', ' — ', ' – ', '-', '–', '—']
+        for sep in separators:
+            if sep in line:
+                parts = line.split(sep, 1)
+                artist = parts[0].strip()
+                title = parts[1].strip()
+                break
         else:
-            # Если разделитель не найден, используем всю строку как название
-            # а артиста оставляем пустым
-            parts = ['', line]
+            artist = 'Неизвестный исполнитель'
+            title = line
         
         if len(parts) == 2:
             artist = parts[0].strip()
@@ -122,6 +127,7 @@ def parse_track_list(track_list_text: str) -> List[dict]:
     
     logger.info(f"📝 Разобрано {len(tracks)} треков из {len(lines)} строк")
     return tracks
+
 # === frontend logging endpoint ===
 @app.post("/api/log/frontend")
 async def frontend_log(request: Request):
@@ -1160,131 +1166,20 @@ async def download_tracks_from_list(request_data: dict):
             "current_track": f"Критическая ошибка: {str(e)}"
         })
         raise HTTPException(status_code=500, detail=f"Критическая ошибка: {str(e)}")
-# =========================
-# PRESENTATION GENERATION API
-# =========================
-
-@app.post("/api/generate/presentation")
-async def generate_presentation(request_data: dict):
-    """Генерация презентации"""
-    try:
-        logger.info("🎬 Запуск генерации презентации...")
-        
-        # Проверяем наличие base.pptx
-        base_path = os.path.join(BASE_DIR, "base.pptx")
-        if not os.path.exists(base_path):
-            logger.info("📦 base.pptx не найден, скачиваем из Dropbox...")
-            if not dropbox_storage.download_base_pptx(base_path):
-                raise HTTPException(status_code=500, detail="Не удалось скачать base.pptx из облака")
-        
-        # Проверяем наличие треков
-        tracks_count = media_library.get_tracks_count()
-        if tracks_count < 1:
-            raise HTTPException(status_code=400, detail="Недостаточно треков для генерации")
-        
-        title = request_data.get("title", "Музыкальное Лото")
-        make_bw = request_data.get("design", {}).get("make_bw", False)
-        
-        logger.info(f"📊 Параметры генерации: '{title}', ЧБ: {make_bw}, треков: {tracks_count}")
-        
-        generator = ModernPresentationGenerator(base_path)
-        result_path = generator.generate(
-            game_title=title,
-            tracks=None,  # автоматически загрузит из tracks.json
-            make_bw=make_bw,
-            use_parallel=True
-        )
-        
-        # Получаем имя файла для скачивания
-        result_dir = Path(result_path)
-        pptx_files = list(result_dir.glob("*.pptx"))
-        if pptx_files:
-            download_filename = pptx_files[0].name
-            download_url = f"/api/download/{download_filename}"
-            
-            logger.info(f"✅ Презентация создана: {download_filename}")
-            
-            return {
-                "success": True,
-                "message": "Презентация успешно создана",
-                "download_url": download_url,
-                "filename": download_filename,
-                "path": str(result_path)
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Презентация не была создана")
-        
-    except FileNotFoundError as e:
-        logger.error(f"❌ Файл шаблона не найден: {e}")
-        raise HTTPException(status_code=500, detail=f"Шаблон презентации не найден: {str(e)}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ Ошибка генерации презентации: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
 
 # =========================
-# BASIC ROUTES
+# TRACK ID MANAGEMENT API
 # =========================
 
-@app.get("/")
-async def serve_frontend():
-    index_path = os.path.join(FRONTEND_DIR, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {
-        "message": "Music Loto Maker API v3.0 is running",
-        "version": "3.0.0",
-        "features": [
-            "Musical Loto Game",
-            "Modern presentations", 
-            "Smart metadata parsing",
-            "Audio editing",
-            "Ticket generation",
-            "JSON export",
-            "Artist image search",
-            "Yandex Music track download",
-        ],
-    }
-
-# =========================
-# TRACK MANAGEMENT API
-# =========================
-from pydantic import BaseModel
-
-class SegmentUpdate(BaseModel):
-    start_time: float
-    duration: float = 30
-@app.post("/api/tracks/reorder-by-ids")
-async def reorder_tracks_by_ids(request: dict):
-    """Переупорядочить треки по переданному списку ID и присвоить новые последовательные ID"""
-    track_ids = request.get("track_ids")
-    if not isinstance(track_ids, list):
-        raise HTTPException(status_code=400, detail="track_ids должен быть списком")
-    
-    # Получаем текущие треки
-    current_tracks = {t['id']: t for t in media_library.get_tracks()}
-    ordered_tracks = []
-
-    for i, track_id in enumerate(track_ids):
-        if track_id not in current_tracks:
-            continue
-        track = current_tracks[track_id]
-        track['id'] = i + 1  # Новый порядковый ID
-        ordered_tracks.append(track)
-
-    # Обновляем медиатеку
-    media_library.tracks = ordered_tracks
-    media_library.save_to_file()
-    logger.info(f"🔄 Треки переупорядочены. Новых ID: {len(ordered_tracks)}")
-    return {"success": True, "message": f"Переупорядочено {len(ordered_tracks)} треков"}
 @app.put("/api/tracks/{track_id}/change-id")
 async def change_track_id_endpoint(track_id: int, request: IDChangeRequest):
     """Изменить ID трека. new_id должен быть свободен."""
     if media_library.get_track(request.new_id):
         raise HTTPException(status_code=400, detail="ID уже занят")
+    
     if media_library.change_track_id(track_id, request.new_id):
         return {"success": True, "message": f"ID изменён: {track_id} → {request.new_id}"}
+    
     raise HTTPException(status_code=404, detail="Трек не найден")
 
 @app.put("/api/tracks/swap-ids")
@@ -1303,6 +1198,43 @@ async def compact_track_ids_endpoint():
     if media_library.compact_ids():
         return {"success": True, "message": "ID успешно уплотнены"}
     return {"success": False, "message": "Не удалось уплотнить ID"}
+
+@app.post("/api/tracks/reorder-by-ids")
+async def reorder_tracks_by_ids(request: dict):
+    """Переупорядочить треки по переданному списку ID с ОБНОВЛЕНИЕМ ФОТО"""
+    track_ids = request.get("track_ids")
+    if not isinstance(track_ids, list):
+        raise HTTPException(status_code=400, detail="track_ids должен быть списком")
+    
+    # ВАЖНО: Используем новую функцию с обновлением фото
+    if media_library.reorder_tracks_with_photo_fix(track_ids):
+        return {
+            "success": True, 
+            "message": f"Переупорядочено {len(track_ids)} треков с обновлением фото"
+        }
+    
+    raise HTTPException(status_code=500, detail="Не удалось переупорядочить треки")
+@app.post("/api/tracks/fix-broken-photos")
+async def fix_broken_photos():
+    """Исправить сломанные пути к фото артистов"""
+    try:
+        result = media_library.fix_broken_image_paths()
+        return {
+            "success": True,
+            "message": result['message'],
+            "fixed_count": result['fixed_count'],
+            "broken_tracks": result['broken_tracks']
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка исправления фото: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+# =========================
+# TRACK MANAGEMENT API
+# =========================
+
 @app.put("/api/tracks/{track_id}/segment")
 async def update_track_segment_endpoint(track_id: int, update: SegmentUpdate):
     """Обновить отрезок трека (начало и длительность)"""
@@ -1320,6 +1252,7 @@ async def update_track_segment_endpoint(track_id: int, update: SegmentUpdate):
 
     logger.info(f"🔄 Отрезок трека {track_id} обновлён: {update.start_time}с, {update.duration}с")
     return {"success": True, "message": "Отрезок успешно сохранён"}
+
 @app.get("/api/tracks")
 async def get_tracks():
     """Возвращает список треков из медиатеки"""
@@ -1490,107 +1423,6 @@ async def clear_tracks():
         raise HTTPException(status_code=500, detail=f"Ошибка очистки: {str(e)}")
 
 # =========================
-# DUPLICATE CHECKING API
-# =========================
-
-@app.post("/api/tracks/check-duplicate")
-async def check_track_duplicate(request_data: dict):
-    """Проверить, есть ли трек в медиатеке"""
-    try:
-        artist = request_data.get('artist', '').strip()
-        title = request_data.get('title', '').strip()
-        
-        if not artist or not title:
-            return {"is_duplicate": False, "error": "Не указаны артист или название"}
-        
-        is_duplicate = media_library.track_exists(artist, title)
-        duplicates = media_library.find_duplicate_tracks(artist, title) if is_duplicate else []
-        
-        return {
-            "is_duplicate": is_duplicate,
-            "artist": artist,
-            "title": title,
-            "existing_tracks": duplicates
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка проверки дубликата: {e}")
-        return {"is_duplicate": False, "error": str(e)}
-
-@app.get("/api/tracks/duplicates")
-async def get_all_duplicates():
-    """Получить все дубликаты в медиатеке"""
-    try:
-        tracks = media_library.get_tracks()
-        seen = {}
-        duplicates = []
-        
-        for track in tracks:
-            key = f"{normalize_track_string(track['artist'])}|{normalize_track_string(track['title'])}"
-            if key in seen:
-                duplicates.append({
-                    'artist': track['artist'],
-                    'title': track['title'],
-                    'tracks': [seen[key], track]
-                })
-            else:
-                seen[key] = track
-        
-        return {
-            "duplicates": duplicates,
-            "total_duplicate_groups": len(duplicates)
-        }
-    except Exception as e:
-        logger.error(f"❌ Ошибка поиска дубликатов: {e}")
-        return {"duplicates": [], "error": str(e)}
-
-@app.get("/api/tracks/duplicates/detailed")
-async def get_detailed_duplicates():
-    """Получить детальную информацию о дубликатах"""
-    try:
-        tracks = media_library.get_tracks()
-        seen = {}
-        duplicates = []
-        
-        for track in tracks:
-            key = f"{normalize_track_string(track['artist'])}|{normalize_track_string(track['title'])}"
-            if key in seen:
-                # Нашли дубликат
-                original_track = seen[key]
-                duplicate_info = {
-                    'artist': track['artist'],
-                    'title': track['title'],
-                    'tracks': [
-                        {
-                            'id': original_track['id'],
-                            'file_path': original_track['file_path'],
-                            'original_filename': original_track['original_filename'],
-                            'created_at': original_track.get('created_at', ''),
-                            'image_path': original_track.get('image_path')
-                        },
-                        {
-                            'id': track['id'],
-                            'file_path': track['file_path'],
-                            'original_filename': track['original_filename'],
-                            'created_at': track.get('created_at', ''),
-                            'image_path': track.get('image_path')
-                        }
-                    ]
-                }
-                duplicates.append(duplicate_info)
-            else:
-                seen[key] = track
-        
-        return {
-            "duplicates": duplicates,
-            "total_duplicate_groups": len(duplicates),
-            "total_duplicate_tracks": sum(len(group['tracks']) for group in duplicates)
-        }
-    except Exception as e:
-        logger.error(f"❌ Ошибка поиска дубликатов: {e}")
-        return {"duplicates": [], "error": str(e)}
-
-# =========================
 # ARTIST PHOTOS API
 # =========================
 
@@ -1662,7 +1494,7 @@ async def upload_artist_photo(track_id: int, photo: UploadFile = File(...)):
         images_dir = os.path.join(BASE_DIR, "images")
         os.makedirs(images_dir, exist_ok=True)
 
-        # Генерируем имя файла
+        # Генерируем имя файла по стандарту: {track_id}_artist.{extension}
         file_extension = Path(photo.filename).suffix.lower()
         image_filename = f"{track_id}_artist{file_extension}"
         image_path = os.path.join(images_dir, image_filename)
@@ -1704,10 +1536,11 @@ async def save_artist_photo(track_id: int, request_data: dict):
         if not photo_url:
             raise HTTPException(status_code=400, detail="URL фото не указан")
         
-        # Скачиваем и сохраняем фото
+        # Скачиваем и сохраняем фото с правильным именем
         images_dir = os.path.join(BASE_DIR, "images")
         os.makedirs(images_dir, exist_ok=True)
         
+        # Используем стандартное имя: {track_id}_artist.png
         image_path = os.path.join(images_dir, f"{track_id}_artist.png")
         
         async with aiohttp.ClientSession() as session:
@@ -2039,6 +1872,93 @@ async def upload_base_pptx(file: UploadFile = File(...)):
         return {"success": False, "error": str(e)}
 
 # =========================
+# PRESENTATION GENERATION API
+# =========================
+
+@app.post("/api/generate/presentation")
+async def generate_presentation(request_data: dict):
+    """Генерация презентации"""
+    try:
+        logger.info("🎬 Запуск генерации презентации...")
+        
+        # Проверяем наличие base.pptx
+        base_path = os.path.join(BASE_DIR, "base.pptx")
+        if not os.path.exists(base_path):
+            logger.info("📦 base.pptx не найден, скачиваем из Dropbox...")
+            if not dropbox_storage.download_base_pptx(base_path):
+                raise HTTPException(status_code=500, detail="Не удалось скачать base.pptx из облака")
+        
+        # Проверяем наличие треков
+        tracks_count = media_library.get_tracks_count()
+        if tracks_count < 1:
+            raise HTTPException(status_code=400, detail="Недостаточно треков для генерации")
+        
+        title = request_data.get("title", "Музыкальное Лото")
+        make_bw = request_data.get("design", {}).get("make_bw", False)
+        
+        logger.info(f"📊 Параметры генерации: '{title}', ЧБ: {make_bw}, треков: {tracks_count}")
+        
+        generator = ModernPresentationGenerator(base_path)
+        result_path = generator.generate(
+            game_title=title,
+            tracks=None,  # автоматически загрузит из tracks.json
+            make_bw=make_bw,
+            use_parallel=True
+        )
+        
+        # Получаем имя файла для скачивания
+        result_dir = Path(result_path)
+        pptx_files = list(result_dir.glob("*.pptx"))
+        if pptx_files:
+            download_filename = pptx_files[0].name
+            download_url = f"/api/download/{download_filename}"
+            
+            logger.info(f"✅ Презентация создана: {download_filename}")
+            
+            return {
+                "success": True,
+                "message": "Презентация успешно создана",
+                "download_url": download_url,
+                "filename": download_filename,
+                "path": str(result_path)
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Презентация не была создана")
+        
+    except FileNotFoundError as e:
+        logger.error(f"❌ Файл шаблона не найден: {e}")
+        raise HTTPException(status_code=500, detail=f"Шаблон презентации не найден: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Ошибка генерации презентации: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка генерации: {str(e)}")
+
+# =========================
+# BASIC ROUTES
+# =========================
+
+@app.get("/")
+async def serve_frontend():
+    index_path = os.path.join(FRONTEND_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {
+        "message": "Music Loto Maker API v3.0 is running",
+        "version": "3.0.0",
+        "features": [
+            "Musical Loto Game",
+            "Modern presentations", 
+            "Smart metadata parsing",
+            "Audio editing",
+            "Ticket generation",
+            "JSON export",
+            "Artist image search",
+            "Yandex Music track download",
+        ],
+    }
+
+# =========================
 # HEALTH AND STATUS
 # =========================
 
@@ -2206,13 +2126,114 @@ async def download_file(filename: str):
         logger.error(f"❌ Критическая ошибка при загрузке файла {filename}: {e}")
         logger.exception("Полная трассировка ошибки:")
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
+
+# =========================
+# DUPLICATE CHECKING API
+# =========================
+
+@app.post("/api/tracks/check-duplicate")
+async def check_track_duplicate(request_data: dict):
+    """Проверить, есть ли трек в медиатеке"""
+    try:
+        artist = request_data.get('artist', '').strip()
+        title = request_data.get('title', '').strip()
+        
+        if not artist or not title:
+            return {"is_duplicate": False, "error": "Не указаны артист или название"}
+        
+        is_duplicate = media_library.track_exists(artist, title)
+        duplicates = media_library.find_duplicate_tracks(artist, title) if is_duplicate else []
+        
+        return {
+            "is_duplicate": is_duplicate,
+            "artist": artist,
+            "title": title,
+            "existing_tracks": duplicates
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки дубликата: {e}")
+        return {"is_duplicate": False, "error": str(e)}
+
+@app.get("/api/tracks/duplicates")
+async def get_all_duplicates():
+    """Получить все дубликаты в медиатеке"""
+    try:
+        tracks = media_library.get_tracks()
+        seen = {}
+        duplicates = []
+        
+        for track in tracks:
+            key = f"{normalize_track_string(track['artist'])}|{normalize_track_string(track['title'])}"
+            if key in seen:
+                duplicates.append({
+                    'artist': track['artist'],
+                    'title': track['title'],
+                    'tracks': [seen[key], track]
+                })
+            else:
+                seen[key] = track
+        
+        return {
+            "duplicates": duplicates,
+            "total_duplicate_groups": len(duplicates)
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка поиска дубликатов: {e}")
+        return {"duplicates": [], "error": str(e)}
+
+@app.get("/api/tracks/duplicates/detailed")
+async def get_detailed_duplicates():
+    """Получить детальную информацию о дубликатах"""
+    try:
+        tracks = media_library.get_tracks()
+        seen = {}
+        duplicates = []
+        
+        for track in tracks:
+            key = f"{normalize_track_string(track['artist'])}|{normalize_track_string(track['title'])}"
+            if key in seen:
+                # Нашли дубликат
+                original_track = seen[key]
+                duplicate_info = {
+                    'artist': track['artist'],
+                    'title': track['title'],
+                    'tracks': [
+                        {
+                            'id': original_track['id'],
+                            'file_path': original_track['file_path'],
+                            'original_filename': original_track['original_filename'],
+                            'created_at': original_track.get('created_at', ''),
+                            'image_path': original_track.get('image_path')
+                        },
+                        {
+                            'id': track['id'],
+                            'file_path': track['file_path'],
+                            'original_filename': track['original_filename'],
+                            'created_at': track.get('created_at', ''),
+                            'image_path': track.get('image_path')
+                        }
+                    ]
+                }
+                duplicates.append(duplicate_info)
+            else:
+                seen[key] = track
+        
+        return {
+            "duplicates": duplicates,
+            "total_duplicate_groups": len(duplicates),
+            "total_duplicate_tracks": sum(len(group['tracks']) for group in duplicates)
+        }
+    except Exception as e:
+        logger.error(f"❌ Ошибка поиска дубликатов: {e}")
+        return {"duplicates": [], "error": str(e)}
+
 # =========================
 # IMPORT/EXPORT SYSTEM (LOW RAM USAGE)
 # =========================
 
 import zipfile
 import shutil
-from pathlib import Path
 
 @app.get("/api/export/all-data")
 async def export_all_data():
@@ -2537,8 +2558,262 @@ async def get_export_info():
         logger.error(f"❌ Ошибка получения информации об экспорте: {e}")
         return {"success": False, "error": str(e)}
 
+# =========================
+# IMAGE PROCESSING API (COMPLETE)
+# =========================
 
+import base64
+from io import BytesIO
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw
+import os
 
+class ImageProcessor:
+    def __init__(self):
+        pass
+    
+    def apply_eraser_batch(self, image_data, erase_operations, container_size, image_transform):
+        """Применяет ВСЕ операции ластика за один раз"""
+        try:
+            if isinstance(image_data, str):
+                if ',' in image_data:
+                    image_data = image_data.split(',')[1]
+                
+                image_bytes = base64.b64decode(image_data)
+                image = Image.open(BytesIO(image_bytes)).convert("RGBA")
+            else:
+                return None
+            
+            cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGBA2BGRA)
+            mask = np.zeros((cv_image.shape[0], cv_image.shape[1]), dtype=np.uint8)
+            
+            for operation in erase_operations:
+                for point in operation['points']:
+                    screen_x = point['x']
+                    screen_y = point['y']
+                    size = point.get('size', operation.get('size', 20))
+                    
+                    img_x = int((screen_x - image_transform['x']) / image_transform['scale'])
+                    img_y = int((screen_y - image_transform['y']) / image_transform['scale'])
+                    
+                    if (0 <= img_x < cv_image.shape[1] and 
+                        0 <= img_y < cv_image.shape[0]):
+                        cv2.circle(mask, (img_x, img_y), size // 2, 255, -1)
+            
+            cv_image[mask == 255] = [0, 0, 0, 0]
+            result_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGRA2RGBA))
+            return result_image
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка применения ластика: {e}")
+            return None
+    
+    def apply_crop(self, image_data, crop_rect, original_size, container_size):
+        """Обрезает изображение"""
+        try:
+            if isinstance(image_data, str):
+                if ',' in image_data:
+                    image_data = image_data.split(',')[1]
+                image_bytes = base64.b64decode(image_data)
+                image = Image.open(BytesIO(image_bytes))
+            else:
+                image = image_data
+            
+            img_width, img_height = image.size
+            
+            scale_x = img_width / original_size['width']
+            scale_y = img_height / original_size['height']
+            
+            x1 = int((crop_rect['x']) * scale_x)
+            y1 = int((crop_rect['y']) * scale_y)
+            x2 = int((crop_rect['x'] + crop_rect['width']) * scale_x)
+            y2 = int((crop_rect['y'] + crop_rect['height']) * scale_y)
+            
+            x1 = max(0, min(x1, img_width - 1))
+            y1 = max(0, min(y1, img_height - 1))
+            x2 = max(x1 + 1, min(x2, img_width))
+            y2 = max(y1 + 1, min(y2, img_height))
+            
+            cropped = image.crop((x1, y1, x2, y2))
+            return cropped
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка обрезки: {e}")
+            return None
+    
+    def apply_selection_mask(self, image_data, selection_points, container_size, image_transform):
+        """Вырезает по выделенной области"""
+        try:
+            if isinstance(image_data, str):
+                if ',' in image_data:
+                    image_data = image_data.split(',')[1]
+                
+                image_bytes = base64.b64decode(image_data)
+                image = Image.open(BytesIO(image_bytes)).convert("RGBA")
+            else:
+                return None
+            
+            # Создаем маску на основе выделенной области
+            mask = Image.new('L', image.size, 0)
+            draw = ImageDraw.Draw(mask)
+            
+            # Преобразуем точки выделения в координаты изображения
+            polygon_points = []
+            for point in selection_points:
+                img_x = int((point['x'] - image_transform['x']) / image_transform['scale'])
+                img_y = int((point['y'] - image_transform['y']) / image_transform['scale'])
+                polygon_points.append((img_x, img_y))
+            
+            # Рисуем заполненный полигон
+            if len(polygon_points) > 2:
+                draw.polygon(polygon_points, fill=255)
+            
+            # Применяем маску
+            result = Image.new('RGBA', image.size, (0, 0, 0, 0))
+            result.paste(image, (0, 0), mask)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка вырезки по выделению: {e}")
+            return None
+    
+    def image_to_base64(self, image):
+        """Конвертирует PIL Image в base64"""
+        try:
+            buffered = BytesIO()
+            image.save(buffered, format="PNG")
+            return base64.b64encode(buffered.getvalue()).decode()
+        except Exception as e:
+            logger.error(f"❌ Ошибка конвертации в base64: {e}")
+            return ""
+    
+    def save_image(self, image, filepath):
+        """Сохраняет изображение с перезаписью существующего"""
+        try:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+            
+            image.save(filepath, "PNG")
+            logger.info(f"✅ Изображение сохранено: {filepath}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения изображения: {e}")
+            return False
+
+# Создаем глобальный экземпляр
+image_processor = ImageProcessor()
+logger.info("✅ Image processor initialized successfully")
+
+@app.post("/api/tracks/{track_id}/process-image")
+async def process_track_image(track_id: int, request_data: dict):
+    """Обработать изображение (ластик, обрезка, выделение)"""
+    try:
+        operations = request_data.get('operations', [])
+        container_size = request_data.get('container_size', {})
+        image_transform = request_data.get('image_transform', {})
+        
+        logger.info(f"🎨 Processing image for track {track_id}, operations: {len(operations)}")
+        
+        # Находим трек
+        track = media_library.get_track(track_id)
+        if not track or not track.get('image_path'):
+            return JSONResponse({"success": False, "error": "Трек или фото не найдено"})
+        
+        original_image_path = track['image_path']
+        if not os.path.exists(original_image_path):
+            return JSONResponse({"success": False, "error": "Файл фото не найден"})
+        
+        # Загружаем оригинальное изображение
+        with open(original_image_path, "rb") as f:
+            original_image_data = base64.b64encode(f.read()).decode()
+        
+        image_base64 = f"data:image/png;base64,{original_image_data}"
+        result_image = None
+        
+        # Применяем операции
+        for op in operations:
+            if op['type'] == 'erase':
+                result_image = image_processor.apply_eraser_batch(
+                    image_base64, 
+                    op['data']['operations'],
+                    container_size,
+                    image_transform
+                )
+            elif op['type'] == 'crop':
+                result_image = image_processor.apply_crop(
+                    image_base64,
+                    op['data']['rect'],
+                    op['data']['original_size'],
+                    container_size
+                )
+            elif op['type'] == 'selection':
+                result_image = image_processor.apply_selection_mask(
+                    image_base64,
+                    op['data']['points'],
+                    container_size,
+                    image_transform
+                )
+            
+            if result_image:
+                buffered = BytesIO()
+                result_image.save(buffered, format="PNG")
+                image_base64 = f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode()}"
+        
+        if result_image:
+            success = image_processor.save_image(result_image, original_image_path)
+            
+            if success:
+                result_base64 = image_processor.image_to_base64(result_image)
+                
+                return JSONResponse({
+                    "success": True,
+                    "image": f"data:image/png;base64,{result_base64}",
+                    "message": "Изображение обработано и сохранено",
+                    "image_path": original_image_path
+                })
+            else:
+                return JSONResponse({"success": False, "error": "Ошибка сохранения изображения"})
+        else:
+            return JSONResponse({"success": False, "error": "Ошибка обработки изображения"})
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки изображения: {e}")
+        return JSONResponse({"success": False, "error": str(e)})
+
+@app.post("/api/tracks/{track_id}/preview-eraser")
+async def preview_eraser(track_id: int, request_data: dict):
+    """Предпросмотр ластика в реальном времени"""
+    try:
+        image_data = request_data.get('image')
+        erase_operations = request_data.get('operations', [])
+        container_size = request_data.get('container_size', {})
+        image_transform = request_data.get('image_transform', {})
+        
+        logger.info(f"🎨 Preview eraser: {len(erase_operations)} operations")
+        
+        if not image_data:
+            return JSONResponse({"success": False, "error": "Изображение не предоставлено"})
+        
+        # Для предпросмотра применяем все операции
+        result_image = image_processor.apply_eraser_batch(
+            image_data, erase_operations, container_size, image_transform
+        )
+        
+        if result_image:
+            image_base64 = image_processor.image_to_base64(result_image)
+            return JSONResponse({
+                "success": True,
+                "image": f"data:image/png;base64,{image_base64}",
+                "message": "Предпросмотр обновлен"
+            })
+        else:
+            return JSONResponse({"success": False, "error": "Ошибка применения ластика"})
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка предпросмотра ластика: {e}")
+        return JSONResponse({"success": False, "error": str(e)})
 if __name__ == "__main__":
     import uvicorn
     logger.info("🎵 Music Loto Maker Server v3.0 Starting...")

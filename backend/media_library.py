@@ -3,6 +3,7 @@ import json
 import datetime
 import re
 import logging
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -406,36 +407,254 @@ class MediaLibrary:
             export_data['tracks'].append(track_data)
         
         return export_data
+
     def change_track_id(self, old_id: int, new_id: int) -> bool:
-        """Изменить ID трека. new_id должен быть свободен."""
+        """Изменить ID трека с автоматическим обновлением фото"""
         track = self.get_track(old_id)
         if not track:
             return False
+            
         if self.get_track(new_id):
             raise ValueError("Новый ID уже занят")
+        
+        # Сохраняем старый путь к фото
+        old_image_path = track.get('image_path')
+        
+        # Меняем ID
         track['id'] = new_id
+        
+        # Если у трека есть фото - переименовываем файл
+        if old_image_path and os.path.exists(old_image_path):
+            # Определяем новый путь для фото
+            file_extension = os.path.splitext(old_image_path)[1]
+            images_dir = os.path.dirname(old_image_path)
+            new_image_path = os.path.join(images_dir, f"{new_id}_artist{file_extension}")
+            
+            try:
+                # Переименовываем файл
+                os.rename(old_image_path, new_image_path)
+                # Обновляем путь в данных трека
+                track['image_path'] = new_image_path
+                logger.info(f"🖼️ Фото переименовано: {old_image_path} → {new_image_path}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка переименования фото: {e}")
+                # Если не удалось переименовать, оставляем старый путь
+                track['image_path'] = old_image_path
+        
         self.save_to_file()
         logger.info(f"🔄 ID трека изменён: {old_id} → {new_id}")
         return True
 
     def swap_track_ids(self, id1: int, id2: int) -> bool:
-        """Поменять местами ID двух треков."""
+        """Поменять местами ID двух треков с обновлением ВСЕХ фото"""
         track1 = self.get_track(id1)
         track2 = self.get_track(id2)
         if not track1 or not track2:
             return False
+        
+        # ВРЕМЕННЫЕ ПУТИ для фото обоих треков
+        temp_image_path1 = None
+        temp_image_path2 = None
+        
+        # Создаем временные имена для фото чтобы избежать конфликтов
+        if track1.get('image_path') and os.path.exists(track1['image_path']):
+            temp_image_path1 = track1['image_path'] + '.temp_swap'
+            os.rename(track1['image_path'], temp_image_path1)
+            logger.info(f"📁 Временное фото для трека {id1}: {temp_image_path1}")
+        
+        if track2.get('image_path') and os.path.exists(track2['image_path']):
+            temp_image_path2 = track2['image_path'] + '.temp_swap'
+            os.rename(track2['image_path'], temp_image_path2)
+            logger.info(f"📁 Временное фото для трека {id2}: {temp_image_path2}")
+        
+        # МЕНЯЕМ ID МЕСТАМИ
         track1['id'], track2['id'] = track2['id'], track1['id']
+        logger.info(f"🔄 ID поменяны: {id1} ↔ {id2}")
+        
+        # ОБНОВЛЯЕМ ПУТИ К ФОТО ДЛЯ ОБОИХ ТРЕКОВ
+        try:
+            # Для track1 (теперь с ID id2)
+            if temp_image_path1:
+                file_extension = os.path.splitext(temp_image_path1)[1]
+                images_dir = os.path.dirname(temp_image_path1)
+                new_path1 = os.path.join(images_dir, f"{track1['id']}_artist{file_extension}")
+                os.rename(temp_image_path1, new_path1)
+                track1['image_path'] = new_path1
+                logger.info(f"🖼️ Фото для бывшего {id1} (теперь {track1['id']}): {new_path1}")
+            
+            # Для track2 (теперь с ID id1)  
+            if temp_image_path2:
+                file_extension = os.path.splitext(temp_image_path2)[1]
+                images_dir = os.path.dirname(temp_image_path2)
+                new_path2 = os.path.join(images_dir, f"{track2['id']}_artist{file_extension}")
+                os.rename(temp_image_path2, new_path2)
+                track2['image_path'] = new_path2
+                logger.info(f"🖼️ Фото для бывшего {id2} (теперь {track2['id']}): {new_path2}")
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления фото при обмене ID: {e}")
+            # В случае ошибки пытаемся восстановить оригинальные имена
+            try:
+                if temp_image_path1 and os.path.exists(temp_image_path1):
+                    os.rename(temp_image_path1, track1['image_path'])
+                if temp_image_path2 and os.path.exists(temp_image_path2):
+                    os.rename(temp_image_path2, track2['image_path'])
+            except:
+                logger.error("💥 Критическая ошибка восстановления фото!")
+        
         self.save_to_file()
-        logger.info(f"🔄 ID треков поменяны местами: {id1} ↔ {id2}")
+        logger.info(f"✅ Обмен ID завершен: {id1} ↔ {id2} с обновлением фото")
         return True
 
     def compact_ids(self) -> bool:
-        """Уплотнить ID: сделать их последовательными 1..N без пропусков."""
+        """Уплотнить ID: сделать их последовательными 1..N с обновлением ВСЕХ фото"""
         self.tracks.sort(key=lambda x: x['id'])
+        
+        # Сначала переименовываем ВСЕ фото во временные имена
+        temp_mappings = {}
+        for track in self.tracks:
+            old_image_path = track.get('image_path')
+            if old_image_path and os.path.exists(old_image_path):
+                temp_path = old_image_path + '.temp_compact'
+                try:
+                    os.rename(old_image_path, temp_path)
+                    temp_mappings[track['id']] = (old_image_path, temp_path)
+                    logger.info(f"📁 Временное фото для ID {track['id']}: {temp_path}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка создания временного файла для трека {track['id']}: {e}")
+        
+        # Затем присваиваем новые ID и переименовываем ВСЕ фото
         for i, track in enumerate(self.tracks, start=1):
+            old_id = track['id']
             track['id'] = i
+            
+            # Обновляем фото если есть
+            if old_id in temp_mappings:
+                old_path, temp_path = temp_mappings[old_id]
+                try:
+                    file_extension = os.path.splitext(old_path)[1]
+                    images_dir = os.path.dirname(old_path)
+                    new_image_path = os.path.join(images_dir, f"{i}_artist{file_extension}")
+                    os.rename(temp_path, new_image_path)
+                    track['image_path'] = new_image_path
+                    logger.info(f"🖼️ Фото обновлено: {old_path} → {new_image_path}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка переименования фото для трека {old_id}→{i}: {e}")
+                    # Восстанавливаем оригинальный путь
+                    track['image_path'] = old_path
+        
         self.save_to_file()
         logger.info(f"📦 ID уплотнены. Теперь треков: {len(self.tracks)}")
         return True
+
+    def reorder_tracks_with_photo_fix(self, track_ids: list) -> bool:
+        """Переупорядочить треки по списку ID с ОБЯЗАТЕЛЬНЫМ обновлением фото"""
+        try:
+            # Получаем текущие треки
+            current_tracks = {t['id']: t for t in self.tracks}
+            
+            # 1. Сначала переименовываем ВСЕ фото во временные имена
+            temp_mappings = {}
+            for track_id in track_ids:
+                if track_id in current_tracks:
+                    track = current_tracks[track_id]
+                    old_image_path = track.get('image_path')
+                    if old_image_path and os.path.exists(old_image_path):
+                        temp_path = old_image_path + f'.temp_reorder_{track_id}'
+                        try:
+                            os.rename(old_image_path, temp_path)
+                            temp_mappings[track_id] = (old_image_path, temp_path)
+                            logger.info(f"📁 Временное фото для ID {track_id}: {temp_path}")
+                        except Exception as e:
+                            logger.error(f"❌ Ошибка создания временного файла для трека {track_id}: {e}")
+            
+            # 2. Присваиваем новые ID и переименовываем фото
+            ordered_tracks = []
+            for i, track_id in enumerate(track_ids):
+                if track_id not in current_tracks:
+                    continue
+                    
+                track = current_tracks[track_id]
+                old_id = track['id']
+                new_id = i + 1
+                
+                # Меняем ID
+                track['id'] = new_id
+                
+                # Обновляем фото если есть
+                if old_id in temp_mappings:
+                    old_path, temp_path = temp_mappings[old_id]
+                    try:
+                        file_extension = os.path.splitext(old_path)[1]
+                        images_dir = os.path.dirname(old_path)
+                        new_image_path = os.path.join(images_dir, f"{new_id}_artist{file_extension}")
+                        os.rename(temp_path, new_image_path)
+                        track['image_path'] = new_image_path
+                        logger.info(f"🖼️ Фото обновлено: {old_path} → {new_image_path}")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка переименования фото для трека {old_id}→{new_id}: {e}")
+                        # Восстанавливаем оригинальный путь
+                        track['image_path'] = old_path
+                
+                ordered_tracks.append(track)
+            
+            # 3. Обновляем медиатеку
+            self.tracks = ordered_tracks
+            self.save_to_file()
+            
+            logger.info(f"🔄 Треки переупорядочены с обновлением фото. Новых ID: {len(ordered_tracks)}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Критическая ошибка при переупорядочивании: {e}")
+            return False
+
+    def fix_broken_image_paths(self) -> dict:
+        """Исправляет сломанные пути к фото артистов"""
+        fixed_count = 0
+        broken_tracks = []
+        
+        for track in self.tracks:
+            track_id = track['id']
+            current_image_path = track.get('image_path')
+            
+            # Если путь есть, но не соответствует ID трека - исправляем
+            if current_image_path and os.path.exists(current_image_path):
+                # Ожидаемый путь к фото
+                expected_filename = f"{track_id}_artist.png"
+                expected_path = os.path.join(os.path.dirname(current_image_path), expected_filename)
+                
+                # Если текущий путь не соответствует ожидаемому
+                if current_image_path != expected_path:
+                    try:
+                        # Переименовываем файл
+                        os.rename(current_image_path, expected_path)
+                        track['image_path'] = expected_path
+                        fixed_count += 1
+                        broken_tracks.append({
+                            'id': track_id,
+                            'artist': track.get('artist', ''),
+                            'old_path': current_image_path,
+                            'new_path': expected_path
+                        })
+                        logger.info(f"🔧 Исправлен путь фото: {current_image_path} → {expected_path}")
+                    except Exception as e:
+                        logger.error(f"❌ Ошибка исправления пути фото для трека {track_id}: {e}")
+                        broken_tracks.append({
+                            'id': track_id,
+                            'artist': track.get('artist', ''),
+                            'error': str(e)
+                        })
+        
+        if fixed_count > 0:
+            self.save_to_file()
+            logger.info(f"✅ Исправлено {fixed_count} сломанных путей к фото")
+        
+        return {
+            'fixed_count': fixed_count,
+            'broken_tracks': broken_tracks,
+            'message': f'Исправлено {fixed_count} сломанных путей к фото'
+        }
+
 # Создаем глобальный экземпляр медиатеки
 media_library = MediaLibrary()

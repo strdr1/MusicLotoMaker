@@ -1,8 +1,9 @@
 ﻿# -*- coding: utf-8 -*-
 import os, io, re, json, logging, requests
+import numpy as np
 from pathlib import Path
 from typing import List, Optional
-from PIL import Image, ImageOps, ImageFile, ImageDraw, ImageFont
+from PIL import Image, ImageOps, ImageFile, ImageDraw, ImageFont, ImageFilter
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,7 +15,7 @@ MIN_W, MIN_H = 512, 512
 ASPECT_MIN, ASPECT_MAX = 0.75, 1.8
 TIMEOUT = 15
 
-# ----------------- Улучшенный Rembg -----------------
+# ----------------- Улучшенный Rembg с мягкой вырезкой -----------------
 _REMBG_AVAILABLE = None
 _REMBG_FUNCTION = None
 
@@ -25,39 +26,238 @@ def _ensure_rembg():
             from rembg import remove
             _REMBG_FUNCTION = remove
             _REMBG_AVAILABLE = True
-            logger.info("✅ Rembg загружен (u2netp модель)")
+            logger.info("✅ Rembg загружен")
         except ImportError:
             _REMBG_AVAILABLE = False
             logger.warning("❌ Rembg не установлен")
     return _REMBG_AVAILABLE
 
-def smart_remove_background(image_bytes: bytes) -> bytes:
-    """Умное удаление фона с проверкой результата"""
+def soft_background_removal(image_bytes: bytes) -> bytes:
+    """
+    Мягкое удаление фона с rembg и улучшенной постобработкой
+    """
     if not _ensure_rembg():
-        raise ValueError("Rembg не установлен")
+        return add_solid_background(image_bytes, (255, 255, 255))
     
     try:
-        output_bytes = _REMBG_FUNCTION(image_bytes, model="u2netp")
+        # Пробуем разные модели для лучшего результата
+        models_to_try = ['u2net', 'u2netp', 'u2net_human_seg', 'isnet-general-use']
         
-        img = Image.open(io.BytesIO(output_bytes))
-        if img.mode == 'RGBA':
-            alpha = img.getchannel('A')
-            alpha_data = list(alpha.getdata())
-            transparent_pixels = sum(1 for a in alpha_data if a < 10)
-            total_pixels = len(alpha_data)
+        best_result = None
+        best_score = 0
+        
+        for model in models_to_try:
+            try:
+                logger.info(f"🔧 Пробуем модель: {model}")
+                output_bytes = _REMBG_FUNCTION(image_bytes, model=model)
+                
+                # Оцениваем качество вырезки
+                score = evaluate_removal_quality(output_bytes)
+                logger.info(f"📊 Модель {model}: оценка {score:.2f}")
+                
+                if score > best_score:
+                    best_score = score
+                    best_result = output_bytes
+                    
+                # Если отличный результат, используем его
+                if score > 0.8:
+                    break
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Модель {model} не сработала: {e}")
+                continue
+        
+        if best_result and best_score > 0.3:  # Минимальный порог качества
+            # Улучшаем результат
+            improved_result = improve_removal_result(best_result)
+            logger.info(f"✅ Успешная вырезка, оценка: {best_score:.2f}")
+            return improved_result
+        else:
+            logger.warning("❌ Все модели дали плохой результат, используем fallback")
+            return add_solid_background(image_bytes, (240, 240, 240))
             
-            if transparent_pixels > total_pixels * 0.8:
-                logger.warning("⚠️ Rembg вырезал слишком много, используем оригинал")
-                original_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-                bg = Image.new("RGB", original_img.size, (255, 255, 255))
-                bg.paste(original_img, (0, 0))
-                buf = io.BytesIO()
-                bg.save(buf, format="PNG")
-                return buf.getvalue()
-        
-        return output_bytes
     except Exception as e:
-        raise RuntimeError(f"Rembg error: {e}")
+        logger.error(f"❌ Ошибка вырезки фона: {e}")
+        return add_solid_background(image_bytes, (245, 245, 245))
+
+def evaluate_removal_quality(image_bytes: bytes) -> float:
+    """Оценивает качество вырезки фона"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        img_array = np.array(img)
+        
+        # Анализируем альфа-канал
+        alpha = img_array[:, :, 3]
+        
+        # Процент непрозрачных пикселей (должен быть разумным)
+        opaque_pixels = np.sum(alpha > 0)
+        total_pixels = alpha.size
+        opaque_ratio = opaque_pixels / total_pixels
+        
+        # Баланс - не слишком много и не слишком мало непрозрачных пикселей
+        if opaque_ratio < 0.1 or opaque_ratio > 0.9:
+            return 0.1  # Слишком много или слишком мало объекта
+        
+        # Оцениваем равномерность краев
+        edge_quality = evaluate_edge_quality(alpha)
+        
+        # Итоговая оценка
+        score = min(opaque_ratio * 0.6 + edge_quality * 0.4, 1.0)
+        return score
+        
+    except Exception:
+        return 0.0
+
+def evaluate_edge_quality(alpha: np.ndarray) -> float:
+    """Оценивает качество краев вырезки"""
+    try:
+        from scipy import ndimage
+        
+        # Находим границы
+        structure = np.ones((3, 3))
+        eroded = ndimage.binary_erosion(alpha > 0, structure=structure)
+        edges = (alpha > 0) & ~eroded
+        
+        # Анализируем гладкость границ
+        edge_pixels = np.sum(edges)
+        if edge_pixels == 0:
+            return 0.0
+            
+        # Проверяем на резкие переходы (плохие края)
+        edge_values = alpha[edges]
+        smooth_edges = np.sum((edge_values > 50) & (edge_values < 200))
+        smooth_ratio = smooth_edges / edge_pixels
+        
+        return smooth_ratio
+        
+    except Exception:
+        return 0.5
+
+def improve_removal_result(image_bytes: bytes) -> bytes:
+    """Улучшает результат вырезки - сглаживает края и добавляет мягкий фон"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        
+        # Создаем мягкую тень/подложку
+        result = add_soft_shadow(img)
+        
+        # Сохраняем
+        buf = io.BytesIO()
+        result.save(buf, format="PNG", optimize=True)
+        return buf.getvalue()
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Улучшение не удалось: {e}")
+        return image_bytes
+
+def add_soft_shadow(img: Image.Image) -> Image.Image:
+    """Добавляет мягкую тень для лучшего визуального восприятия"""
+    # Создаем слегка размытую версию для мягких краев
+    blurred = img.filter(ImageFilter.GaussianBlur(2))
+    
+    # Увеличиваем контраст альфа-канала для четкости
+    alpha = blurred.getchannel('A')
+    alpha = alpha.point(lambda x: 0 if x < 50 else 255)  # Бинаризуем альфа-канал
+    
+    # Применяем улучшенный альфа-канал
+    result = img.copy()
+    result.putalpha(alpha)
+    
+    return result
+
+def add_solid_background(image_bytes: bytes, bg_color: tuple) -> bytes:
+    """Добавляет однотонный фон к изображению"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        
+        if img.mode == 'RGBA':
+            # Создаем фон
+            background = Image.new("RGB", img.size, bg_color)
+            # Аккуратно накладываем изображение на фон
+            background.paste(img, (0, 0), img)
+            img = background
+        
+        # Немного улучшаем качество
+        img = img.filter(ImageFilter.SMOOTH_MORE)
+        
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        logger.info(f"🎨 Добавлен фон RGB{bg_color}")
+        return buf.getvalue()
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка добавления фона: {e}")
+        return image_bytes
+
+def smart_background_processing(image_bytes: bytes) -> bytes:
+    """
+    Умная обработка фона с перебором вариантов
+    """
+    # Сначала пробуем мягкую вырезку
+    logger.info("🎯 Начинаем умную обработку фона...")
+    
+    # Вариант 1: Мягкая вырезка с rembg
+    removed_bg = soft_background_removal(image_bytes)
+    
+    # Проверяем результат
+    quality_score = evaluate_removal_quality(removed_bg)
+    logger.info(f"📊 Оценка вырезки: {quality_score:.2f}")
+    
+    if quality_score > 0.5:
+        logger.info("✅ Используем вырезку с rembg")
+        return removed_bg
+    else:
+        # Пробуем разные фоны
+        background_colors = [
+            (255, 255, 255),    # Белый
+            (240, 240, 240),    # Светло-серый
+            (245, 245, 245),    # Очень светлый серый
+            (250, 250, 250),    # Почти белый
+            (255, 250, 240),    # Теплый белый
+        ]
+        
+        best_result = None
+        best_score = 0
+        
+        for color in background_colors:
+            try:
+                colored_bg = add_solid_background(image_bytes, color)
+                score = evaluate_background_quality(colored_bg)
+                
+                if score > best_score:
+                    best_score = score
+                    best_result = colored_bg
+                    
+                logger.info(f"🎨 Фон {color}: оценка {score:.2f}")
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка с фоном {color}: {e}")
+                continue
+        
+        if best_result and best_score > 0.3:
+            logger.info(f"✅ Выбран фон с оценкой {best_score:.2f}")
+            return best_result
+        else:
+            # Fallback - белый фон
+            logger.info("🔄 Используем fallback (белый фон)")
+            return add_solid_background(image_bytes, (255, 255, 255))
+
+def evaluate_background_quality(image_bytes: bytes) -> float:
+    """Оценивает качество изображения с фоном"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img_array = np.array(img)
+        
+        # Анализируем контраст и детализацию
+        gray = np.dot(img_array[...,:3], [0.2989, 0.5870, 0.1140])
+        contrast = np.std(gray)  # Стандартное отклонение как мера контраста
+        
+        # Нормализуем оценку
+        score = min(contrast / 50.0, 1.0)
+        return score
+        
+    except Exception:
+        return 0.5
 
 # ----------------- Утилиты -----------------
 def ok_aspect(w: int, h: int) -> bool:
@@ -82,6 +282,24 @@ def normalize_img(img: Image.Image, min_side: int = 900) -> Image.Image:
         img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
     return img
 
+# ----------------- Функции для работы с Яндекс токеном -----------------
+def load_yandex_token():
+    """Загружает Яндекс токен из файла"""
+    try:
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        YANDEX_TOKEN_FILE = os.path.join(BASE_DIR, "config", "yandex_token.txt")
+        
+        if os.path.exists(YANDEX_TOKEN_FILE):
+            with open(YANDEX_TOKEN_FILE, 'r', encoding='utf-8') as f:
+                token = f.read().strip()
+                if token:
+                    logger.info("✅ Яндекс токен загружен из файла")
+                    return token
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки Яндекс токена: {e}")
+    
+    return None
+
 # ----------------- Основной класс -----------------
 class SimpleArtistImageSearch:
     def __init__(self):
@@ -95,7 +313,7 @@ class SimpleArtistImageSearch:
         self.photo_cache_file = os.path.join(self.base_dir, "artist_photo_cache.json")
         self._load_photo_cache()
         
-        self.use_rembg = True
+        self.use_background_removal = True
 
     def _load_photo_cache(self):
         try:
@@ -117,10 +335,6 @@ class SimpleArtistImageSearch:
             logger.error(f"❌ Ошибка сохранения кэша фото: {e}")
 
     def _clean_name(self, s: str) -> str:
-        """
-        Удаляет ТОЛЬКО мешающие символы, сохраняя регистр и пробелы.
-        Удаляются: ! " № ; % : ? * ( ) _ - + = @ # $ ^ & \ /
-        """
         bad_chars = '!\"№;%:?*()_-+=@#$%^&\\/'
         for ch in bad_chars:
             s = s.replace(ch, '')
@@ -128,33 +342,33 @@ class SimpleArtistImageSearch:
         return s
 
     def _find_local_artist_photo(self, artist_name: str) -> Optional[str]:
-        """Точный поиск локального фото. Регистр НЕ учитывается."""
         if not os.path.exists(self.artists_dir):
             return None
 
         logger.info(f"🔍 Поиск локального фото для: '{artist_name}'")
         supported_ext = {'.jpg', '.jpeg', '.png', '.webp'}
         
-        # Приводим к нижнему регистру для сравнения
         query_clean = self._clean_name(artist_name).lower()
 
         for f in Path(self.artists_dir).iterdir():
             if f.suffix.lower() not in supported_ext:
                 continue
-            # Сравниваем в нижнем регистре
             if self._clean_name(f.stem).lower() == query_clean:
                 logger.info(f"✅ Найден локальный файл: {f}")
                 return str(f)
         return None
 
     def _search_yandex_music_smart(self, artist_name: str) -> Optional[str]:
-        """Поиск в Яндекс.Музыке"""
+        """Улучшенный поиск фото артистов в Яндекс.Музыке"""
         try:
             from yandex_music import Client as YandexClient
             
-            YANDEX_MUSIC_TOKEN = "y0__xC-3q2iAxje-AYglImpghUw9pW0kAgCx0SZ5vnWcYWpiGpLqwVPsGWEfg"
+            yandex_token = load_yandex_token()
+            if not yandex_token:
+                logger.warning("❌ Яндекс токен не найден")
+                return None
                 
-            client = YandexClient(YANDEX_MUSIC_TOKEN).init()
+            client = YandexClient(yandex_token).init()
             search_result = client.search(artist_name)
             
             if not search_result or not search_result.artists:
@@ -163,16 +377,34 @@ class SimpleArtistImageSearch:
                 
             artist = search_result.artists.results[0]
             
+            # ПРИОРИТЕТ 1: Основное фото артиста (cover)
             if hasattr(artist, 'cover') and artist.cover:
                 cover_uri = getattr(artist.cover, 'uri', None)
                 if cover_uri:
                     photo_url = f"https://{cover_uri.replace('%%', '1000x1000')}"
+                    logger.info(f"✅ Найдено основное фото артиста: {photo_url}")
                     return photo_url
             
+            # ПРИОРИТЕТ 2: OG изображение
             if hasattr(artist, 'og_image') and artist.og_image:
                 og_image_url = artist.og_image.replace('%%', '1000x1000')
+                logger.info(f"✅ Найдено OG изображение: {og_image_url}")
                 return og_image_url
             
+            # ПРИОРИТЕТ 3: Фото из последних альбомов
+            if hasattr(artist, 'albums') and artist.albums:
+                # Берем последние альбомы (более актуальные фото)
+                recent_albums = sorted(artist.albums, 
+                                     key=lambda x: getattr(x, 'year', 0), 
+                                     reverse=True)[:5]
+                
+                for album in recent_albums:
+                    if hasattr(album, 'cover_uri') and album.cover_uri:
+                        album_photo_url = f"https://{album.cover_uri.replace('%%', '1000x1000')}"
+                        logger.info(f"✅ Найдено фото из альбома ({getattr(album, 'year', 'N/A')}): {album_photo_url}")
+                        return album_photo_url
+            
+            logger.info(f"🔍 Для артиста '{artist_name}' не найдено подходящих фото")
             return None
             
         except Exception as e:
@@ -180,7 +412,6 @@ class SimpleArtistImageSearch:
             return None
 
     def _process_internet_photo(self, image_data: bytes, track_id: int) -> Optional[str]:
-        """Обработка ТОЛЬКО интернет-фото (с проверками и rembg)"""
         try:
             img = Image.open(io.BytesIO(image_data))
             w, h = img.size
@@ -192,18 +423,25 @@ class SimpleArtistImageSearch:
             img = normalize_img(img, min_side=1024)
             out_path = Path(self.images_dir) / f"{track_id}_artist.png"
 
-            if self.use_rembg and _ensure_rembg():
+            if self.use_background_removal:
                 try:
-                    png_bytes = smart_remove_background(image_data)
+                    # Используем умную обработку фона
+                    processed_bytes = smart_background_processing(image_data)
                     with open(out_path, "wb") as f:
-                        f.write(png_bytes)
-                    logger.info(f"✅ Фото из интернета обработано (удаление фона): {out_path}")
+                        f.write(processed_bytes)
+                    
+                    logger.info(f"✅ Фото обработано с умным фоном: {out_path}")
                     return str(out_path)
+                    
                 except Exception as e:
-                    logger.warning(f"⚠️ Удаление фона не удалось: {e}")
+                    logger.warning(f"⚠️ Обработка фона не удалась: {e}")
+                    # Fallback: сохраняем оригинал
+                    img.save(out_path, "PNG", optimize=True)
+                    return str(out_path)
 
+            # Если обработка отключена
             img.save(out_path, "PNG", optimize=True)
-            logger.info(f"✅ Фото из интернета сохранено: {out_path}")
+            logger.info(f"✅ Фото сохранено без обработки: {out_path}")
             return str(out_path)
                 
         except Exception as e:
@@ -211,13 +449,10 @@ class SimpleArtistImageSearch:
             return None
 
     def _use_local_photo_as_is(self, local_path: str, track_id: int) -> str:
-        """Используем локальный файл КАК ЕСТЬ — без изменений!"""
         try:
             out_path = Path(self.images_dir) / f"{track_id}_artist.png"
             
-            # Открываем и сохраняем как PNG для единообразия
             img = Image.open(local_path)
-            # Сохраняем прозрачность, если есть
             if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
                 img = img.convert("RGBA")
             else:
@@ -230,30 +465,28 @@ class SimpleArtistImageSearch:
             logger.error(f"❌ Ошибка копирования локального файла: {e}")
             return self._create_placeholder_image("?", track_id)
 
-    def fetch_artist_png(self, artist_name: str, track_id: int, use_rembg: bool = True):
-        """Умный поиск фото с абсолютным приоритетом локальных файлов"""
-        original_rembg_setting = self.use_rembg
-        self.use_rembg = use_rembg
+    def fetch_artist_png(self, artist_name: str, track_id: int, use_background_removal: bool = True):
+        original_setting = self.use_background_removal
+        self.use_background_removal = use_background_removal
         
         try:
-            # Используем нижний регистр для кэширования
-            cache_key = f"{artist_name.lower()}_{track_id}_{use_rembg}"
+            cache_key = f"{artist_name.lower()}_{track_id}_{use_background_removal}"
             if cache_key in self.artist_cache:
                 return self.artist_cache[cache_key]
             
             logger.info(f"🎭 Поиск фото для: '{artist_name}' (ID: {track_id})")
             
-            # 🔑 АБСОЛЮТНЫЙ ПРИОРИТЕТ: локальный файл
+            # Приоритет локальных файлов
             local_photo = self._find_local_artist_photo(artist_name)
             if local_photo:
-                logger.info(f"📁 ЛОКАЛЬНЫЙ ФАЙЛ НАЙДЕН — ИСПОЛЬЗУЕТСЯ БЕЗ ПРОВЕРОК!")
+                logger.info(f"📁 ЛОКАЛЬНЫЙ ФАЙЛ НАЙДЕН!")
                 processed_path = self._use_local_photo_as_is(local_photo, track_id)
                 self.artist_cache[cache_key] = processed_path
                 self._cache_push(artist_name.strip().lower(), f"local://{local_photo}")
                 return processed_path
 
-            # Интернет — только если локального нет
-            logger.info(f"🔍 Локальный файл НЕ найден, ищем в Яндекс.Музыке...")
+            # Поиск в Яндекс.Музыке
+            logger.info(f"🔍 Ищем в Яндекс.Музыке...")
             url = self._search_yandex_music_smart(artist_name)
             if url:
                 image_data = download_bytes(url)
@@ -276,7 +509,7 @@ class SimpleArtistImageSearch:
             self.artist_cache[cache_key] = p
             return p
         finally:
-            self.use_rembg = original_rembg_setting
+            self.use_background_removal = original_setting
 
     def _create_placeholder_image(self, artist_name: str, track_id: int) -> str:
         try:
@@ -325,7 +558,6 @@ class SimpleArtistImageSearch:
         return ImageFont.load_default()
 
     def _cache_push(self, artist_key: str, url: str):
-        # Используем нижний регистр для ключей кэша
         artist_key_lower = artist_key.lower()
         arr = self.photo_cache.get(artist_key_lower, [])
         if url not in arr:

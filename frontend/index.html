@@ -7,6 +7,14 @@
     <link rel="stylesheet" href="static/css/style.css">
 </head>
 <body>
+    <div class="version-changelog">
+        <div>Что нового:</div>
+        <div>1.Исправлен баг, который мешал</div>
+        <div>нормально вставлять фото при drag and drop</div>
+        <div>2.Добавлен яндекс Токен в поисковик фото!</div>
+        <div>3.Теперь при клике на фото открывается новое меню<</div>
+        <div>ПОКА ЧТО ПРОТОТИП!</div>
+    </div>
     <div class="container">
         <header>
             <h1>🎵 Music Loto Maker</h1>
@@ -370,24 +378,25 @@ Michael Jackson - Billie Jean"></textarea>
         </div>
     </div>
 
-    <div id="photoModal" class="modal" style="display: none;">
+    <!-- НОВОЕ МОДАЛЬНОЕ ОКНО РЕДАКТОРА ФОТО -->
+    <div id="photoEditorModal" class="modal" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>📷 Добавить фото артиста</h3>
-                <span class="close" onclick="closePhotoModal()">&times;</span>
+                <h3>🖼️ Редактор фото: <span id="photoEditorArtistName">—</span></h3>
+                <span class="close" onclick="closePhotoEditor()">&times;</span>
             </div>
             <div class="modal-body">
-                <p><strong>Артист:</strong> <span id="photoArtistName">-</span></p>
-                <div class="photo-options">
-                    <button class="btn btn-secondary btn-large" onclick="uploadArtistPhoto()" style="width: 100%;">
-                        📁 Загрузить своё фото
-                    </button>
+                <div id="photoEditorImageContainer">
+                    <img id="photoEditorImage" src="" style="max-width: 100%; max-height: 70vh;" />
                 </div>
-                <div id="photoPreview" style="margin-top: 20px; text-align: center; display: none;">
-                    <img id="photoPreviewImage" src="" alt="Предпросмотр" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
-                    <div id="photoNavigation" style="margin-top: 15px;"></div>
+                <div style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn btn-primary" onclick="openBackgroundRemover()">✂️ Вырезать фон</button>
+                    <button class="btn btn-secondary" onclick="uploadCustomPhotoForEditor()">📁 Загрузить своё</button>
                 </div>
-                <div id="photoStatus" class="status" style="margin-top: 15px; display: none;"></div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="saveEditorPhoto()">✅ Сохранить</button>
+                <button class="btn btn-secondary" onclick="closePhotoEditor()">❌ Отмена</button>
             </div>
         </div>
     </div>
@@ -501,5 +510,6 @@ Michael Jackson - Billie Jean"></textarea>
 
     <script src="static/js/app.js"></script>
     <script src="static/js/tickets.js"></script>
+    <script src="static/js/photo_editor.js"></script>
 </body>
 </html>
