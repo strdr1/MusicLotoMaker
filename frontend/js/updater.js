@@ -32,17 +32,14 @@ class GitHubUpdaterUI {
 
     async initialize() {
         try {
-            // Загружаем информацию о версии
             await this.loadVersionInfo();
-
-            // Загружаем информацию о репозитории
             await this.loadRepoInfo();
 
-            // Автопроверка обновлений при загрузке
+            // Автопроверка через 3 секунды
             setTimeout(() => this.checkForUpdates(false), 3000);
 
         } catch (error) {
-            console.error('Ошибка инициализации автообновителя:', error);
+            console.error('Ошибка инициализации:', error);
             this.showError('Ошибка инициализации автообновителя');
         }
     }
@@ -56,13 +53,12 @@ class GitHubUpdaterUI {
             this.latestVersion = data.latest_version || this.currentVersion;
             this.updateAvailable = data.update_available || false;
 
-            // Обновляем UI
             this.updateVersionDisplay(data);
 
             return data;
 
         } catch (error) {
-            console.error('Ошибка загрузки информации о версии:', error);
+            console.error('Ошибка загрузки версии:', error);
             this.elements.currentVersion.textContent = 'Ошибка загрузки';
             this.showError('Не удалось загрузить информацию о версии');
             return null;
@@ -76,13 +72,13 @@ class GitHubUpdaterUI {
 
             if (data.repo) {
                 this.elements.repoInfo.textContent = data.repo;
-                this.elements.branchInfo.textContent = data.branch || 'master';
+                this.elements.branchInfo.textContent = 'master';
             }
 
             return data;
 
         } catch (error) {
-            console.error('Ошибка загрузки информации о репозитории:', error);
+            console.error('Ошибка загрузки репозитория:', error);
             return null;
         }
     }
@@ -91,27 +87,27 @@ class GitHubUpdaterUI {
         // Отображаем текущую версию
         this.elements.currentVersion.textContent = this.currentVersion;
 
-        // Обновляем бейдж статуса
+        // Обновляем бейдж
         if (data.update_available) {
             this.elements.updateBadge.style.display = 'block';
             this.elements.updateStatusText.textContent = 'Доступно обновление';
             this.elements.updateStatusText.className = 'badge badge-warning';
 
-            // Показываем информацию об обновлении
+            // Информация об обновлении
             let details = `Доступна новая версия: <strong>${this.latestVersion}</strong><br>`;
             if (data.commit_info && data.commit_info.message) {
                 details += `Коммит: ${data.commit_info.message}<br>`;
             }
             if (data.commit_info && data.commit_info.date) {
                 const date = new Date(data.commit_info.date);
-                details += `Дата: ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+                details += `Дата: ${date.toLocaleDateString()}`;
             }
 
             this.elements.versionDetails.innerHTML = details;
 
-            // Показываем кнопку установки обновления
+            // Показываем кнопку установки
             this.elements.installUpdateBtn.style.display = 'inline-block';
-            this.elements.updateInfo.innerHTML = `<span style="color: var(--warning);">Доступно обновление ${this.latestVersion}</span>`;
+            this.elements.updateInfo.innerHTML = `<span style="color: #ff922b;">Доступно обновление ${this.latestVersion}</span>`;
 
         } else {
             this.elements.updateBadge.style.display = 'block';
@@ -121,7 +117,7 @@ class GitHubUpdaterUI {
             let details = 'У вас установлена последняя версия<br>';
             if (data.commit_info && data.commit_info.date) {
                 const date = new Date(data.commit_info.date);
-                details += `Дата последнего коммита: ${date.toLocaleDateString()}`;
+                details += `Последнее обновление: ${date.toLocaleDateString()}`;
             }
 
             this.elements.versionDetails.innerHTML = details;
@@ -137,7 +133,6 @@ class GitHubUpdaterUI {
                 return;
             }
 
-            // Показываем прогресс
             if (showNotification) {
                 this.showInfo('Проверка обновлений...');
             }
@@ -154,7 +149,6 @@ class GitHubUpdaterUI {
 
             const result = await response.json();
 
-            // Обновляем данные
             this.updateAvailable = result.update_available || false;
 
             if (result.success) {
@@ -178,7 +172,6 @@ class GitHubUpdaterUI {
             console.error('Ошибка проверки обновлений:', error);
             this.showError('Ошибка соединения с сервером');
         } finally {
-            // Восстанавливаем кнопку
             this.elements.checkUpdateBtn.disabled = false;
             this.elements.checkUpdateBtn.innerHTML = '<span class="icon">🔄</span> Проверить обновления';
         }
@@ -196,14 +189,12 @@ class GitHubUpdaterUI {
                 return;
             }
 
-            // Подтверждение
             if (!confirm(`Установить обновление ${this.latestVersion}?\n\nПриложение будет перезапущено после установки.`)) {
                 return;
             }
 
             this.updateInProgress = true;
 
-            // Показываем прогресс
             this.showProgress('Начало установки обновления...', 0);
 
             const response = await fetch('/api/updater/install', {
@@ -218,24 +209,17 @@ class GitHubUpdaterUI {
             if (result.success) {
                 this.showProgress('Обновление успешно установлено!', 100);
 
-                // Показываем результат
                 setTimeout(() => {
                     let message = `🎉 Обновление успешно установлено!\n\n`;
                     message += `Новая версия: ${result.new_version}\n`;
                     message += `Обновлено файлов: ${result.updated_items?.length || 0}\n\n`;
-
-                    if (result.restart_required) {
-                        message += 'Для завершения обновления приложение будет перезапущено через 5 секунд.';
-                    }
+                    message += 'Приложение будет перезапущено через 5 секунд.';
 
                     alert(message);
 
-                    // Перезагружаем страницу через 5 секунд
-                    if (result.restart_required) {
-                        setTimeout(() => {
-                            location.reload();
-                        }, 5000);
-                    }
+                    setTimeout(() => {
+                        location.reload();
+                    }, 5000);
                 }, 1000);
 
             } else {
@@ -256,7 +240,6 @@ class GitHubUpdaterUI {
         this.elements.updateProgressPercent.textContent = `${percent}%`;
         this.elements.updateProgressFill.style.width = `${percent}%`;
 
-        // Обновляем детали
         if (percent < 100) {
             this.elements.updateDetails.innerHTML = `
                 <div>⏳ Выполняется обновление...</div>
@@ -271,31 +254,29 @@ class GitHubUpdaterUI {
     }
 
     showInfo(message) {
-        this.showNotification(message, 'info');
+        this.showNotification(message, '#339af0');
     }
 
     showSuccess(message) {
-        this.showNotification(message, 'success');
+        this.showNotification(message, '#51cf66');
     }
 
     showWarning(message) {
-        this.showNotification(message, 'warning');
+        this.showNotification(message, '#ff922b');
     }
 
     showError(message) {
-        this.showNotification(message, 'error');
+        this.showNotification(message, '#ff6b6b');
     }
 
-    showNotification(message, type = 'info') {
-        // Создаем уведомление
+    showNotification(message, color) {
         const notification = document.createElement('div');
-        notification.className = `notification notification-${type}`;
         notification.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
             padding: 12px 20px;
-            background: ${type === 'error' ? '#ff6b6b' : type === 'success' ? '#51cf66' : type === 'warning' ? '#ff922b' : '#339af0'};
+            background: ${color};
             color: white;
             border-radius: 8px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
@@ -307,7 +288,6 @@ class GitHubUpdaterUI {
         notification.textContent = message;
         document.body.appendChild(notification);
 
-        // Удаляем через 5 секунд
         setTimeout(() => {
             notification.style.animation = 'slideOut 0.3s ease';
             setTimeout(() => {
@@ -319,15 +299,13 @@ class GitHubUpdaterUI {
     }
 }
 
-// Инициализация при загрузке страницы
+// Инициализация
 document.addEventListener('DOMContentLoaded', () => {
-    // Проверяем, находимся ли мы на вкладке Файлы
     const localTab = document.getElementById('local');
     if (localTab && localTab.classList.contains('active')) {
         window.updaterUI = new GitHubUpdaterUI();
     }
 
-    // Также инициализируем при переключении вкладок
     document.querySelectorAll('.tab-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const tab = btn.dataset.tab;
@@ -342,7 +320,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-// Глобальные функции для кнопок
+// Глобальные функции
 async function checkForUpdates() {
     if (window.updaterUI) {
         await window.updaterUI.checkForUpdates(true);
@@ -361,29 +339,17 @@ async function installUpdate() {
     }
 }
 
-// Добавляем стили для анимаций
+// Стили
 const style = document.createElement('style');
 style.textContent = `
     @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
     }
     
     @keyframes slideOut {
-        from {
-            transform: translateX(0);
-            opacity: 1;
-        }
-        to {
-            transform: translateX(100%);
-            opacity: 0;
-        }
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
     }
     
     .badge {
@@ -404,14 +370,9 @@ style.textContent = `
         color: white;
     }
     
-    .badge-error {
-        background: #ff6b6b;
-        color: white;
-    }
-    
     .progress-bar {
         height: 8px;
-        background: var(--bg-tertiary);
+        background: #1e1e1e;
         border-radius: 4px;
         overflow: hidden;
         margin-top: 8px;
@@ -433,7 +394,7 @@ style.textContent = `
     
     .progress-details {
         font-size: 12px;
-        color: var(--text-muted);
+        color: #666;
         margin-top: 5px;
     }
 `;

@@ -594,7 +594,7 @@ async def install_update():
         
         logger.info("🎯 Запуск установки обновления...")
         
-        # Проверяем наличие обновлений перед установкой
+        # Проверяем наличие обновлений
         check_result = updater.check_for_updates()
         if not check_result.get("success"):
             return check_result
@@ -607,19 +607,15 @@ async def install_update():
                 "update_available": False
             }
         
-        # Запускаем процесс обновления
+        # Запускаем обновление
         update_result = updater.run_update()
         
         if update_result.get("success"):
-            # Получаем инструкции для перезапуска
-            restart_info = updater.restart_application()
-            
             return {
                 "success": True,
                 "message": "Обновление успешно установлено!",
                 "new_version": update_result.get("new_version"),
                 "restart_required": True,
-                "restart_info": restart_info,
                 "backup_created": update_result.get("backup_created", False),
                 "updated_items": update_result.get("updated_items", [])
             }
@@ -649,11 +645,10 @@ async def get_version_info():
         return {
             "current_version": current_version,
             "latest_version": latest_info.get("version") if latest_info else "unknown",
-            "update_available": latest_info.get("update_available") if latest_info else False,
+            "update_available": latest_info and updater.compare_versions(current_version, latest_info["version"]) < 0,
             "commit_info": latest_info.get("commit_info") if latest_info else {},
             "updater_available": True,
             "repo": f"{updater.repo_owner}/{updater.repo_name}",
-            "branch": updater.branch,
             "timestamp": datetime.now().isoformat()
         }
         
@@ -694,8 +689,7 @@ async def list_backups():
                     "created": created_time.isoformat(),
                     "created_formatted": created_time.strftime("%d.%m.%Y %H:%M:%S"),
                     "size_bytes": size,
-                    "size_mb": round(size / 1024 / 1024, 2),
-                    "items_count": len([f for f in os.listdir(backup_path) if os.path.isfile(os.path.join(backup_path, f))])
+                    "size_mb": round(size / 1024 / 1024, 2)
                 })
         
         return {
@@ -707,65 +701,6 @@ async def list_backups():
         
     except Exception as e:
         logger.error(f"❌ Ошибка получения списка резервных копий: {e}")
-        return JSONResponse({
-            "success": False,
-            "error": str(e)
-        })
-
-@app.post("/api/updater/restore-backup")
-async def restore_from_backup(request_data: dict):
-    """Восстановить из резервной копии"""
-    try:
-        backup_name = request_data.get("backup_name")
-        if not backup_name:
-            return JSONResponse({
-                "success": False,
-                "error": "Не указано имя резервной копии"
-            })
-        
-        backup_dir = os.path.join(BASE_DIR, "backup")
-        backup_path = os.path.join(backup_dir, backup_name)
-        
-        if not os.path.exists(backup_path):
-            return JSONResponse({
-                "success": False,
-                "error": f"Резервная копия '{backup_name}' не найдена"
-            })
-        
-        logger.info(f"🔄 Восстановление из резервной копии: {backup_name}")
-        
-        # Восстанавливаем файлы
-        restored_items = []
-        
-        for item in os.listdir(backup_path):
-            source_path = os.path.join(backup_path, item)
-            dest_path = os.path.join(BASE_DIR, item)
-            
-            if os.path.exists(dest_path):
-                if os.path.isfile(dest_path):
-                    os.remove(dest_path)
-                else:
-                    shutil.rmtree(dest_path)
-            
-            if os.path.isfile(source_path):
-                shutil.copy2(source_path, dest_path)
-            else:
-                shutil.copytree(source_path, dest_path)
-            
-            restored_items.append(item)
-        
-        logger.info(f"✅ Восстановлено {len(restored_items)} элементов из резервной копии")
-        
-        return {
-            "success": True,
-            "message": f"Восстановлено из резервной копии '{backup_name}'",
-            "restored_items": restored_items,
-            "backup_name": backup_name,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка восстановления из резервной копии: {e}")
         return JSONResponse({
             "success": False,
             "error": str(e)
