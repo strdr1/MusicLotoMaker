@@ -64,17 +64,50 @@ async def generate_tickets_endpoint(payload: dict):
         if media_library is None or ticket_gen is None:
             raise HTTPException(status_code=500, detail="Генератор не инициализирован")
 
-        # Получаем треки
-        tracks = []
-        if hasattr(media_library, 'get_tracks'):
-            tracks = media_library.get_tracks()
-        elif hasattr(media_library, 'tracks'):
-            tracks = media_library.tracks
-        elif isinstance(media_library, list):
-            tracks = media_library
+        # === ВАЛИДАЦИЯ ТРЕКОВ ИЗ ЗАПРОСА ===
+        tracks_from_request = payload.get("tracks")
+        if tracks_from_request:
+            logger.info(f"✅ Используем {len(tracks_from_request)} треков из запроса для билетов")
+            validated_tracks = []
+            missing_tracks = []
+
+            for track in tracks_from_request:
+                artist = track.get("artist", "").strip()
+                title = track.get("title", "").strip()
+                if not artist or not title:
+                    continue
+
+                existing = media_library.get_track_by_artist_title(artist, title)
+                if existing:
+                    validated_tracks.append(existing)
+                else:
+                    missing_tracks.append({"artist": artist, "title": title})
+
+            if missing_tracks:
+                missing_list = [f"{t['artist']} - {t['title']}" for t in missing_tracks]
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Следующие треки отсутствуют в медиатеке:\n" + "\n".join(missing_list)
+                )
+
+            if not validated_tracks:
+                raise HTTPException(status_code=400, detail="Нет валидных треков для генерации")
+
+            tracks = validated_tracks
+            logger.info(f"✅ Валидировано {len(tracks)} треков для генерации")
+        else:
+            # Старый режим — вся медиатека
+            if hasattr(media_library, 'get_tracks'):
+                tracks = media_library.get_tracks()
+            elif hasattr(media_library, 'tracks'):
+                tracks = media_library.tracks
+            elif isinstance(media_library, list):
+                tracks = media_library
+            else:
+                tracks = []
 
         if not tracks:
-            raise HTTPException(status_code=400, detail="Нет треков в медиатеке")
+            raise HTTPException(status_code=400, detail="Нет треков для генерации")
         if len(tracks) < 36:
             raise HTTPException(status_code=400, detail=f"Недостаточно треков. Нужно 36, доступно {len(tracks)}")
 

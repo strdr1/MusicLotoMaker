@@ -1,752 +1,692 @@
-﻿// track_view_manager.js
-// Управление отображением треков в медиатеке с поиском, сортировкой и статистикой
+﻿// track_view_manager.js - ФИНАЛЬНАЯ ВЕРСИЯ БЕЗ ТАЙМЕРА
+// Полный код без таймера обновления хэшей
 
-// Глобальные переменные для управления состоянием
-let searchQuery = '';
-let sortBy = 'id';
-let sortDirection = 'asc';
-let filterByStatus = 'all'; // 'all', 'processed', 'unprocessed'
-let currentPlayingTrackId = null;
-let isGlobalPlaying = false;
-let globalAudioPlayer = null;
+// Проверяем, не загружен ли уже этот файл
+if (typeof window.trackViewManager !== 'undefined') {
+    console.warn('⚠️ Track View Manager уже загружен, пропускаем повторную загрузку');
+} else {
+    console.log('🎵 Загрузка Track View Manager (без таймера)...');
 
-// Для презентаций
-let presentationFilterByStatus = 'all';
+    // ==================== КОНФИГУРАЦИЯ ====================
+    const TRACK_VIEW_CONFIG = {
+        // Система хэшей для фото
+        PHOTO_HASH_ENABLED: true,
+        PHOTO_HASH_KEY: 'track_photo_hash_',
 
-// Инициализация менеджера представления
-function initTrackViewManager() {
-    console.log('🎵 Track View Manager инициализируется...');
+        // Настройки отображения
+        DEFAULT_VIEW_MODE: 'compact',
+        ITEMS_PER_PAGE: 50,
 
-    setupViewToggle();
-    updateViewToggleText();
-    setupSearchHandlers();
-    setupSortHandlers();
-    setupFilterHandlers();
-    setupPresentationFilterHandlers();
-    setupStatsDisplay();
-    setupGlobalPlayer();
-    setupProcessAllButton();
+        // Воспроизведение
+        DEFAULT_SEGMENT_DURATION: 30,
+        PLAYBACK_VOLUME: 0.5,
 
-    // Важно: вызываем обновление статистики, но убеждаемся, что это не рекурсивно
-    safeUpdateGlobalStats();
-    safeUpdatePresentationStats();
+        // Безопасность
+        NO_AUTO_REFRESH: true,
+        PRESERVE_EXISTING_DOM: true,
 
-    console.log('✅ Track View Manager инициализирован');
-}
+        // API Endpoints
+        PHOTO_HASH_ENDPOINT: '/api/tracks/photo-hashes'
+    };
 
-// Безопасное обновление статистики без рекурсии
-function safeUpdateGlobalStats() {
-    const statsElement = document.getElementById('mediaStats');
-    if (!statsElement) return;
+    // ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
+    let trackViewCurrentViewMode = TRACK_VIEW_CONFIG.DEFAULT_VIEW_MODE;
+    let trackViewSearchQuery = '';
+    let trackViewSortBy = 'id';
+    let trackViewSortDirection = 'asc';
+    let trackViewFilterByStatus = 'all';
+    let trackViewCurrentPlayingTrackId = null;
+    let trackViewIsGlobalPlaying = false;
+    let trackViewGlobalAudioPlayer = null;
+    let trackViewPhotoHashMap = new Map();
+    let isInitialized = false;
 
-    try {
-        const total = window.currentTracks ? window.currentTracks.length : 0;
-        const processed = window.currentTracks ? window.currentTracks.filter(t => t.processed).length : 0;
-        const unprocessed = total - processed;
-        const withPhotos = window.currentTracks ? window.currentTracks.filter(t => t.image_path).length : 0;
-        const percentage = total > 0 ? Math.round((processed / total) * 100) : 0;
+    // Презентации
+    let trackViewPresentationTrackList = [];
+    let trackViewPresentationFilterByStatus = 'all';
 
-        statsElement.innerHTML = `
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon">📊</div>
-                    <div class="stat-info">
-                        <span class="stat-label">Всего треков</span>
-                        <span class="stat-value">${total}</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">✅</div>
-                    <div class="stat-info">
-                        <span class="stat-label">Обработано</span>
-                        <span class="stat-value">${processed}</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">⏳</div>
-                    <div class="stat-info">
-                        <span class="stat-label">Не обработано</span>
-                        <span class="stat-value">${unprocessed}</span>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon">📈</div>
-                    <div class="stat-info">
-                        <span class="stat-label">Прогресс</span>
-                        <span class="stat-value">${percentage}%</span>
-                    </div>
-                </div>
-            </div>
-        `;
+    // ==================== СИСТЕМА ХЭШЕЙ ДЛЯ ФОТО ====================
 
-    } catch (error) {
-        console.error('Ошибка обновления статистики:', error);
+    // Инициализация системы хэшей
+    async function initPhotoHashSystem() {
+        console.log('🔄 Инициализация системы хэшей фото...');
+
+        await loadPhotoHashes();
+
+        setTimeout(() => {
+            applyPhotoHashesToExistingImages();
+        }, 1000);
+
+        console.log('✅ Система хэшей инициализирована (без таймера)');
     }
-}
 
-// Безопасное обновление статистики презентации
-function safeUpdatePresentationStats() {
-    // Просто вызываем функцию из app.js, если она существует
-    if (typeof updatePresentationMiniLibraryStats === 'function') {
-        updatePresentationMiniLibraryStats();
-    }
-}
+    // Загрузка хэшей из localStorage
+    async function loadPhotoHashes() {
+        trackViewPhotoHashMap.clear();
 
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith(TRACK_VIEW_CONFIG.PHOTO_HASH_KEY)) {
+                const trackId = key.replace(TRACK_VIEW_CONFIG.PHOTO_HASH_KEY, '');
+                const hash = localStorage.getItem(key);
+                trackViewPhotoHashMap.set(parseInt(trackId), hash);
+            }
+        }
 
-// Обновление индикаторов готовности к презентации
-function updatePresentationReadinessIndicators(inPresentation, total) {
-    const readyStatus = document.getElementById('presentationReadyStatus');
-    const generateBtn = document.getElementById('generatePresentationBtn');
+        console.log(`📊 Загружено ${trackViewPhotoHashMap.size} хэшей фото из localStorage`);
 
-    if (readyStatus) {
-        if (inPresentation >= 120) {
-            readyStatus.innerHTML = `
-                <span style="color: var(--success);">
-                    ✅ Готово к генерации! (${inPresentation} треков)
-                </span>
-            `;
-        } else if (inPresentation >= 40) {
-            readyStatus.innerHTML = `
-                <span style="color: var(--warning);">
-                    ⚠️ Минимально готово (${inPresentation} из 120 треков)
-                </span>
-            `;
-        } else {
-            readyStatus.innerHTML = `
-                <span style="color: var(--error);">
-                    ❌ Недостаточно треков (${inPresentation} из 40 минимум)
-                </span>
-            `;
+        // Загружаем хэши с сервера
+        if (window.currentTracks && window.currentTracks.length > 0) {
+            await updatePhotoHashesForTracks(window.currentTracks.map(t => t.id));
         }
     }
 
-    if (generateBtn) {
-        generateBtn.disabled = inPresentation < 40;
-        generateBtn.title = inPresentation < 40 ?
-            `Добавьте хотя бы 40 треков в список (сейчас: ${inPresentation})` :
-            `Сгенерировать презентацию из ${inPresentation} треков`;
-    }
-}
-
-// Обновление глобальной статистики (адаптированная версия без рекурсии)
-function updateGlobalStats() {
-    safeUpdateGlobalStats();
-}
-
-// Обновление статистики презентации
-function updatePresentationStats() {
-    safeUpdatePresentationStats();
-}
-
-// Настройка переключателя вида
-function setupViewToggle() {
-    const toggleBtn = document.getElementById('toggleDetailedView');
-    if (!toggleBtn) {
-        console.error('Кнопка переключения вида не найдена');
-        return;
+    // Сохранение хэша для трека
+    function savePhotoHash(trackId, hash) {
+        const key = TRACK_VIEW_CONFIG.PHOTO_HASH_KEY + trackId;
+        localStorage.setItem(key, hash);
+        trackViewPhotoHashMap.set(trackId, hash);
     }
 
-    toggleBtn.addEventListener('click', function (e) {
-        e.preventDefault();
-        toggleViewMode();
-    });
-
-    console.log('Обработчик кнопки вида установлен');
-}
-
-// Переключение между компактным и подробным видом
-function toggleViewMode() {
-    console.log('Переключение вида, текущий режим:', window.currentViewMode);
-
-    const tracksList = document.getElementById('tracksList');
-    if (!tracksList) {
-        console.error('Контейнер треков не найден');
-        return;
+    // Получение хэша для трека
+    function getPhotoHash(trackId) {
+        return trackViewPhotoHashMap.get(trackId) || null;
     }
 
-    window.currentViewMode = window.currentViewMode === 'compact' ? 'detailed' : 'compact';
+    // Обновление хэшей для списка треков
+    async function updatePhotoHashesForTracks(trackIds) {
+        if (!trackIds || trackIds.length === 0) return;
 
-    if (window.currentViewMode === 'detailed') {
-        tracksList.classList.add('detailed-view');
-        console.log('Переключились на подробный вид');
-        renderFilteredTracks();
-    } else {
-        tracksList.classList.remove('detailed-view');
-        console.log('Переключились на компактный вид');
-        renderFilteredTracks();
-    }
+        try {
+            const response = await fetch(TRACK_VIEW_CONFIG.PHOTO_HASH_ENDPOINT, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify({ track_ids: trackIds })
+            });
 
-    updateViewToggleText();
-}
-
-// Обновление текста кнопки переключения
-function updateViewToggleText() {
-    const toggleBtn = document.getElementById('toggleDetailedView');
-    const textSpan = document.getElementById('viewToggleText');
-
-    if (!toggleBtn || !textSpan) {
-        console.log('Элементы кнопки не найдены');
-        return;
-    }
-
-    if (window.currentViewMode === 'compact') {
-        textSpan.textContent = 'Подробный вид';
-        toggleBtn.title = 'Переключиться на подробный вид с waveform и большими фото';
-    } else {
-        textSpan.textContent = 'Компактный вид';
-        toggleBtn.title = 'Переключиться на компактный вид списка';
-    }
-}
-
-// Настройка обработчиков поиска
-function setupSearchHandlers() {
-    const searchInput = document.getElementById('trackSearchInput');
-    const searchBtn = document.getElementById('trackSearchBtn');
-    const clearSearchBtn = document.getElementById('clearSearchBtn');
-
-    if (searchInput) {
-        searchInput.addEventListener('input', function () {
-            searchQuery = this.value.toLowerCase().trim();
-            debouncedSearch();
-        });
-
-        searchInput.addEventListener('keypress', function (e) {
-            if (e.key === 'Enter') {
-                searchQuery = this.value.toLowerCase().trim();
-                performSearch();
-            }
-        });
-    }
-
-    if (searchBtn) {
-        searchBtn.addEventListener('click', function () {
-            if (searchInput) {
-                searchQuery = searchInput.value.toLowerCase().trim();
-            }
-            performSearch();
-        });
-    }
-
-    if (clearSearchBtn) {
-        clearSearchBtn.addEventListener('click', function () {
-            searchQuery = '';
-            if (searchInput) searchInput.value = '';
-            performSearch();
-        });
-    }
-}
-
-// Настройка обработчиков сортировки
-function setupSortHandlers() {
-    const sortSelect = document.getElementById('trackSortSelect');
-    if (sortSelect) {
-        sortSelect.addEventListener('change', function () {
-            sortBy = this.value;
-            performSort();
-        });
-    }
-
-    const sortDirectionBtn = document.getElementById('sortDirectionBtn');
-    if (sortDirectionBtn) {
-        sortDirectionBtn.addEventListener('click', function () {
-            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
-            this.innerHTML = sortDirection === 'asc' ? '↑' : '↓';
-            this.title = sortDirection === 'asc' ? 'По возрастанию' : 'По убыванию';
-            performSort();
-        });
-    }
-}
-
-// Настройка обработчиков фильтрации по статусу (для основной медиатеки)
-function setupFilterHandlers() {
-    const filterButtons = document.querySelectorAll('.status-filter-btn');
-    filterButtons.forEach(btn => {
-        btn.addEventListener('click', function () {
-            filterButtons.forEach(b => b.classList.remove('active'));
-            this.classList.add('active');
-            filterByStatus = this.dataset.filter;
-            applyFilters();
-        });
-    });
-}
-
-// Настройка обработчиков фильтрации для презентаций
-function setupPresentationFilterHandlers() {
-    // Создаем кнопки фильтрации для презентаций, если их нет
-    createPresentationFilterButtons();
-
-    // Вешаем обработчики
-    const presFilterButtons = document.querySelectorAll('.pres-status-filter-btn');
-    presFilterButtons.forEach(btn => {
-        btn.addEventListener('click', function () {
-            presFilterButtons.forEach(b => b.classList.remove('active'));
-            this.classList.add('active');
-            presentationFilterByStatus = this.dataset.filter;
-            applyPresentationFilters();
-        });
-    });
-}
-
-// Создание кнопок фильтрации для презентаций
-function createPresentationFilterButtons() {
-    const filterContainer = document.getElementById('presentationFilterContainer');
-    if (!filterContainer || filterContainer.querySelector('.pres-status-filter-btn')) {
-        return;
-    }
-
-    filterContainer.innerHTML = `
-        <div class="filter-group">
-            <span class="filter-label">Фильтр по статусу:</span>
-            <div class="filter-buttons">
-                <button class="btn btn-small pres-status-filter-btn ${presentationFilterByStatus === 'all' ? 'active' : ''}" 
-                        data-filter="all" title="Все треки">
-                    Все
-                </button>
-                <button class="btn btn-small pres-status-filter-btn ${presentationFilterByStatus === 'processed' ? 'active' : ''}" 
-                        data-filter="processed" title="Только обработанные">
-                    ✅ Обработанные
-                </button>
-                <button class="btn btn-small pres-status-filter-btn ${presentationFilterByStatus === 'unprocessed' ? 'active' : ''}" 
-                        data-filter="unprocessed" title="Только необработанные">
-                    ⏳ Необработанные
-                </button>
-            </div>
-        </div>
-    `;
-}
-
-// Применение фильтров для презентаций
-function applyPresentationFilters() {
-    if (!window.presentationTrackList) return;
-
-    let filteredPresentationTracks = [...window.presentationTrackList];
-
-    if (presentationFilterByStatus === 'processed') {
-        filteredPresentationTracks = filteredPresentationTracks.filter(track => track.processed);
-    } else if (presentationFilterByStatus === 'unprocessed') {
-        filteredPresentationTracks = filteredPresentationTracks.filter(track => !track.processed);
-    }
-
-    // Обновляем отображение
-    renderFilteredPresentationTracks(filteredPresentationTracks);
-    updatePresentationFilterStats();
-}
-
-// Обновление статистики фильтрации презентации
-function updatePresentationFilterStats() {
-    const filterStats = document.getElementById('presentationFilterStats');
-    if (!filterStats) return;
-
-    const totalInPresentation = window.presentationTrackList ? window.presentationTrackList.length : 0;
-    let filteredCount = totalInPresentation;
-
-    if (presentationFilterByStatus === 'processed') {
-        filteredCount = window.presentationTrackList ?
-            window.presentationTrackList.filter(t => t.processed).length : 0;
-    } else if (presentationFilterByStatus === 'unprocessed') {
-        filteredCount = window.presentationTrackList ?
-            window.presentationTrackList.filter(t => !t.processed).length : 0;
-    }
-
-    filterStats.innerHTML = `
-        <span class="filter-stats-text">
-            Показано: <strong>${filteredCount}</strong> треков (из ${totalInPresentation} в списке)
-        </span>
-    `;
-    filterStats.style.display = filteredCount === totalInPresentation ? 'none' : 'block';
-}
-
-// Рендер отфильтрованных треков презентации
-function renderFilteredPresentationTracks(tracks) {
-    const container = document.getElementById('presentationTracksList');
-    if (!container) return;
-
-    if (tracks.length === 0) {
-        const noResultsMessage = presentationFilterByStatus !== 'all'
-            ? `<div class="empty-state">
-                <div class="icon">🔍</div>
-                <h3>${presentationFilterByStatus === 'processed' ? 'Нет обработанных треков' : 'Нет необработанных треков'}</h3>
-                <p>Попробуйте изменить фильтр</p>
-               </div>`
-            : '<div class="empty-state"><div class="icon">🎵</div><h3>Нет треков в списке</h3><p>Добавьте треки в список презентации</p></div>';
-
-        container.innerHTML = noResultsMessage;
-        return;
-    }
-
-    // Используем функцию из app.js для рендера, если она существует
-    if (typeof window.renderPresentationTracksCompact === 'function') {
-        window.renderPresentationTracksCompact(tracks);
-    } else {
-        // Запасной вариант
-        container.innerHTML = tracks.map(track => {
-            const isPlaying = currentPlayingTrackId === track.id && isGlobalPlaying;
-            return `
-            <div class="track-item ${track.processed ? 'processed' : ''} ${isPlaying ? 'playing' : ''}" data-track-id="${track.id}">
-                <div class="col-id">${track.id}</div>
-                <div class="col-artist">
-                    ${track.image_path ?
-                    `<img src="${window.API_BASE}/tracks/${track.id}/artist-photo?t=${Date.now()}" 
-                          alt="${escapeHtml(track.artist)}"
-                          class="track-cover">` :
-                    `<div class="track-cover empty"></div>`
-                }
-                    <span>${escapeHtml(track.artist)}</span>
-                    ${track.processed ? '<span class="track-processed-badge">✅</span>' : ''}
-                </div>
-                <div class="col-title">${escapeHtml(track.title)}</div>
-                <div class="col-actions">
-                    <button class="btn btn-secondary btn-small" onclick="window.trackViewManager.playTrackSegment(${track.id})">
-                        ${isPlaying ? '⏹️' : '▶️'}
-                    </button>
-                    <button class="btn btn-secondary btn-small" onclick="window.openAudioEditor && window.openAudioEditor(${track.id})">🎚️</button>
-                    <button class="btn btn-secondary btn-small" onclick="window.editTrack && window.editTrack(${track.id})">✏️</button>
-                    <button class="btn btn-success btn-small" onclick="window.trackViewManager.toggleProcessedStatus(${track.id})">
-                        ${track.processed ? '❌' : '✅'}
-                    </button>
-                </div>
-            </div>
-            `;
-        }).join('');
-    }
-}
-
-// Настройка отображения статистики
-function setupStatsDisplay() {
-    safeUpdateGlobalStats();
-    safeUpdatePresentationStats();
-}
-
-// Настройка глобального плеера
-function setupGlobalPlayer() {
-    if (!globalAudioPlayer) {
-        globalAudioPlayer = new Audio();
-        globalAudioPlayer.preload = 'auto';
-        globalAudioPlayer.volume = 0.5;
-
-        globalAudioPlayer.addEventListener('ended', function () {
-            stopGlobalPlayback();
-        });
-
-        globalAudioPlayer.addEventListener('error', function (e) {
-            // Только для реальных ошибок, игнорируем обычные прерывания
-            if (globalAudioPlayer.error && globalAudioPlayer.error.code !== 0) {
-                console.warn('Ошибка аудио:', globalAudioPlayer.error.message);
-            }
-            stopGlobalPlayback();
-        });
-
-        globalAudioPlayer.addEventListener('timeupdate', function () {
-            if (currentPlayingTrackId && isGlobalPlaying) {
-                updatePlayButtons();
-            }
-        });
-    }
-}
-
-
-// Настройка кнопки "Обработать все"
-function setupProcessAllButton() {
-    const processAllBtn = document.getElementById('processAllBtn');
-    if (processAllBtn) {
-        processAllBtn.addEventListener('click', async function () {
-            const filteredTracks = getFilteredTracks();
-            const unprocessedTracks = filteredTracks.filter(track => !track.processed);
-            if (unprocessedTracks.length === 0) {
-                showNotification('Все треки уже обработаны', 'info');
+            if (!response.ok) {
+                console.warn(`⚠️ Ошибка получения хэшей: ${response.status}`);
                 return;
             }
 
-            if (!confirm(`Пометить как обработанные ${unprocessedTracks.length} треков?`)) {
-                return;
-            }
+            const data = await response.json();
 
-            try {
-                this.disabled = true;
-                this.innerHTML = '⏳ Обработка...';
+            if (data.success && data.hashes) {
+                let updatedCount = 0;
 
-                let successCount = 0;
-                for (const track of unprocessedTracks) {
-                    try {
-                        await toggleProcessedStatus(track.id, true);
-                        successCount++;
-                    } catch (error) {
-                        console.error(`Ошибка обработки трека ${track.id}:`, error);
+                for (const [trackIdStr, hashInfo] of Object.entries(data.hashes)) {
+                    const trackId = parseInt(trackIdStr);
+                    const hash = hashInfo.hash;
+
+                    if (hash && hash !== 'no_photo' && hash !== 'missing' && hash !== 'error') {
+                        savePhotoHash(trackId, hash);
+                        updatedCount++;
+
+                        updateImageUrl(trackId);
                     }
                 }
 
-                showNotification(`Обработано ${successCount} из ${unprocessedTracks.length} треков`, 'success');
-                if (window.loadTracks) {
-                    window.loadTracks();
-                }
+                console.log(`📸 Обновлено ${updatedCount} хэшей с сервера`);
+            } else {
+                console.warn('⚠️ Некорректный ответ от сервера хэшей:', data);
+            }
 
-            } catch (error) {
-                console.error('Ошибка массовой обработки:', error);
-                showNotification('Ошибка при обработке треков', 'error');
-            } finally {
-                this.disabled = false;
-                this.innerHTML = '✅ Обработать все';
+        } catch (error) {
+            console.warn('⚠️ Ошибка при получении хэшей с сервера:', error);
+        }
+    }
+
+    // Обновление URL изображения с хэшем
+    function updateImageUrl(trackId) {
+        const hash = getPhotoHash(trackId);
+        if (!hash) return;
+
+        const images = document.querySelectorAll(`img[data-track-id="${trackId}"]`);
+
+        images.forEach(img => {
+            const currentSrc = img.src;
+
+            try {
+                const url = new URL(currentSrc);
+                url.searchParams.set('h', hash);
+                url.searchParams.set('t', Date.now());
+
+                if (url.toString() !== currentSrc) {
+                    img.src = url.toString();
+                }
+            } catch (e) {
+                const baseUrl = `/api/tracks/${trackId}/artist-photo`;
+                img.src = `${baseUrl}?h=${hash}&t=${Date.now()}`;
             }
         });
     }
-}
 
-// Дебаунс для поиска
-const debouncedSearch = debounce(performSearch, 300);
+    // Применение хэшей к существующим изображениям
+    function applyPhotoHashesToExistingImages() {
+        const images = document.querySelectorAll('img[data-track-id]');
 
-// Выполнение поиска
-function performSearch() {
-    renderFilteredTracks();
-    updateSearchStats();
-}
+        images.forEach(img => {
+            const trackId = parseInt(img.getAttribute('data-track-id'));
+            const hash = getPhotoHash(trackId);
 
-// Выполнение сортировки
-function performSort() {
-    renderFilteredTracks();
-}
+            if (hash) {
+                try {
+                    const url = new URL(img.src);
+                    if (!url.searchParams.has('h')) {
+                        url.searchParams.set('h', hash);
+                        img.src = url.toString();
+                    }
+                } catch (e) {
+                    const baseUrl = `/api/tracks/${trackId}/artist-photo`;
+                    img.src = `${baseUrl}?h=${hash}&t=${Date.now()}`;
+                }
+            }
+        });
+    }
 
-// Применение фильтров (основная медиатека)
-function applyFilters() {
-    renderFilteredTracks();
-    updateFilterStats();
-}
+    // ==================== ОСНОВНОЙ TRACK VIEW MANAGER ====================
 
-// Получение отфильтрованных и отсортированных треков
-function getFilteredTracks() {
-    const currentTracks = window.currentTracks || [];
-
-    let filtered = currentTracks.filter(track => {
-        if (searchQuery && track) {
-            const artistMatch = track.artist && track.artist.toLowerCase().includes(searchQuery);
-            const titleMatch = track.title && track.title.toLowerCase().includes(searchQuery);
-            if (!artistMatch && !titleMatch) return false;
+    // Инициализация менеджера представления
+    async function initTrackViewManager() {
+        if (isInitialized) {
+            console.log('⚠️ Track View Manager уже инициализирован');
+            return;
         }
 
-        if (filterByStatus === 'processed') {
-            return track.processed === true;
-        } else if (filterByStatus === 'unprocessed') {
-            return track.processed === false;
-        }
+        console.log('🎵 Track View Manager инициализируется...');
 
-        return true;
-    });
+        // Инициализируем систему хэшей
+        await initPhotoHashSystem();
 
-    filtered.sort((a, b) => {
-        let aValue, bValue;
+        // Настройка интерфейса
+        setupViewToggle();
+        updateViewToggleText();
+        setupSearchHandlers();
+        setupSortHandlers();
+        setupFilterHandlers();
+        setupPresentationFilterHandlers();
+        setupStatsDisplay();
+        setupGlobalPlayer();
+        setupProcessAllButton();
 
-        switch (sortBy) {
-            case 'artist':
-                aValue = a.artist ? a.artist.toLowerCase() : '';
-                bValue = b.artist ? b.artist.toLowerCase() : '';
-                break;
-            case 'title':
-                aValue = a.title ? a.title.toLowerCase() : '';
-                bValue = b.title ? b.title.toLowerCase() : '';
-                break;
-            case 'id':
-                aValue = a.id || 0;
-                bValue = b.id || 0;
-                break;
-            case 'processed':
-                aValue = a.processed ? 1 : 0;
-                bValue = b.processed ? 1 : 0;
-                break;
-            default:
-                aValue = a.id || 0;
-                bValue = b.id || 0;
-        }
+        isInitialized = true;
+        console.log('✅ Track View Manager инициализирован');
+    }
 
-        if (sortDirection === 'asc') {
-            return aValue > bValue ? 1 : -1;
+    // Настройка переключателя вида
+    function setupViewToggle() {
+        const toggleBtn = document.getElementById('toggleDetailedView');
+        if (!toggleBtn) return;
+
+        toggleBtn.addEventListener('click', function (e) {
+            e.preventDefault();
+            toggleViewMode();
+        });
+    }
+
+    // Переключение между компактным и подробным видом
+    function toggleViewMode() {
+        const tracksList = document.getElementById('tracksList');
+        if (!tracksList) return;
+
+        trackViewCurrentViewMode = trackViewCurrentViewMode === 'compact' ? 'detailed' : 'compact';
+
+        if (trackViewCurrentViewMode === 'detailed') {
+            tracksList.classList.add('detailed-view');
         } else {
-            return aValue < bValue ? 1 : -1;
+            tracksList.classList.remove('detailed-view');
         }
-    });
 
-    return filtered;
-}
+        renderFilteredTracks();
+        updateViewToggleText();
+    }
 
-// Обновление статистики поиска
-function updateSearchStats() {
-    const searchStats = document.getElementById('searchStats');
-    if (!searchStats) return;
+    // Обновление текста кнопки переключения
+    function updateViewToggleText() {
+        const toggleBtn = document.getElementById('toggleDetailedView');
+        const textSpan = document.getElementById('viewToggleText');
 
-    const filtered = getFilteredTracks();
-    const total = window.currentTracks ? window.currentTracks.length : 0;
+        if (!toggleBtn || !textSpan) return;
 
-    if (searchQuery) {
-        searchStats.innerHTML = `
-            <span class="search-stats-text">
-                Найдено: <strong>${filtered.length}</strong> из ${total} треков
+        if (trackViewCurrentViewMode === 'compact') {
+            textSpan.textContent = 'Подробный вид';
+            toggleBtn.title = 'Переключиться на подробный вид с waveform и большими фото';
+        } else {
+            textSpan.textContent = 'Компактный вид';
+            toggleBtn.title = 'Переключиться на компактный вид списка';
+        }
+    }
+
+    // Настройка обработчиков поиска
+    function setupSearchHandlers() {
+        const searchInput = document.getElementById('trackSearchInput');
+        const searchBtn = document.getElementById('trackSearchBtn');
+        const clearSearchBtn = document.getElementById('clearSearchBtn');
+
+        if (searchInput) {
+            searchInput.addEventListener('input', function () {
+                trackViewSearchQuery = this.value.toLowerCase().trim();
+                debouncedSearch();
+            });
+
+            searchInput.addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') {
+                    trackViewSearchQuery = this.value.toLowerCase().trim();
+                    performSearch();
+                }
+            });
+        }
+
+        if (searchBtn) {
+            searchBtn.addEventListener('click', function () {
+                if (searchInput) {
+                    trackViewSearchQuery = searchInput.value.toLowerCase().trim();
+                }
+                performSearch();
+            });
+        }
+
+        if (clearSearchBtn) {
+            clearSearchBtn.addEventListener('click', function () {
+                trackViewSearchQuery = '';
+                if (searchInput) searchInput.value = '';
+                performSearch();
+            });
+        }
+    }
+
+    // Настройка обработчиков сортировки
+    function setupSortHandlers() {
+        const sortSelect = document.getElementById('trackSortSelect');
+        if (sortSelect) {
+            sortSelect.addEventListener('change', function () {
+                trackViewSortBy = this.value;
+                performSort();
+            });
+        }
+
+        const sortDirectionBtn = document.getElementById('sortDirectionBtn');
+        if (sortDirectionBtn) {
+            sortDirectionBtn.addEventListener('click', function () {
+                trackViewSortDirection = trackViewSortDirection === 'asc' ? 'desc' : 'asc';
+                this.innerHTML = trackViewSortDirection === 'asc' ? '↑' : '↓';
+                this.title = trackViewSortDirection === 'asc' ? 'По возрастанию' : 'По убыванию';
+                performSort();
+            });
+        }
+    }
+
+    // Настройка обработчиков фильтрации по статусу
+    function setupFilterHandlers() {
+        const filterButtons = document.querySelectorAll('.status-filter-btn');
+        filterButtons.forEach(btn => {
+            btn.addEventListener('click', function () {
+                filterButtons.forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                trackViewFilterByStatus = this.dataset.filter;
+                applyFilters();
+            });
+        });
+    }
+
+    // Настройка обработчиков фильтрации для презентаций
+    function setupPresentationFilterHandlers() {
+        createPresentationFilterButtons();
+
+        const presFilterButtons = document.querySelectorAll('.pres-status-filter-btn');
+        presFilterButtons.forEach(btn => {
+            btn.addEventListener('click', function () {
+                presFilterButtons.forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                trackViewPresentationFilterByStatus = this.dataset.filter;
+                applyPresentationFilters();
+            });
+        });
+    }
+
+    // Создание кнопок фильтрации для презентаций
+    function createPresentationFilterButtons() {
+        const filterContainer = document.getElementById('presentationFilterContainer');
+        if (!filterContainer || filterContainer.querySelector('.pres-status-filter-btn')) {
+            return;
+        }
+
+        filterContainer.innerHTML = `
+            <div class="filter-group">
+                <span class="filter-label">Фильтр по статусу:</span>
+                <div class="filter-buttons">
+                    <button class="btn btn-small pres-status-filter-btn ${trackViewPresentationFilterByStatus === 'all' ? 'active' : ''}" 
+                            data-filter="all" title="Все треки">
+                        Все
+                    </button>
+                    <button class="btn btn-small pres-status-filter-btn ${trackViewPresentationFilterByStatus === 'processed' ? 'active' : ''}" 
+                            data-filter="processed" title="Только обработанные">
+                        ✅ Обработанные
+                    </button>
+                    <button class="btn btn-small pres-status-filter-btn ${trackViewPresentationFilterByStatus === 'unprocessed' ? 'active' : ''}" 
+                            data-filter="unprocessed" title="Только необработанные">
+                        ⏳ Необработанные
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
+    // Настройка отображения статистики
+    function setupStatsDisplay() {
+        updateGlobalStats();
+    }
+
+    // Настройка глобального плеера
+    function setupGlobalPlayer() {
+        if (!trackViewGlobalAudioPlayer) {
+            trackViewGlobalAudioPlayer = new Audio();
+            trackViewGlobalAudioPlayer.preload = 'auto';
+            trackViewGlobalAudioPlayer.volume = TRACK_VIEW_CONFIG.PLAYBACK_VOLUME;
+
+            trackViewGlobalAudioPlayer.addEventListener('ended', function () {
+                stopGlobalPlayback();
+            });
+
+            trackViewGlobalAudioPlayer.addEventListener('error', function (e) {
+                if (trackViewGlobalAudioPlayer.error && trackViewGlobalAudioPlayer.error.code !== 0) {
+                    console.warn('Ошибка аудио:', trackViewGlobalAudioPlayer.error.message);
+                }
+                stopGlobalPlayback();
+            });
+
+            trackViewGlobalAudioPlayer.addEventListener('timeupdate', function () {
+                if (trackViewCurrentPlayingTrackId && trackViewIsGlobalPlaying) {
+                    updatePlayButtons();
+                }
+            });
+        }
+    }
+
+    // Настройка кнопки "Обработать все"
+    function setupProcessAllButton() {
+        const processAllBtn = document.getElementById('processAllBtn');
+        if (processAllBtn) {
+            processAllBtn.addEventListener('click', async function () {
+                const filteredTracks = getFilteredTracks();
+                const unprocessedTracks = filteredTracks.filter(track => !track.processed);
+                if (unprocessedTracks.length === 0) {
+                    showNotification('Все треки уже обработаны', 'info');
+                    return;
+                }
+
+                if (!confirm(`Пометить как обработанные ${unprocessedTracks.length} треков?`)) {
+                    return;
+                }
+
+                try {
+                    this.disabled = true;
+                    this.innerHTML = '⏳ Обработка...';
+
+                    let successCount = 0;
+                    for (const track of unprocessedTracks) {
+                        try {
+                            await toggleProcessedStatus(track.id, true);
+                            successCount++;
+                        } catch (error) {
+                            console.error(`Ошибка обработки трека ${track.id}:`, error);
+                        }
+                    }
+
+                    showNotification(`Обработано ${successCount} из ${unprocessedTracks.length} треков`, 'success');
+                    if (window.loadTracks) {
+                        window.loadTracks();
+                    }
+
+                } catch (error) {
+                    console.error('Ошибка массовой обработки:', error);
+                    showNotification('Ошибка при обработке треков', 'error');
+                } finally {
+                    this.disabled = false;
+                    this.innerHTML = '✅ Обработать все';
+                }
+            });
+        }
+    }
+
+    // ==================== ПОИСК И ФИЛЬТРАЦИЯ ====================
+
+    // Дебаунс для поиска
+    const debouncedSearch = debounce(performSearch, 300);
+
+    // Выполнение поиска
+    function performSearch() {
+        renderFilteredTracks();
+        updateSearchStats();
+    }
+
+    // Выполнение сортировки
+    function performSort() {
+        renderFilteredTracks();
+    }
+
+    // Применение фильтров
+    function applyFilters() {
+        renderFilteredTracks();
+        updateFilterStats();
+    }
+
+    // Получение отфильтрованных треков
+    function getFilteredTracks() {
+        if (!window.currentTracks) return [];
+
+        let filtered = window.currentTracks.filter(track => {
+            if (!track) return false;
+
+            if (trackViewSearchQuery) {
+                const artistMatch = track.artist && track.artist.toLowerCase().includes(trackViewSearchQuery);
+                const titleMatch = track.title && track.title.toLowerCase().includes(trackViewSearchQuery);
+                if (!artistMatch && !titleMatch) return false;
+            }
+
+            if (trackViewFilterByStatus === 'processed') {
+                return track.processed === true;
+            } else if (trackViewFilterByStatus === 'unprocessed') {
+                return track.processed !== true;
+            }
+
+            return true;
+        });
+
+        filtered.sort((a, b) => {
+            let aValue, bValue;
+
+            switch (trackViewSortBy) {
+                case 'artist':
+                    aValue = a.artist ? a.artist.toLowerCase() : '';
+                    bValue = b.artist ? b.artist.toLowerCase() : '';
+                    break;
+                case 'title':
+                    aValue = a.title ? a.title.toLowerCase() : '';
+                    bValue = b.title ? b.title.toLowerCase() : '';
+                    break;
+                case 'id':
+                    aValue = a.id || 0;
+                    bValue = b.id || 0;
+                    break;
+                case 'processed':
+                    aValue = a.processed === true ? 1 : 0;
+                    bValue = b.processed === true ? 1 : 0;
+                    break;
+                default:
+                    aValue = a.id || 0;
+                    bValue = b.id || 0;
+            }
+
+            if (trackViewSortDirection === 'asc') {
+                return aValue > bValue ? 1 : -1;
+            } else {
+                return aValue < bValue ? 1 : -1;
+            }
+        });
+
+        return filtered;
+    }
+
+    // Применение фильтров для презентации
+    function applyPresentationFilters() {
+        if (!trackViewPresentationTrackList || trackViewPresentationTrackList.length === 0) {
+            renderFilteredPresentationTracks([]);
+            return;
+        }
+
+        let filteredPresentationTracks = JSON.parse(JSON.stringify(trackViewPresentationTrackList));
+
+        if (trackViewPresentationFilterByStatus === 'processed') {
+            filteredPresentationTracks = filteredPresentationTracks.filter(track => track.processed);
+        } else if (trackViewPresentationFilterByStatus === 'unprocessed') {
+            filteredPresentationTracks = filteredPresentationTracks.filter(track => !track.processed);
+        }
+
+        renderFilteredPresentationTracks(filteredPresentationTracks);
+        updatePresentationFilterStats();
+    }
+
+    // Обновление статистики поиска
+    function updateSearchStats() {
+        const searchStats = document.getElementById('searchStats');
+        if (!searchStats) return;
+
+        const filtered = getFilteredTracks();
+        const total = window.currentTracks ? window.currentTracks.length : 0;
+
+        if (trackViewSearchQuery) {
+            searchStats.innerHTML = `
+                <span class="search-stats-text">
+                    Найдено: <strong>${filtered.length}</strong> из ${total} треков
+                </span>
+            `;
+            searchStats.style.display = 'block';
+        } else {
+            searchStats.style.display = 'none';
+        }
+    }
+
+    // Обновление статистики фильтров
+    function updateFilterStats() {
+        const filterStats = document.getElementById('filterStats');
+        if (!filterStats) return;
+
+        const filtered = getFilteredTracks();
+        const total = window.currentTracks ? window.currentTracks.length : 0;
+
+        let statusText = '';
+        if (trackViewFilterByStatus === 'processed') {
+            statusText = 'обработанных';
+        } else if (trackViewFilterByStatus === 'unprocessed') {
+            statusText = 'необработанных';
+        } else {
+            statusText = 'всех';
+        }
+
+        filterStats.innerHTML = `
+            <span class="filter-stats-text">
+                Показано: <strong>${filtered.length}</strong> ${statusText} треков
             </span>
         `;
-        searchStats.style.display = 'block';
-    } else {
-        searchStats.style.display = 'none';
-    }
-}
-
-// Обновление статистики фильтров
-function updateFilterStats() {
-    const filterStats = document.getElementById('filterStats');
-    if (!filterStats) return;
-
-    const filtered = getFilteredTracks();
-    const total = window.currentTracks ? window.currentTracks.length : 0;
-
-    let statusText = '';
-    if (filterByStatus === 'processed') {
-        statusText = 'обработанных';
-    } else if (filterByStatus === 'unprocessed') {
-        statusText = 'необработанных';
-    } else {
-        statusText = 'всех';
     }
 
-    filterStats.innerHTML = `
-        <span class="filter-stats-text">
-            Показано: <strong>${filtered.length}</strong> ${statusText} треков
-        </span>
-    `;
-}
+    // Обновление статистики фильтрации презентации
+    function updatePresentationFilterStats() {
+        const filterStats = document.getElementById('presentationFilterStats');
+        if (!filterStats) return;
 
-// Рендер отфильтрованных треков
-function renderFilteredTracks() {
-    const filteredTracks = getFilteredTracks();
+        const totalInPresentation = trackViewPresentationTrackList ? trackViewPresentationTrackList.length : 0;
+        let filteredCount = totalInPresentation;
 
-    if (window.currentViewMode === 'detailed') {
-        renderTracksDetailed(filteredTracks);
-    } else {
-        renderTracksCompact(filteredTracks);
+        if (trackViewPresentationFilterByStatus === 'processed') {
+            filteredCount = trackViewPresentationTrackList ?
+                trackViewPresentationTrackList.filter(t => t.processed).length : 0;
+        } else if (trackViewPresentationFilterByStatus === 'unprocessed') {
+            filteredCount = trackViewPresentationTrackList ?
+                trackViewPresentationTrackList.filter(t => !t.processed).length : 0;
+        }
+
+        filterStats.innerHTML = `
+            <span class="filter-stats-text">
+                Показано: <strong>${filteredCount}</strong> треков (из ${totalInPresentation} в списке)
+            </span>
+        `;
+        filterStats.style.display = filteredCount === totalInPresentation ? 'none' : 'block';
     }
 
-    updateSearchStats();
-    updateFilterStats();
-    safeUpdateGlobalStats();
-}
+    // ==================== РЕНДЕРИНГ ТРЕКОВ ====================
 
-// Рендер треков в компактном виде с кнопкой воспроизведения
-function renderTracksCompact(tracks) {
-    const container = document.getElementById('tracksList');
-    if (!container) return;
+    // Рендер отфильтрованных треков
+    function renderFilteredTracks() {
+        const filteredTracks = getFilteredTracks();
 
-    if (tracks.length === 0) {
-        const noResultsMessage = searchQuery || filterByStatus !== 'all'
-            ? '<div class="empty-state"><div class="icon">🔍</div><h3>Треки не найдены</h3><p>Попробуйте изменить поисковый запрос или фильтр</p></div>'
-            : '<div class="empty-state"><div class="icon">🎵</div><h3>Нет загруженных треков</h3><p>Нажмите "Загрузить треки" чтобы добавить музыку</p></div>';
+        if (trackViewCurrentViewMode === 'detailed') {
+            renderTracksDetailed(filteredTracks);
+        } else {
+            renderTracksCompact(filteredTracks);
+        }
 
-        container.innerHTML = noResultsMessage;
-        return;
+        updateSearchStats();
+        updateFilterStats();
+        updateGlobalStats();
+
+        setTimeout(() => {
+            applyPhotoHashesToExistingImages();
+        }, 100);
     }
 
-    container.innerHTML = tracks.map(track => {
-        const isPlaying = currentPlayingTrackId === track.id && isGlobalPlaying;
+    // Рендер треков в компактном виде
+    function renderTracksCompact(tracks) {
+        const container = document.getElementById('tracksList');
+        if (!container) return;
 
-        return `
-        <div class="track-item draggable ${track.processed ? 'processed' : ''} ${isPlaying ? 'playing' : ''}" draggable="true" data-track-id="${track.id}">
-            <div class="col-id">
-                ${track.id}
-                <button class="btn-id-change" onclick="window.openChangeIdModal && window.openChangeIdModal(${track.id})" title="Изменить ID">🔢</button>
-            </div>
-            <div class="col-artist">
-                ${track.image_path ?
-                `<span onclick="window.openPhotoEditor && window.openPhotoEditor(${track.id})" style="cursor: pointer; display: inline-block;">
-                        <img src="${window.API_BASE}/tracks/${track.id}/artist-photo?t=${Date.now()}" 
+        if (tracks.length === 0) {
+            const noResultsMessage = trackViewSearchQuery || trackViewFilterByStatus !== 'all'
+                ? '<div class="empty-state"><div class="icon">🔍</div><h3>Треки не найдены</h3><p>Попробуйте изменить поисковый запрос или фильтр</p></div>'
+                : '<div class="empty-state"><div class="icon">🎵</div><h3>Нет загруженных треков</h3><p>Нажмите "Загрузить треки" чтобы добавить музыку</p></div>';
+
+            container.innerHTML = noResultsMessage;
+            return;
+        }
+
+        container.innerHTML = tracks.map(track => {
+            const isPlaying = trackViewCurrentPlayingTrackId === track.id && trackViewIsGlobalPlaying;
+            const photoUrl = generatePhotoUrlWithHash(track.id, track.image_path);
+
+            return `
+            <div class="track-item draggable ${track.processed ? 'processed' : ''} ${isPlaying ? 'playing' : ''}" draggable="true" data-track-id="${track.id}">
+                <div class="col-id">
+                    ${track.id}
+                    <button class="btn-id-change" onclick="window.openChangeIdModal && window.openChangeIdModal(${track.id})" title="Изменить ID">🔢</button>
+                </div>
+                <div class="col-artist">
+                    ${track.image_path && photoUrl ?
+                    `<span onclick="window.openPhotoEditor && window.openPhotoEditor(${track.id})" style="cursor: pointer; display: inline-block;">
+                        <img src="${photoUrl}" 
+                             data-track-id="${track.id}" 
                              alt="${escapeHtml(track.artist)}" 
                              class="track-cover"
                              onerror="handleImageError(this)"
-                             onload="handleImageLoad(this)">
+                             onload="handleImageLoad(this)"
+                             style="opacity: 1; transition: opacity 0.3s ease;">
                     </span>` :
-                ''
-            }
-                <div class="track-cover-placeholder" style="${track.image_path ? 'display: none;' : ''}">🎵</div>
-                <span>${escapeHtml(track.artist)}</span>
-                ${track.processed ? '<span class="track-processed-badge">✅</span>' : ''}
-                ${isPlaying ? '<span class="playing-indicator-small">🔊</span>' : ''}
-            </div>
-            <div class="col-title">${escapeHtml(track.title)}</div>
-            <div class="col-segment">
-                <span class="segment-time">${formatTime(track.segment_start || 0)}</span>
-                <span class="segment-duration">${track.segment_duration || 30}с</span>
-            </div>
-            <div class="col-actions">
-                <button class="btn btn-secondary btn-small play-btn" data-track-id="${track.id}" 
-                        onclick="playTrackSegmentFromManager(${track.id})" title="${isPlaying ? 'Остановить воспроизведение' : 'Воспроизвести отрывок'}">
-                    ${isPlaying ? '⏹️' : '▶️'}
-                </button>
-                <button class="btn btn-secondary btn-small" onclick="window.openAudioEditor && window.openAudioEditor(${track.id})" title="Аудио редактор">🎚️</button>
-                <button class="btn btn-secondary btn-small" onclick="window.editTrack && window.editTrack(${track.id})" title="Редактировать метаданные">✏️</button>
-                <button class="btn btn-success btn-small" onclick="toggleProcessedFromManager(${track.id})" 
-                        title="${track.processed ? 'Отметить как необработанный' : 'Отметить как обработанный'}">
-                    ${track.processed ? '❌' : '✅'}
-                </button>
-                <button class="btn btn-danger btn-small" onclick="window.deleteTrack && window.deleteTrack(${track.id})" title="Удалить">🗑️</button>
-            </div>
-        </div>
-    `}).join('');
-
-    setupDragHandlers();
-    enhanceTrackListWithIdEdit();
-}
-
-// Рендер треков в подробном виде с кнопкой воспроизведения
-function renderTracksDetailed(tracks) {
-    const container = document.getElementById('tracksList');
-    if (!container) return;
-
-    if (tracks.length === 0) {
-        const noResultsMessage = searchQuery || filterByStatus !== 'all'
-            ? '<div class="empty-state"><div class="icon">🔍</div><h3>Треки не найдены</h3><p>Попробуйте изменить поисковый запрос или фильтр</p></div>'
-            : '<div class="empty-state"><div class="icon">🎵</div><h3>Нет загруженных треков</h3><p>Нажмите "Загрузить треки" чтобы добавить музыку</p></div>';
-
-        container.innerHTML = noResultsMessage;
-        return;
-    }
-
-    container.innerHTML = tracks.map(track => {
-        const isPlaying = currentPlayingTrackId === track.id && isGlobalPlaying;
-
-        return `
-        <div class="track-item detailed draggable ${track.processed ? 'processed' : ''} ${isPlaying ? 'playing' : ''}" draggable="true" data-track-id="${track.id}">
-            <!-- ОГРОМНОЕ ФОТО СЛЕВА 284x284 -->
-            <div class="track-image-container">
-                ${track.image_path ?
-                `<img src="${window.API_BASE}/tracks/${track.id}/artist-photo?t=${Date.now()}" 
-                         alt="${escapeHtml(track.artist)}"
-                         onclick="window.openPhotoEditor && window.openPhotoEditor(${track.id})"
-                         onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48dGV4dCB4PSI1MCIgeT0iNTAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPs6PzqPOlc6dzp/Oo86ZPC90ZXh0Pjwvc3ZnPg==';"
-                         onload="this.style.display='block';">` :
-                `<div class="track-cover-placeholder" onclick="window.openPhotoEditor && window.openPhotoEditor(${track.id})" title="Добавить фото">🎵</div>`
-            }
-            </div>
-            
-            <!-- ПРАВАЯ ЧАСТЬ -->
-            <div class="track-main-content">
-                <!-- НАЗВАНИЯ СВЕРХУ -->
-                <div class="track-info-header">
-                    <div class="track-artist" 
-                         onclick="startInlineEdit(this, 'artist', ${track.id})"
-                         title="Кликните для редактирования">
-                        ${escapeHtml(track.artist)}
-                        ${track.processed ? '<span class="track-processed-badge">✅</span>' : ''}
-                        ${isPlaying ? '<span class="playing-indicator">🔊</span>' : ''}
-                    </div>
-                    <div class="track-title" 
-                         onclick="startInlineEdit(this, 'title', ${track.id})"
-                         title="Кликните для редактирования">
-                        ${escapeHtml(track.title)}
-                    </div>
+                    ''
+                }
+                    <div class="track-cover-placeholder" style="${track.image_path ? 'display: none;' : ''}">🎵</div>
+                    <span>${escapeHtml(track.artist)}</span>
+                    ${track.processed ? '<span class="track-processed-badge">✅</span>' : ''}
+                    ${isPlaying ? '<span class="playing-indicator-small">🔊</span>' : ''}
                 </div>
-                
-                <!-- БОЛЬШАЯ WAVEFORM КНОПКА ПО ЦЕНТРУ -->
-                <div class="waveform-btn-container">
-                    <button class="waveform-btn" onclick="window.openAudioEditor && window.openAudioEditor(${track.id})" title="Открыть аудио редактор">
-                        ${track.duration ? `🎵 ${formatTime(track.segment_start || 0)} - ${formatTime((track.segment_start || 0) + (track.segment_duration || 30))}` : 'Загрузка...'}
-                    </button>
+                <div class="col-title">${escapeHtml(track.title)}</div>
+                <div class="col-segment">
+                    <span class="segment-time">${formatTime(track.segment_start || 0)}</span>
+                    <span class="segment-duration">${track.segment_duration || 30}с</span>
                 </div>
-                
-                <!-- КНОПКИ ДЕЙСТВИЙ СНИЗУ В РЯД -->
-                <div class="track-actions detailed">
+                <div class="col-actions">
                     <button class="btn btn-secondary btn-small play-btn" data-track-id="${track.id}" 
                             onclick="playTrackSegmentFromManager(${track.id})" title="${isPlaying ? 'Остановить воспроизведение' : 'Воспроизвести отрывок'}">
                         ${isPlaying ? '⏹️' : '▶️'}
@@ -758,463 +698,634 @@ function renderTracksDetailed(tracks) {
                         ${track.processed ? '❌' : '✅'}
                     </button>
                     <button class="btn btn-danger btn-small" onclick="window.deleteTrack && window.deleteTrack(${track.id})" title="Удалить">🗑️</button>
-                    <button class="btn btn-small" onclick="window.openChangeIdModal && window.openChangeIdModal(${track.id})" title="Изменить ID">#️⃣</button>
                 </div>
             </div>
-        </div>
-    `}).join('');
-
-    setupDragHandlers();
-}
-
-// Обработчики для изображений
-function handleImageLoad(img) {
-    const placeholder = img.nextElementSibling;
-    if (placeholder && placeholder.classList.contains('track-cover-placeholder')) {
-        placeholder.style.display = 'none';
+        `}).join('');
     }
-    img.style.display = 'block';
-}
 
-function handleImageError(img) {
-    img.style.display = 'none';
-    const placeholder = img.nextElementSibling;
-    if (placeholder && placeholder.classList.contains('track-cover-placeholder')) {
-        placeholder.style.display = 'flex';
+    // Рендер треков в подробном виде
+    function renderTracksDetailed(tracks) {
+        const container = document.getElementById('tracksList');
+        if (!container) return;
+
+        if (tracks.length === 0) {
+            const noResultsMessage = trackViewSearchQuery || trackViewFilterByStatus !== 'all'
+                ? '<div class="empty-state"><div class="icon">🔍</div><h3>Треки не найдены</h3><p>Попробуйте изменить поисковый запрос или фильтр</p></div>'
+                : '<div class="empty-state"><div class="icon">🎵</div><h3>Нет загруженных треков</h3><p>Нажмите "Загрузить треки" чтобы добавить музыку</p></div>';
+
+            container.innerHTML = noResultsMessage;
+            return;
+        }
+
+        container.innerHTML = tracks.map(track => {
+            const isPlaying = trackViewCurrentPlayingTrackId === track.id && trackViewIsGlobalPlaying;
+            const photoUrl = generatePhotoUrlWithHash(track.id, track.image_path);
+
+            return `
+            <div class="track-item detailed draggable ${track.processed ? 'processed' : ''} ${isPlaying ? 'playing' : ''}" draggable="true" data-track-id="${track.id}">
+                <div class="track-image-container">
+                    ${track.image_path && photoUrl ?
+                    `<img src="${photoUrl}" 
+                         data-track-id="${track.id}" 
+                         alt="${escapeHtml(track.artist)}"
+                         onclick="window.openPhotoEditor && window.openPhotoEditor(${track.id})"
+                         onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48dGV4dCB4PSI1MCIgeT0iNTAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPs6PzqPOlc6dzp/Oo86ZPC90ZXh0Pjwvc3ZnPg==';"
+                         onload="this.style.opacity='1'; this.style.display='block';"
+                         style="opacity: 1; transition: opacity 0.3s ease; display: block;">` :
+                    `<div class="track-cover-placeholder" onclick="window.openPhotoEditor && window.openPhotoEditor(${track.id})" title="Добавить фото">🎵</div>`
+                }
+                </div>
+                
+                <div class="track-main-content">
+                    <div class="track-info-header">
+                        <div class="track-artist" 
+                             onclick="startInlineEdit(this, 'artist', ${track.id})"
+                             title="Кликните для редактирования">
+                            ${escapeHtml(track.artist)}
+                            ${track.processed ? '<span class="track-processed-badge">✅</span>' : ''}
+                            ${isPlaying ? '<span class="playing-indicator">🔊</span>' : ''}
+                        </div>
+                        <div class="track-title" 
+                             onclick="startInlineEdit(this, 'title', ${track.id})"
+                             title="Кликните для редактирования">
+                            ${escapeHtml(track.title)}
+                        </div>
+                    </div>
+                    
+                    <div class="waveform-btn-container">
+                        <button class="waveform-btn" onclick="window.openAudioEditor && window.openAudioEditor(${track.id})" title="Открыть аудио редактор">
+                            ${track.duration ? `🎵 ${formatTime(track.segment_start || 0)} - ${formatTime((track.segment_start || 0) + (track.segment_duration || 30))}` : 'Загрузка...'}
+                        </button>
+                    </div>
+                    
+                    <div class="track-actions detailed">
+                        <button class="btn btn-secondary btn-small play-btn" data-track-id="${track.id}" 
+                                onclick="playTrackSegmentFromManager(${track.id})" title="${isPlaying ? 'Остановить воспроизведение' : 'Воспроизвести отрывок'}">
+                            ${isPlaying ? '⏹️' : '▶️'}
+                        </button>
+                        <button class="btn btn-secondary btn-small" onclick="window.openAudioEditor && window.openAudioEditor(${track.id})" title="Аудио редактор">🎚️</button>
+                        <button class="btn btn-secondary btn-small" onclick="window.editTrack && window.editTrack(${track.id})" title="Редактировать метаданные">✏️</button>
+                        <button class="btn btn-success btn-small" onclick="toggleProcessedFromManager(${track.id})" 
+                                title="${track.processed ? 'Отметить как необработанный' : 'Отметить как обработанный'}">
+                            ${track.processed ? '❌' : '✅'}
+                        </button>
+                        <button class="btn btn-danger btn-small" onclick="window.deleteTrack && window.deleteTrack(${track.id})" title="Удалить">🗑️</button>
+                        <button class="btn btn-small" onclick="window.openChangeIdModal && window.openChangeIdModal(${track.id})" title="Изменить ID">#️⃣</button>
+                    </div>
+                </div>
+            </div>
+        `}).join('');
     }
-}
 
-// Инлайн-редактирование исполнителя и названия
-function startInlineEdit(element, field, trackId) {
-    let currentText = element.textContent;
-    currentText = currentText.replace(/[✅🔊]/g, '').trim();
+    // Рендер треков презентации
+    function renderFilteredPresentationTracks(tracks) {
+        const container = document.getElementById('presentationTracksList');
+        if (!container) return;
 
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = currentText;
-    input.className = field === 'artist' ? 'track-artist-input' : 'track-title-input';
+        if (tracks.length === 0) {
+            const noResultsMessage = trackViewPresentationFilterByStatus !== 'all'
+                ? `<div class="empty-state">
+                    <div class="icon">🔍</div>
+                    <h3>${trackViewPresentationFilterByStatus === 'processed' ? 'Нет обработанных треков' : 'Нет необработанных треков'}</h3>
+                    <p>Попробуйте изменить фильтр</p>
+                   </div>`
+                : '<div class="empty-state"><div class="icon">🎵</div><h3>Нет треков в списке</h3><p>Добавьте треки в список презентации</p></div>';
 
-    element.innerHTML = '';
-    element.appendChild(input);
-    element.classList.add('editable');
+            container.innerHTML = noResultsMessage;
+            return;
+        }
 
-    input.focus();
-    input.select();
+        container.innerHTML = tracks.map(track => {
+            const isPlaying = trackViewCurrentPlayingTrackId === track.id && trackViewIsGlobalPlaying;
+            const photoUrl = generatePhotoUrlWithHash(track.id, track.image_path);
 
-    function saveEdit() {
-        const newValue = input.value.trim();
-        if (newValue && newValue !== currentText) {
-            updateTrackField(trackId, field, newValue, element);
+            return `
+            <div class="track-item ${track.processed ? 'processed' : ''} ${isPlaying ? 'playing' : ''}" data-track-id="${track.id}">
+                <div class="col-id">${track.id}</div>
+                <div class="col-artist">
+                    ${track.image_path && photoUrl ?
+                    `<img src="${photoUrl}" 
+                          alt="${escapeHtml(track.artist)}"
+                          class="track-cover"
+                          onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48dGV4dCB4PSI1MCIgeT0iNTAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPs6PzqPOlc6dzp/Oo86ZPC90ZXh0Pjwvc3ZnPg==';"
+                          onload="this.style.opacity='1';">` :
+                    `<div class="track-cover empty">🎵</div>`
+                }
+                    <span>${escapeHtml(track.artist)}</span>
+                    ${track.processed ? '<span class="track-processed-badge">✅</span>' : ''}
+                </div>
+                <div class="col-title">${escapeHtml(track.title)}</div>
+                <div class="col-actions">
+                    <button class="btn btn-secondary btn-small" onclick="playTrackSegmentFromManager(${track.id})">
+                        ${isPlaying ? '⏹️' : '▶️'}
+                    </button>
+                    <button class="btn btn-secondary btn-small" onclick="window.openAudioEditor && window.openAudioEditor(${track.id})">🎚️</button>
+                    <button class="btn btn-secondary btn-small" onclick="window.editTrack && window.editTrack(${track.id})">✏️</button>
+                    <button class="btn btn-success btn-small" onclick="toggleProcessedFromManager(${track.id})">
+                        ${track.processed ? '❌' : '✅'}
+                    </button>
+                </div>
+            </div>
+            `;
+        }).join('');
+    }
+
+    // Генерация URL фото с хэшем
+    function generatePhotoUrlWithHash(trackId, imagePath) {
+        if (!imagePath) return null;
+
+        const hash = getPhotoHash(trackId);
+        const baseUrl = `/api/tracks/${trackId}/artist-photo`;
+
+        if (hash) {
+            return `${baseUrl}?h=${hash}&t=${Date.now()}`;
         } else {
-            cancelEdit();
+            return `${baseUrl}?t=${Date.now()}`;
         }
     }
 
-    function cancelEdit() {
-        const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
-        if (track) {
-            let text = escapeHtml(track[field]);
-            if (field === 'artist' && track.processed) {
-                text += '<span class="track-processed-badge">✅</span>';
-            }
-            if (currentPlayingTrackId === trackId && isGlobalPlaying) {
-                text += '<span class="playing-indicator">🔊</span>';
-            }
-            element.innerHTML = text;
-        } else {
-            element.textContent = currentText;
+    // Обработчики для изображений
+    function handleImageLoad(img) {
+        img.style.opacity = '1';
+        const placeholder = img.nextElementSibling;
+        if (placeholder && placeholder.classList.contains('track-cover-placeholder')) {
+            placeholder.style.display = 'none';
         }
-        element.classList.remove('editable');
     }
 
-    input.addEventListener('blur', saveEdit);
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            saveEdit();
-        } else if (e.key === 'Escape') {
-            cancelEdit();
+    function handleImageError(img) {
+        img.style.display = 'none';
+        const placeholder = img.nextElementSibling;
+        if (placeholder && placeholder.classList.contains('track-cover-placeholder')) {
+            placeholder.style.display = 'flex';
         }
-    });
-}
-
-// Обновление поля трека
-async function updateTrackField(trackId, field, newValue, element) {
-    try {
-        const updateData = {};
-        updateData[field] = newValue;
-
-        const response = await fetch(`${window.API_BASE}/tracks/${trackId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updateData)
-        });
-
-        if (!response.ok) {
-            throw new Error('Ошибка обновления');
-        }
-
-        const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
-        if (track) {
-            track[field] = newValue;
-            let text = escapeHtml(newValue);
-            if (field === 'artist' && track.processed) {
-                text += '<span class="track-processed-badge">✅</span>';
-            }
-            if (currentPlayingTrackId === trackId && isGlobalPlaying) {
-                text += '<span class="playing-indicator">🔊</span>';
-            }
-            element.innerHTML = text;
-        }
-
-        element.classList.remove('editable');
-
-        showNotification('✅ Изменения сохранены', 'success');
-    } catch (error) {
-        console.error('Ошибка сохранения:', error);
-        showNotification('❌ Ошибка сохранения', 'error');
-        const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
-        if (track) {
-            element.textContent = track[field];
-        }
-        element.classList.remove('editable');
     }
-}
 
-// Воспроизведение отрезка трека (исправленная версия)
-async function playTrackSegmentFromManager(trackId) {
-    try {
-        if (currentPlayingTrackId === trackId && isGlobalPlaying) {
+    // ==================== ВОСПРОИЗВЕДЕНИЕ АУДИО ====================
+
+    // Воспроизведение отрезка трека
+    async function playTrackSegmentFromManager(trackId) {
+        try {
+            if (trackViewCurrentPlayingTrackId === trackId && trackViewIsGlobalPlaying) {
+                stopGlobalPlayback();
+                return;
+            }
+
             stopGlobalPlayback();
-            return;
+
+            const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
+            if (!track) {
+                showNotification('Трек не найден', 'error');
+                return;
+            }
+
+            trackViewCurrentPlayingTrackId = trackId;
+            trackViewIsGlobalPlaying = true;
+
+            updatePlayButtons();
+
+            showNotification(`▶️ Воспроизведение: ${track.artist} - ${track.title}`, 'info');
+
+            const segmentUrl = `/api/tracks/${trackId}/segment-file?start_time=${track.segment_start || 0}&duration=${track.segment_duration || 30}&nocache=${Date.now()}`;
+
+            if (!trackViewGlobalAudioPlayer) {
+                setupGlobalPlayer();
+            }
+
+            if (trackViewGlobalAudioPlayer) {
+                trackViewGlobalAudioPlayer.pause();
+                trackViewGlobalAudioPlayer.currentTime = 0;
+            }
+
+            trackViewGlobalAudioPlayer.src = segmentUrl;
+            trackViewGlobalAudioPlayer.currentTime = 0;
+
+            const playPromise = trackViewGlobalAudioPlayer.play();
+
+            if (playPromise !== undefined) {
+                playPromise
+                    .then(() => {
+                        updateNowPlayingInfo(track);
+                    })
+                    .catch(error => {
+                        console.error('❌ Ошибка воспроизведения:', error);
+                        showNotification('Ошибка воспроизведения трека', 'error');
+                        stopGlobalPlayback();
+                    });
+            }
+
+        } catch (error) {
+            console.error('❌ Общая ошибка воспроизведения:', error);
+            showNotification('Ошибка воспроизведения трека', 'error');
+            stopGlobalPlayback();
+        }
+    }
+
+    // Остановка глобального воспроизведения
+    function stopGlobalPlayback() {
+        if (trackViewGlobalAudioPlayer) {
+            try {
+                trackViewGlobalAudioPlayer.pause();
+                trackViewGlobalAudioPlayer.currentTime = 0;
+                trackViewGlobalAudioPlayer.src = '';
+            } catch (error) {
+                console.warn('Ошибка при остановке воспроизведения:', error);
+            }
         }
 
-        stopGlobalPlayback();
-
-        const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
-        if (!track) {
-            showNotification('Трек не найден', 'error');
-            return;
-        }
-
-        currentPlayingTrackId = trackId;
-        isGlobalPlaying = true;
+        trackViewCurrentPlayingTrackId = null;
+        trackViewIsGlobalPlaying = false;
 
         updatePlayButtons();
-
-        showNotification(`▶️ Воспроизведение: ${track.artist} - ${track.title}`, 'info');
-
-        const segmentUrl = `${window.API_BASE}/tracks/${trackId}/segment-file?start_time=${track.segment_start || 0}&duration=${track.segment_duration || 30}&nocache=${Date.now()}`;
-
-        if (!globalAudioPlayer) {
-            setupGlobalPlayer();
-        }
-
-        if (globalAudioPlayer) {
-            globalAudioPlayer.pause();
-            globalAudioPlayer.currentTime = 0;
-        }
-
-        globalAudioPlayer.src = segmentUrl;
-        globalAudioPlayer.currentTime = 0;
-
-        const playPromise = globalAudioPlayer.play();
-
-        if (playPromise !== undefined) {
-            playPromise
-                .then(() => {
-                    console.log('✅ Воспроизведение начато успешно');
-                    updateNowPlayingInfo(track);
-                })
-                .catch(error => {
-                    console.error('❌ Ошибка воспроизведения:', error);
-
-                    if (error.name === 'NotSupportedError') {
-                        showNotification('Формат аудио не поддерживается браузером', 'error');
-                    } else if (error.name === 'NotAllowedError') {
-                        showNotification('Автовоспроизведение заблокировано. Нажмите на кнопку воспроизведения еще раз.', 'warning');
-                    } else {
-                        showNotification('Ошибка воспроизведения трека: ' + error.message, 'error');
-                    }
-
-                    stopGlobalPlayback();
-                });
-        }
-
-    } catch (error) {
-        console.error('❌ Общая ошибка воспроизведения:', error);
-        showNotification('Ошибка воспроизведения трека', 'error');
-        stopGlobalPlayback();
-    }
-}
-
-// Остановка глобального воспроизведения
-function stopGlobalPlayback() {
-    if (globalAudioPlayer) {
-        try {
-            globalAudioPlayer.pause();
-            globalAudioPlayer.currentTime = 0;
-            globalAudioPlayer.src = '';
-        } catch (error) {
-            console.warn('Ошибка при остановке воспроизведения:', error);
-        }
+        hideNowPlayingInfo();
     }
 
-    currentPlayingTrackId = null;
-    isGlobalPlaying = false;
+    // Обновление кнопок воспроизведения
+    function updatePlayButtons() {
+        document.querySelectorAll('.play-btn').forEach(btn => {
+            const trackId = parseInt(btn.dataset.trackId);
+            if (trackViewCurrentPlayingTrackId === trackId && trackViewIsGlobalPlaying) {
+                btn.innerHTML = '⏹️';
+                btn.title = 'Остановить воспроизведение';
+            } else {
+                btn.innerHTML = '▶️';
+                btn.title = 'Воспроизвести отрывок';
+            }
+        });
 
-    updatePlayButtons();
-    hideNowPlayingInfo();
-}
+        document.querySelectorAll('.play-btn-presentation').forEach(btn => {
+            const trackId = parseInt(btn.dataset.trackId);
+            if (trackViewCurrentPlayingTrackId === trackId && trackViewIsGlobalPlaying) {
+                btn.innerHTML = '⏹️';
+                btn.title = 'Остановить воспроизведение';
+            } else {
+                btn.innerHTML = '▶️';
+                btn.title = 'Воспроизвести отрывок';
+            }
+        });
 
-// Обновление кнопок воспроизведения
-function updatePlayButtons() {
-    document.querySelectorAll('.play-btn').forEach(btn => {
-        const trackId = parseInt(btn.dataset.trackId);
-        if (currentPlayingTrackId === trackId && isGlobalPlaying) {
-            btn.innerHTML = '⏹️';
-            btn.title = 'Остановить воспроизведение';
-        } else {
-            btn.innerHTML = '▶️';
-            btn.title = 'Воспроизвести отрывок';
-        }
-    });
-
-    document.querySelectorAll('.play-btn-presentation').forEach(btn => {
-        const trackId = parseInt(btn.dataset.trackId);
-        if (currentPlayingTrackId === trackId && isGlobalPlaying) {
-            btn.innerHTML = '⏹️';
-            btn.title = 'Остановить воспроизведение';
-        } else {
-            btn.innerHTML = '▶️';
-            btn.title = 'Воспроизвести отрывок';
-        }
-    });
-
-    document.querySelectorAll('.track-item').forEach(item => {
-        const trackId = parseInt(item.dataset.trackId);
-        if (currentPlayingTrackId === trackId && isGlobalPlaying) {
-            item.classList.add('playing');
-        } else {
-            item.classList.remove('playing');
-        }
-    });
-
-    const presentationContainer = document.getElementById('presentationTracksList');
-    if (presentationContainer) {
-        presentationContainer.querySelectorAll('.track-item').forEach(item => {
+        document.querySelectorAll('.track-item').forEach(item => {
             const trackId = parseInt(item.dataset.trackId);
-            if (currentPlayingTrackId === trackId && isGlobalPlaying) {
+            if (trackViewCurrentPlayingTrackId === trackId && trackViewIsGlobalPlaying) {
                 item.classList.add('playing');
             } else {
                 item.classList.remove('playing');
             }
         });
+
+        const presentationContainer = document.getElementById('presentationTracksList');
+        if (presentationContainer) {
+            presentationContainer.querySelectorAll('.track-item').forEach(item => {
+                const trackId = parseInt(item.dataset.trackId);
+                if (trackViewCurrentPlayingTrackId === trackId && trackViewIsGlobalPlaying) {
+                    item.classList.add('playing');
+                } else {
+                    item.classList.remove('playing');
+                }
+            });
+        }
     }
-}
 
-// Обновление информации о текущем треке
-function updateNowPlayingInfo(track) {
-    const nowPlayingInfo = document.getElementById('nowPlayingInfo');
-    if (!nowPlayingInfo) return;
+    // Обновление информации о текущем треке
+    function updateNowPlayingInfo(track) {
+        const nowPlayingInfo = document.getElementById('nowPlayingInfo');
+        if (!nowPlayingInfo) return;
 
-    nowPlayingInfo.innerHTML = `
-        <div class="now-playing">
-            <span class="now-playing-icon">🔊</span>
-            <span class="now-playing-text">
-                Сейчас играет: <strong>${escapeHtml(track.artist)} - ${escapeHtml(track.title)}</strong>
-            </span>
-            <button class="btn btn-small btn-secondary" onclick="stopGlobalPlayback()">⏹️ Остановить</button>
-        </div>
-    `;
-    nowPlayingInfo.style.display = 'block';
-}
-
-// Скрытие информации о текущем треке
-function hideNowPlayingInfo() {
-    const nowPlayingInfo = document.getElementById('nowPlayingInfo');
-    if (nowPlayingInfo) {
-        nowPlayingInfo.style.display = 'none';
+        nowPlayingInfo.innerHTML = `
+            <div class="now-playing">
+                <span class="now-playing-icon">🔊</span>
+                <span class="now-playing-text">
+                    Сейчас играет: <strong>${escapeHtml(track.artist)} - ${escapeHtml(track.title)}</strong>
+                </span>
+                <button class="btn btn-small btn-secondary" onclick="stopGlobalPlayback()">⏹️ Остановить</button>
+            </div>
+        `;
+        nowPlayingInfo.style.display = 'block';
     }
-}
 
-// Функция для переключения статуса обработки
-async function toggleProcessedStatus(trackId, forceValue = null) {
-    const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
-    if (!track) return;
+    // Скрытие информации о текущем треке
+    function hideNowPlayingInfo() {
+        const nowPlayingInfo = document.getElementById('nowPlayingInfo');
+        if (nowPlayingInfo) {
+            nowPlayingInfo.style.display = 'none';
+        }
+    }
 
-    const newStatus = forceValue !== null ? forceValue : !track.processed;
+    // ==================== ИНЛАЙН-РЕДАКТИРОВАНИЕ ====================
 
-    try {
-        const response = await fetch(`${window.API_BASE}/tracks/${trackId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ processed: newStatus })
-        });
+    // Инлайн-редактирование
+    function startInlineEdit(element, field, trackId) {
+        let currentText = element.textContent;
+        currentText = currentText.replace(/[✅🔊]/g, '').trim();
 
-        if (!response.ok) {
-            throw new Error('Ошибка обновления статуса');
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = currentText;
+        input.className = field === 'artist' ? 'track-artist-input' : 'track-title-input';
+
+        element.innerHTML = '';
+        element.appendChild(input);
+        element.classList.add('editable');
+
+        input.focus();
+        input.select();
+
+        function saveEdit() {
+            const newValue = input.value.trim();
+            if (newValue && newValue !== currentText) {
+                updateTrackField(trackId, field, newValue, element);
+            } else {
+                cancelEdit();
+            }
         }
 
-        track.processed = newStatus;
+        function cancelEdit() {
+            const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
+            if (track) {
+                let text = escapeHtml(track[field]);
+                if (field === 'artist' && track.processed) {
+                    text += '<span class="track-processed-badge">✅</span>';
+                }
+                if (trackViewCurrentPlayingTrackId === trackId && trackViewIsGlobalPlaying) {
+                    text += '<span class="playing-indicator">🔊</span>';
+                }
+                element.innerHTML = text;
+            } else {
+                element.textContent = currentText;
+            }
+            element.classList.remove('editable');
+        }
 
+        input.addEventListener('blur', saveEdit);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                saveEdit();
+            } else if (e.key === 'Escape') {
+                cancelEdit();
+            }
+        });
+    }
+
+    // Обновление поля трека
+    async function updateTrackField(trackId, field, newValue, element) {
+        try {
+            const updateData = {};
+            updateData[field] = newValue;
+
+            const response = await fetch(`/api/tracks/${trackId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updateData)
+            });
+
+            if (!response.ok) {
+                throw new Error('Ошибка обновления');
+            }
+
+            const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
+            if (track) {
+                track[field] = newValue;
+                let text = escapeHtml(newValue);
+                if (field === 'artist' && track.processed) {
+                    text += '<span class="track-processed-badge">✅</span>';
+                }
+                if (trackViewCurrentPlayingTrackId === trackId && trackViewIsGlobalPlaying) {
+                    text += '<span class="playing-indicator">🔊</span>';
+                }
+                element.innerHTML = text;
+            }
+
+            element.classList.remove('editable');
+
+            showNotification('✅ Изменения сохранены', 'success');
+        } catch (error) {
+            console.error('Ошибка сохранения:', error);
+            showNotification('❌ Ошибка сохранения', 'error');
+            const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
+            if (track) {
+                element.textContent = track[field];
+            }
+            element.classList.remove('editable');
+        }
+    }
+
+    // ==================== УПРАВЛЕНИЕ СТАТУСАМИ ====================
+
+    // Функция для переключения статуса обработки
+    async function toggleProcessedStatus(trackId, forceValue = null) {
+        const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
+        if (!track) return;
+
+        const newStatus = forceValue !== null ? forceValue : !track.processed;
+
+        try {
+            const response = await fetch(`/api/tracks/${trackId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ processed: newStatus })
+            });
+
+            if (!response.ok) {
+                throw new Error('Ошибка обновления статуса');
+            }
+
+            track.processed = newStatus;
+
+            renderFilteredTracks();
+            updateGlobalStats();
+
+            return true;
+        } catch (error) {
+            console.error('Ошибка обновления статуса:', error);
+            throw error;
+        }
+    }
+
+    // Локальная функция для переключения статуса
+    async function toggleProcessedFromManager(trackId) {
+        try {
+            await toggleProcessedStatus(trackId);
+            const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
+            if (track) {
+                showNotification(`Трек помечен как ${track.processed ? 'обработанный' : 'необработанный'}`, 'info');
+            }
+        } catch (error) {
+            showNotification('Ошибка обновления статуса', 'error');
+        }
+    }
+
+    // ==================== СТАТИСТИКА ====================
+
+    // Обновление статистики
+    function updateGlobalStats() {
+        const statsElement = document.getElementById('mediaStats');
+        if (!statsElement) return;
+
+        try {
+            const total = window.currentTracks ? window.currentTracks.length : 0;
+            const processed = window.currentTracks ? window.currentTracks.filter(t => t.processed).length : 0;
+            const unprocessed = total - processed;
+            const withPhotos = window.currentTracks ? window.currentTracks.filter(t => t.image_path).length : 0;
+            const percentage = total > 0 ? Math.round((processed / total) * 100) : 0;
+
+            statsElement.innerHTML = `
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon">📊</div>
+                        <div class="stat-info">
+                            <span class="stat-label">Всего треков</span>
+                            <span class="stat-value">${total}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-info">
+                            <span class="stat-label">Обработано</span>
+                            <span class="stat-value">${processed}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">⏳</div>
+                        <div class="stat-info">
+                            <span class="stat-label">Не обработано</span>
+                            <span class="stat-value">${unprocessed}</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">📈</div>
+                        <div class="stat-info">
+                            <span class="stat-label">Прогресс</span>
+                            <span class="stat-value">${percentage}%</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon">🖼️</div>
+                        <div class="stat-info">
+                            <span class="stat-label">С фото</span>
+                            <span class="stat-value">${withPhotos}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+        } catch (error) {
+            console.error('Ошибка обновления статистики:', error);
+        }
+    }
+
+    // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+
+    // Функция для обновления отображения
+    function refreshTrackDisplay() {
         renderFilteredTracks();
-        if (window.presentationTrackList) {
+    }
+
+    // Обновление отображения треков презентации
+    function refreshPresentationTrackDisplay() {
+        if (trackViewPresentationTrackList) {
             applyPresentationFilters();
         }
+    }
 
-        safeUpdateGlobalStats();
-        safeUpdatePresentationStats();
+    function escapeHtml(unsafe) {
+        if (!unsafe) return '';
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
 
-        if (typeof window.refreshPresentationData === 'function') {
-            window.refreshPresentationData();
+    function formatTime(seconds) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    function showNotification(message, type = 'info') {
+        if (typeof window.showNotification === 'function') {
+            window.showNotification(message, type);
+        } else {
+            console.log(`${type}: ${message}`);
         }
-
-        return true;
-    } catch (error) {
-        console.error('Ошибка обновления статуса:', error);
-        throw error;
     }
-}
 
-// Локальная функция для переключения статуса
-async function toggleProcessedFromManager(trackId) {
-    try {
-        await toggleProcessedStatus(trackId);
-        const track = window.currentTracks && window.currentTracks.find(t => t.id === trackId);
-        if (track) {
-            showNotification(`Трек помечен как ${track.processed ? 'обработанный' : 'необработанный'}`, 'info');
-        }
-    } catch (error) {
-        showNotification('Ошибка обновления статуса', 'error');
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
     }
-}
 
-// Функция для обновления отображения при изменении данных
-function refreshTrackDisplay() {
-    renderFilteredTracks();
-}
+    // ==================== ГЛОБАЛЬНЫЕ ФУНКЦИИ ====================
 
-// Переопределяем глобальную функцию renderTracks
-if (!window.renderTracksOriginal) {
-    window.renderTracksOriginal = window.renderTracks;
-}
-
-window.renderTracks = function (tracks) {
-    window.currentTracks = tracks;
-    renderFilteredTracks();
-
-    // Обновляем статистику презентации
-    safeUpdatePresentationStats();
-
-    if (typeof window.updateTracksCount === 'function') {
-        window.updateTracksCount();
-    }
-};
-
-// Обновление отображения треков презентации
-function refreshPresentationTrackDisplay() {
-    if (window.presentationTrackList) {
+    // Функция для установки списка презентации
+    function setPresentationTrackList(tracks) {
+        trackViewPresentationTrackList = Array.isArray(tracks) ? JSON.parse(JSON.stringify(tracks)) : [];
+        console.log(`📋 Установлен список презентации: ${trackViewPresentationTrackList.length} треков`);
         applyPresentationFilters();
     }
-    safeUpdatePresentationStats();
-}
 
-// Вспомогательные функции
-function escapeHtml(unsafe) {
-    if (!unsafe) return '';
-    return unsafe
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "<")
-        .replace(/>/g, ">")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
+    // Экспорт функций в глобальную область видимости
+    window.trackViewManager = {
+        // Основные функции
+        toggleViewMode: toggleViewMode,
+        startInlineEdit: startInlineEdit,
+        refreshTrackDisplay: refreshTrackDisplay,
+        updateViewToggleText: updateViewToggleText,
+        handleImageLoad: handleImageLoad,
+        handleImageError: handleImageError,
+        playTrackSegment: playTrackSegmentFromManager,
+        stopGlobalPlayback: stopGlobalPlayback,
+        getFilteredTracks: getFilteredTracks,
+        updateGlobalStats: updateGlobalStats,
+        initTrackViewManager: initTrackViewManager,
+        renderFilteredTracks: renderFilteredTracks,
+        toggleProcessedStatus: toggleProcessedStatus,
+        updatePlayButtons: updatePlayButtons,
+        escapeHtml: escapeHtml,
+        formatTime: formatTime,
+        applyPresentationFilters: applyPresentationFilters,
+        refreshPresentationTrackDisplay: refreshPresentationTrackDisplay,
 
-function formatTime(seconds) {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-}
+        // Система хэшей
+        initPhotoHashSystem: initPhotoHashSystem,
+        updateAllPhotoHashes: updateAllPhotoHashes,
+        applyPhotoHashesToExistingImages: applyPhotoHashesToExistingImages,
+        getPhotoHash: getPhotoHash,
+        savePhotoHash: savePhotoHash,
 
-function showNotification(message, type = 'info') {
-    if (typeof window.showNotification === 'function') {
-        window.showNotification(message, type);
-    } else {
-        console.log(`${type}: ${message}`);
-    }
-}
-
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
+        // Функция для презентации
+        setPresentationTrackList: setPresentationTrackList,
     };
+
+    // Глобальные функции для совместимости
+    window.toggleViewMode = toggleViewMode;
+    window.startInlineEdit = startInlineEdit;
+    window.playTrackSegment = playTrackSegmentFromManager;
+    window.stopGlobalPlayback = stopGlobalPlayback;
+    window.updateGlobalStats = updateGlobalStats;
+    window.initTrackViewManager = initTrackViewManager;
+    window.setPresentationTrackList = setPresentationTrackList;
+
+    // Инициализация при загрузке
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () {
+            setTimeout(() => {
+                initTrackViewManager();
+            }, 1500);
+        });
+    } else {
+        setTimeout(() => {
+            initTrackViewManager();
+        }, 1500);
+    }
+
+    console.log('✅ Track View Manager загружен (без таймера)');
 }
-
-// Дополнительные функции для совместимости
-function setupDragHandlers() {
-    console.log('Drag handlers setup placeholder');
-}
-
-function enhanceTrackListWithIdEdit() {
-    console.log('Track list ID edit enhancement placeholder');
-}
-
-// Экспорт функций в глобальную область видимости
-window.trackViewManager = {
-    toggleViewMode: toggleViewMode,
-    startInlineEdit: startInlineEdit,
-    refreshTrackDisplay: refreshTrackDisplay,
-    renderTracksCompact: renderTracksCompact,
-    renderTracksDetailed: renderTracksDetailed,
-    updateViewToggleText: updateViewToggleText,
-    handleImageLoad: handleImageLoad,
-    handleImageError: handleImageError,
-    playTrackSegment: playTrackSegmentFromManager,
-    stopGlobalPlayback: stopGlobalPlayback,
-    getFilteredTracks: getFilteredTracks,
-    updateGlobalStats: safeUpdateGlobalStats,
-    updatePresentationStats: safeUpdatePresentationStats,
-    initTrackViewManager: initTrackViewManager,
-    renderFilteredTracks: renderFilteredTracks,
-    toggleProcessedStatus: toggleProcessedStatus,
-    updatePlayButtons: updatePlayButtons,
-    escapeHtml: escapeHtml,
-    formatTime: formatTime,
-    applyPresentationFilters: applyPresentationFilters,
-    refreshPresentationTrackDisplay: refreshPresentationTrackDisplay
-};
-
-// Глобальные функции для совместимости
-window.toggleViewMode = toggleViewMode;
-window.startInlineEdit = startInlineEdit;
-window.playTrackSegment = playTrackSegmentFromManager;
-window.stopGlobalPlayback = stopGlobalPlayback;
-window.updateGlobalStats = safeUpdateGlobalStats;
-window.updatePresentationStats = safeUpdatePresentationStats;
-
-// Инициализация при загрузке
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function () {
-        if (!window.currentViewMode) window.currentViewMode = 'compact';
-        if (!window.currentTracks) window.currentTracks = [];
-        if (!window.presentationTrackList) window.presentationTrackList = [];
-        if (!window.API_BASE) window.API_BASE = '/api';
-
-        setTimeout(initTrackViewManager, 500);
-    });
-} else {
-    if (!window.currentViewMode) window.currentViewMode = 'compact';
-    if (!window.currentTracks) window.currentTracks = [];
-    if (!window.presentationTrackList) window.presentationTrackList = [];
-    if (!window.API_BASE) window.API_BASE = '/api';
-
-    setTimeout(initTrackViewManager, 500);
-}
-
-console.log('🎵 Track View Manager загружен');

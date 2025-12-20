@@ -1,5 +1,4 @@
-﻿// photo_editor.js — Профессиональный редактор фото (ИСПРАВЛЕННЫЙ)
-
+﻿// photo_editor.js — ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ
 // === Глобальные переменные ===
 let currentPhotoEditorTrackId = null;
 let currentTool = 'select';
@@ -27,6 +26,9 @@ let toolLock = false;
 let editHistory = [];
 let currentHistoryIndex = -1;
 let MAX_HISTORY = 20;
+let originalImageState = null;
+let lastUploadedPhoto = null; // Сохраняем последнее загруженное фото
+let previousPhotoBeforeUpload = null; // Сохраняем фото до загрузки нового
 
 // === Основные функции редактора ===
 function openPhotoEditor(trackId) {
@@ -49,7 +51,6 @@ function openPhotoEditor(trackId) {
     imgElement.onload = function () {
         const imgWidth = imgElement.naturalWidth;
         const imgHeight = imgElement.naturalHeight;
-
         originalImageSize.width = imgWidth;
         originalImageSize.height = imgHeight;
 
@@ -60,7 +61,6 @@ function openPhotoEditor(trackId) {
         const scaleX = maxWidth / imgWidth;
         const scaleY = maxHeight / imgHeight;
         zoomLevel = Math.min(scaleX, scaleY, 1);
-
         updateImageTransform();
     };
 
@@ -81,12 +81,204 @@ function resetEditorState() {
     toolLock = false;
     editHistory = [];
     currentHistoryIndex = -1;
+    originalImageState = null;
 }
 
 function closePhotoEditor() {
     document.getElementById('photoEditorModal').style.display = 'none';
     currentPhotoEditorTrackId = null;
     resetEditorState();
+}
+
+// === Функции для загрузки фото ===
+function uploadCustomPhotoForEditor() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        try {
+            // Сохраняем текущее фото перед загрузкой нового
+            const imgElement = document.getElementById('photoEditorImage');
+            previousPhotoBeforeUpload = imgElement ? imgElement.src : null;
+
+            const formData = new FormData();
+            formData.append('photo', file);
+
+            const response = await fetch(`${API_BASE}/tracks/${currentPhotoEditorTrackId}/upload-artist-photo`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                showPhotoNotification('✅ Фото успешно загружено', 'success');
+
+                // Получаем обновленное изображение с сервера
+                const imgElement = document.getElementById('photoEditorImage');
+                const removerImgElement = document.getElementById('backgroundRemoverImage');
+
+                if (imgElement) {
+                    // Обновляем изображение, добавляя timestamp для предотвращения кэширования
+                    const newUrl = `${API_BASE}/tracks/${currentPhotoEditorTrackId}/artist-photo?t=${Date.now()}`;
+                    imgElement.src = newUrl;
+                    currentImageData = newUrl;
+                    originalImageState = newUrl;
+                    lastUploadedPhoto = newUrl; // Сохраняем последнее загруженное фото
+                }
+                if (removerImgElement) {
+                    const newUrl = `${API_BASE}/tracks/${currentPhotoEditorTrackId}/artist-photo?t=${Date.now()}`;
+                    removerImgElement.src = newUrl;
+                }
+
+                // Сбрасываем состояние редактора
+                resetEditorState();
+                updateImageTransform();
+
+            } else {
+                showPhotoNotification('❌ Ошибка загрузки: ' + result.error, 'error');
+            }
+        } catch (error) {
+            console.error('❌ Ошибка загрузки фото:', error);
+            showPhotoNotification('❌ Ошибка загрузки фото', 'error');
+        }
+    };
+    input.click();
+}
+
+// ФУНКЦИЯ ДЛЯ ОТМЕНЫ ЗАГРУЗКИ ФОТО
+function cancelPhotoUpload() {
+    if (!previousPhotoBeforeUpload) {
+        showPhotoNotification('❌ Нет загруженного фото для отмены', 'error');
+        return;
+    }
+
+    if (!confirm('Отменить загрузку нового фото и вернуть предыдущее?')) {
+        return;
+    }
+
+    try {
+        const imgElement = document.getElementById('photoEditorImage');
+        const removerImgElement = document.getElementById('backgroundRemoverImage');
+
+        if (imgElement) {
+            imgElement.src = previousPhotoBeforeUpload;
+            currentImageData = previousPhotoBeforeUpload;
+            originalImageState = previousPhotoBeforeUpload;
+        }
+        if (removerImgElement) {
+            removerImgElement.src = previousPhotoBeforeUpload;
+        }
+
+        // Сбрасываем сохраненные данные о загрузке
+        lastUploadedPhoto = null;
+        previousPhotoBeforeUpload = null;
+
+        showPhotoNotification('✅ Загрузка фото отменена', 'success');
+    } catch (error) {
+        console.error('❌ Ошибка отмены загрузки:', error);
+        showPhotoNotification('❌ Ошибка отмены загрузки', 'error');
+    }
+}
+
+function uploadPhotoDirectToEditor() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        try {
+            // Сохраняем текущее фото перед загрузкой нового
+            const imgElement = document.getElementById('photoEditorImage');
+            previousPhotoBeforeUpload = imgElement ? imgElement.src : null;
+
+            // Показываем превью сразу
+            const url = URL.createObjectURL(file);
+            const removerImgElement = document.getElementById('backgroundRemoverImage');
+
+            if (imgElement) {
+                imgElement.src = url;
+            }
+            if (removerImgElement) {
+                removerImgElement.src = url;
+            }
+
+            // Сохраняем на сервер
+            const formData = new FormData();
+            formData.append('photo', file);
+
+            const response = await fetch(`${API_BASE}/tracks/${currentPhotoEditorTrackId}/upload-artist-photo`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                showPhotoNotification('✅ Фото успешно загружено', 'success');
+
+                // Получаем обновленное изображение с сервера
+                const newUrl = `${API_BASE}/tracks/${currentPhotoEditorTrackId}/artist-photo?t=${Date.now()}`;
+
+                if (imgElement) {
+                    imgElement.src = newUrl;
+                    currentImageData = newUrl;
+                    originalImageState = newUrl;
+                    lastUploadedPhoto = newUrl; // Сохраняем последнее загруженное фото
+                }
+                if (removerImgElement) {
+                    removerImgElement.src = newUrl;
+                }
+
+            } else {
+                showPhotoNotification('❌ Ошибка загрузки: ' + result.error, 'error');
+                // Откатываем к предыдущему изображению при ошибке
+                if (previousPhotoBeforeUpload) {
+                    imgElement.src = previousPhotoBeforeUpload;
+                    if (removerImgElement) {
+                        removerImgElement.src = previousPhotoBeforeUpload;
+                    }
+                }
+            }
+
+            // Освобождаем временный URL
+            setTimeout(() => {
+                URL.revokeObjectURL(url);
+            }, 1000);
+
+        } catch (error) {
+            console.error('❌ Ошибка загрузки фото:', error);
+            showPhotoNotification('❌ Ошибка загрузки фото', 'error');
+        }
+    };
+    input.click();
+}
+
+async function saveEditorPhoto() {
+    if (!currentPhotoEditorTrackId) {
+        alert('Сначала выберите трек');
+        return;
+    }
+
+    try {
+        // Если есть изменения в background remover, применяем их
+        if (editHistory.length > 1) {
+            await applyAllChanges();
+        } else {
+            showPhotoNotification('ℹ️ Нет изменений для сохранения', 'info');
+        }
+
+        closePhotoEditor();
+        await loadTracks();
+        showPhotoNotification('✅ Фото сохранено', 'success');
+    } catch (e) {
+        showPhotoNotification('❌ Ошибка сохранения', 'error');
+    }
 }
 
 // === Функции для вырезания фона ===
@@ -103,8 +295,8 @@ function openBackgroundRemover() {
     }
 
     modal.style.display = 'none';
-
     let removerModal = document.getElementById('backgroundRemoverModal');
+
     if (!removerModal) {
         createBackgroundRemoverModal();
         removerModal = document.getElementById('backgroundRemoverModal');
@@ -120,7 +312,7 @@ function openBackgroundRemover() {
     }
 
     imageElement.src = imgElement.src;
-
+    originalImageState = imgElement.src;
     resetEditorState();
 
     imageElement.onload = function () {
@@ -135,6 +327,7 @@ function createBackgroundRemoverModal() {
     modal.id = 'backgroundRemoverModal';
     modal.className = 'modal';
     modal.style.display = 'none';
+
     modal.innerHTML = `
         <div class="modal-content" style="max-width: 95vw; max-height: 95vh; width: 95vw; height: 95vh;">
             <div class="modal-header">
@@ -145,8 +338,8 @@ function createBackgroundRemoverModal() {
                 <div class="tool-panel" style="width: 200px; padding: 15px; border-right: 1px solid #3d3d3d;">
                     <button class="photo-editor-btn-tool active" onclick="setTool('select')" id="tool-select" title="Выделить область">✏️ Выделение</button>
                     <button class="photo-editor-btn-tool" onclick="setTool('crop')" id="tool-crop" title="Обрезать кадр">🔲 Обрезка</button>
-                    <button class="photo-editor-btn-tool" onclick="setTool('eraser')" id="tool-eraser" title="Ластик (E)">🧽 Ластик</button>
-                    <button class="photo-editor-btn-tool" onclick="setTool('hand')" id="tool-hand" title="Перемещение (H)">👋 Рука</button>
+                    <button class="photo-editor-btn-tool" onclick="setTool('eraser')" id="tool-eraser" title="Ластик">🧽 Ластик</button>
+                    <button class="photo-editor-btn-tool" onclick="setTool('hand')" id="tool-hand" title="Перемещение">👋 Рука</button>
                     
                     <div style="margin: 20px 0; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px;">
                         <div style="color: #cccccc; font-size: 12px;">Размер ластика: <span id="eraserSizeValue">20</span>px</div>
@@ -154,39 +347,53 @@ function createBackgroundRemoverModal() {
                     </div>
                     
                     <div style="margin: 15px 0; width: 100%; display: flex; gap: 8px; justify-content: center;">
-                        <button class="photo-editor-btn-tool" onclick="undoEdit()" title="Отменить (Ctrl+Z)" id="undo-btn" style="font-size: 14px; padding: 8px 12px;">↶ Отменить</button>
-                        <button class="photo-editor-btn-tool" onclick="redoEdit()" title="Повторить (Ctrl+Y)" id="redo-btn" style="font-size: 14px; padding: 8px 12px;">↷ Повторить</button>
+                        <button class="photo-editor-btn-tool" onclick="undoEdit()" title="Отменить" id="undo-btn" style="font-size: 14px; padding: 8px 12px;">↶ Отменить</button>
+                        <button class="photo-editor-btn-tool" onclick="redoEdit()" title="Повторить" id="redo-btn" style="font-size: 14px; padding: 8px 12px;">↷ Повторить</button>
                     </div>
                     
                     <div style="color: #888; font-size: 12px; text-align: center; margin-top: 10px;">
                         Операций: <span id="operations-count">0</span>
                     </div>
                     
+                    <div style="margin-top: 10px; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px;">
+                        <div style="color: #ccc; font-size: 10px; text-align: center;">
+                            Область обрезки:<br/>
+                            <span id="cropSizeInfo">200 x 150</span>
+                        </div>
+                    </div>
+                    
                     <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 8px;">
                         <button class="photo-editor-btn success" onclick="applySelectionCut()" style="font-size: 12px; padding: 8px;">✂️ Вырезать выделенное</button>
                         <button class="photo-editor-btn secondary" onclick="applyCrop()" style="font-size: 12px; padding: 8px;">🔲 Применить обрезку</button>
                         <button class="photo-editor-btn warning" onclick="resetAllChanges()" style="font-size: 12px; padding: 8px;">🔄 Сбросить всё</button>
+                        <button class="photo-editor-btn danger" onclick="revertToOriginal()" style="font-size: 12px; padding: 8px; background: #c6262e;">⏮️ Вернуть оригинал</button>
+                        <button class="photo-editor-btn secondary" onclick="uploadPhotoDirectToEditor()" style="font-size: 12px; padding: 8px;">📁 Загрузить своё фото</button>
+                        <button class="photo-editor-btn warning" onclick="cancelPhotoUpload()" id="cancel-upload-btn" style="font-size: 12px; padding: 8px; display: none;">❌ Отменить загрузку</button>
                     </div>
                 </div>
-
+                
                 <div id="backgroundRemoverContainer" style="flex: 1; position: relative; overflow: hidden; background: #2d3748;">
                     <img id="backgroundRemoverImage" src="" style="position: absolute; transform-origin: 0 0; transition: transform 0.1s;" />
-                    <div id="cropRect" style="display: none; position: absolute; border: 2px dashed #1a5fb4; background: rgba(26, 95, 180, 0.1);">
-                        <div class="crop-handle top" style="position: absolute; top: -4px; left: 50%; width: 8px; height: 8px; background: #1a5fb4; cursor: n-resize;"></div>
-                        <div class="crop-handle bottom" style="position: absolute; bottom: -4px; left: 50%; width: 8px; height: 8px; background: #1a5fb4; cursor: s-resize;"></div>
-                        <div class="crop-handle left" style="position: absolute; left: -4px; top: 50%; width: 8px; height: 8px; background: #1a5fb4; cursor: w-resize;"></div>
-                        <div class="crop-handle right" style="position: absolute; right: -4px; top: 50%; width: 8px; height: 8px; background: #1a5fb4; cursor: e-resize;"></div>
+                    
+                    <div id="cropRect" style="display: none; position: absolute; border: 2px dashed #1a5fb4; background: rgba(26, 95, 180, 0.1); box-sizing: border-box;">
+                        <div class="crop-handle top" style="position: absolute; top: -4px; left: 50%; transform: translateX(-50%); width: 8px; height: 8px; background: #1a5fb4; cursor: n-resize;"></div>
+                        <div class="crop-handle bottom" style="position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%); width: 8px; height: 8px; background: #1a5fb4; cursor: s-resize;"></div>
+                        <div class="crop-handle left" style="position: absolute; left: -4px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; background: #1a5fb4; cursor: w-resize;"></div>
+                        <div class="crop-handle right" style="position: absolute; right: -4px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; background: #1a5fb4; cursor: e-resize;"></div>
                         <div class="crop-handle top-left" style="position: absolute; top: -4px; left: -4px; width: 8px; height: 8px; background: #1a5fb4; cursor: nw-resize;"></div>
                         <div class="crop-handle top-right" style="position: absolute; top: -4px; right: -4px; width: 8px; height: 8px; background: #1a5fb4; cursor: ne-resize;"></div>
                         <div class="crop-handle bottom-left" style="position: absolute; bottom: -4px; left: -4px; width: 8px; height: 8px; background: #1a5fb4; cursor: sw-resize;"></div>
                         <div class="crop-handle bottom-right" style="position: absolute; bottom: -4px; right: -4px; width: 8px; height: 8px; background: #1a5fb4; cursor: se-resize;"></div>
                     </div>
+                    
                     <canvas id="selectionCanvas" style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
                     <canvas id="eraserCanvas" style="position: absolute; top: 0; left: 0; pointer-events: none;"></canvas>
-                    <div class="tool-info" id="toolInfo" style="position: absolute; bottom: 10px; left: 10px; color: #ccc; font-size: 12px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 3px;">Инструмент: Выделение • Колесо: Zoom • E: Ластик • H: Рука • Ctrl+Z: Отменить</div>
+                    
+                    <div class="tool-info" id="toolInfo" style="position: absolute; bottom: 10px; left: 10px; color: #ccc; font-size: 12px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 3px;">Инструмент: Выделение</div>
                     <div class="zoom-info" id="zoomInfo" style="position: absolute; top: 10px; right: 10px; color: #ccc; font-size: 12px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 3px;">100%</div>
                 </div>
             </div>
+            
             <div class="modal-actions" style="padding: 15px; border-top: 1px solid #3d3d3d; display: flex; gap: 10px; justify-content: center;">
                 <button class="photo-editor-btn success" onclick="applyAllChanges()">✅ Применить все изменения</button>
                 <button class="photo-editor-btn secondary" onclick="closeBackgroundRemover()">💾 Сохранить и выйти</button>
@@ -194,8 +401,8 @@ function createBackgroundRemoverModal() {
             </div>
         </div>
     `;
-    document.body.appendChild(modal);
 
+    document.body.appendChild(modal);
     setTimeout(() => {
         initializeEventHandlers();
     }, 100);
@@ -208,22 +415,26 @@ function initializeEventHandlers() {
     const eraserSizeInput = document.getElementById('eraserSize');
 
     if (container) {
+        // Удаляем старые обработчики
         container.removeEventListener('mousedown', handleContainerMouseDown);
         container.removeEventListener('mousemove', handleContainerMouseMove);
         container.removeEventListener('mouseup', handleContainerMouseUp);
         container.removeEventListener('wheel', handleContainerWheel);
 
+        // Добавляем новые
         container.addEventListener('mousedown', handleContainerMouseDown);
         container.addEventListener('mousemove', handleContainerMouseMove);
         container.addEventListener('mouseup', handleContainerMouseUp);
         container.addEventListener('wheel', handleContainerWheel);
 
+        // Обработчики для ручек обрезки
         const handles = container.querySelectorAll('.crop-handle');
         handles.forEach(handle => {
             handle.removeEventListener('mousedown', handleCropHandleMouseDown);
             handle.addEventListener('mousedown', handleCropHandleMouseDown);
         });
 
+        // Обработчик для перемещения области обрезки
         const cropRectElement = document.getElementById('cropRect');
         if (cropRectElement) {
             cropRectElement.removeEventListener('mousedown', handleCropRectMouseDown);
@@ -235,12 +446,10 @@ function initializeEventHandlers() {
         }
     }
 
-    document.addEventListener('keydown', handleKeyDown);
-
     isInitialized = true;
 }
 
-// === История изменений (ИСПРАВЛЕНА) ===
+// === История изменений ===
 function saveToHistory() {
     const imageElement = document.getElementById('backgroundRemoverImage');
     if (!imageElement) return;
@@ -252,7 +461,6 @@ function saveToHistory() {
         timestamp: Date.now()
     };
 
-    // Обрезаем историю если нужно
     if (currentHistoryIndex < editHistory.length - 1) {
         editHistory = editHistory.slice(0, currentHistoryIndex + 1);
     }
@@ -260,7 +468,6 @@ function saveToHistory() {
     editHistory.push(state);
     currentHistoryIndex = editHistory.length - 1;
 
-    // Ограничиваем размер истории
     if (editHistory.length > MAX_HISTORY) {
         editHistory.shift();
         currentHistoryIndex--;
@@ -293,12 +500,14 @@ function redoEdit() {
 function restoreFromHistory() {
     const state = editHistory[currentHistoryIndex];
     const imageElement = document.getElementById('backgroundRemoverImage');
+
     if (imageElement) {
         imageElement.src = state.imageSrc;
         currentImageData = state.imageSrc;
         eraserOperations = JSON.parse(JSON.stringify(state.eraserOperations));
         selectPoints = JSON.parse(JSON.stringify(state.selectPoints || []));
     }
+
     updateOperationsCount();
     updateUndoRedoButtons();
     updateSelectionCanvas();
@@ -319,9 +528,20 @@ function updateUndoRedoButtons() {
         undoBtn.disabled = currentHistoryIndex <= 0;
         undoBtn.style.opacity = currentHistoryIndex <= 0 ? '0.5' : '1';
     }
+
     if (redoBtn) {
         redoBtn.disabled = currentHistoryIndex >= editHistory.length - 1;
         redoBtn.style.opacity = currentHistoryIndex >= editHistory.length - 1 ? '0.5' : '1';
+    }
+
+    // Обновляем видимость кнопки отмены загрузки
+    const cancelUploadBtn = document.getElementById('cancel-upload-btn');
+    if (cancelUploadBtn) {
+        if (lastUploadedPhoto) {
+            cancelUploadBtn.style.display = 'block';
+        } else {
+            cancelUploadBtn.style.display = 'none';
+        }
     }
 }
 
@@ -334,7 +554,6 @@ function initializeBackgroundRemover() {
 
     const imgWidth = imageElement.naturalWidth;
     const imgHeight = imageElement.naturalHeight;
-
     originalImageSize.width = imgWidth;
     originalImageSize.height = imgHeight;
 
@@ -352,6 +571,7 @@ function initializeBackgroundRemover() {
 
     const canvas = document.getElementById('selectionCanvas');
     const eraserCanvas = document.getElementById('eraserCanvas');
+
     if (canvas && eraserCanvas) {
         canvas.width = containerWidth;
         canvas.height = containerHeight;
@@ -359,21 +579,25 @@ function initializeBackgroundRemover() {
         eraserCanvas.height = containerHeight;
     }
 
+    // Инициализация области обрезки
     cropRect.width = Math.min(containerWidth * 0.6, 300);
     cropRect.height = Math.min(containerHeight * 0.6, 200);
     cropRect.x = (containerWidth - cropRect.width) / 2;
     cropRect.y = (containerHeight - cropRect.height) / 2;
 
     updateCropRect();
+    updateCropSizeInfo();
 
     toolLock = true;
     setTool('select');
     toolLock = false;
 
     updateZoomInfo();
-
     saveCurrentImageState();
     saveToHistory();
+
+    // Обновляем кнопки
+    updateUndoRedoButtons();
 }
 
 function setTool(tool) {
@@ -396,7 +620,7 @@ function setTool(tool) {
             'eraser': 'Ластик',
             'hand': 'Перемещение'
         };
-        toolInfo.textContent = `Инструмент: ${toolNames[tool]} • Колесо: Zoom • E: Ластик • H: Рука • Ctrl+Z: Отменить`;
+        toolInfo.textContent = `Инструмент: ${toolNames[tool]}`;
     }
 
     const container = document.getElementById('backgroundRemoverContainer');
@@ -404,7 +628,7 @@ function setTool(tool) {
         container.style.cursor = '';
         if (tool === 'select') container.style.cursor = 'crosshair';
         if (tool === 'crop') container.style.cursor = 'default';
-        if (tool === 'eraser') container.style.cursor = `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="white" stroke-width="2"/><circle cx="12" cy="12" r="8" fill="none" stroke="black" stroke-width="1"/></svg>') 12 12, auto`;
+        if (tool === 'eraser') container.style.cursor = 'crosshair';
         if (tool === 'hand') container.style.cursor = 'grab';
     }
 
@@ -417,6 +641,7 @@ function setTool(tool) {
         isSelecting = false;
         updateSelectionCanvas();
     }
+
     if (tool !== 'eraser') {
         isErasing = false;
         currentEraserOperation = null;
@@ -440,7 +665,11 @@ function handleContainerMouseDown(e) {
     } else if (currentTool === 'eraser') {
         startErasing(x, y);
     } else if (currentTool === 'crop') {
-        // Обработка начинается в handleCropRectMouseDown
+        // Обработка клика на области обрезки
+        const cropRectElement = document.getElementById('cropRect');
+        if (cropRectElement && e.target === cropRectElement) {
+            handleCropRectMouseDown(e);
+        }
     }
 }
 
@@ -475,6 +704,7 @@ function handleContainerMouseUp(e) {
         isDraggingCrop = false;
         isResizingCrop = false;
         resizeEdge = null;
+        updateCropSizeInfo();
     }
 }
 
@@ -500,28 +730,9 @@ function handleContainerWheel(e) {
     updateZoomInfo();
 }
 
-function handleKeyDown(e) {
-    if (e.ctrlKey || e.metaKey) {
-        if (e.key === 'z') {
-            e.preventDefault();
-            undoEdit();
-        } else if (e.key === 'y') {
-            e.preventDefault();
-            redoEdit();
-        }
-    } else if (e.code === 'KeyH' && !e.ctrlKey && !e.altKey) {
-        setTool('hand');
-        e.preventDefault();
-    } else if (e.code === 'KeyE' && !e.ctrlKey && !e.altKey) {
-        setTool('eraser');
-        e.preventDefault();
-    }
-}
-
-// === Профессиональный ластик (ИСПРАВЛЕН) ===
+// === Профессиональный ластик ===
 function startErasing(x, y) {
     isErasing = true;
-
     if (!currentImageData) {
         saveCurrentImageState();
     }
@@ -539,7 +750,6 @@ function continueErasing(x, y) {
     if (!isErasing || !currentEraserOperation) return;
 
     currentEraserOperation.points.push({ x, y, size: eraserSize });
-
     updateEraserPreview();
     updateEraserCanvas();
 }
@@ -551,10 +761,8 @@ async function endErasing() {
 
     if (currentEraserOperation.points.length > 0) {
         eraserOperations.push(currentEraserOperation);
-
         await applyEraserOperation(currentEraserOperation);
         saveToHistory();
-
         showPhotoNotification(`✅ Ластик применен (${currentEraserOperation.points.length} точек)`, 'success');
     }
 
@@ -563,7 +771,7 @@ async function endErasing() {
 }
 
 async function applyEraserOperation(operation) {
-    if (!currentPhotoEditorTrackId) return;
+    if (!currentPhotoEditorTrackId) return false;
 
     try {
         const container = document.getElementById('backgroundRemoverContainer');
@@ -572,6 +780,7 @@ async function applyEraserOperation(operation) {
             y: imagePosition.y,
             scale: zoomLevel
         };
+
         const containerSize = {
             width: container.clientWidth,
             height: container.clientHeight
@@ -607,6 +816,7 @@ async function applyEraserOperation(operation) {
         console.error('Ошибка применения ластика:', error);
         showPhotoNotification('❌ Ошибка применения ластика', 'error');
     }
+
     return false;
 }
 
@@ -620,6 +830,7 @@ async function updateEraserPreview() {
             y: imagePosition.y,
             scale: zoomLevel
         };
+
         const containerSize = {
             width: container.clientWidth,
             height: container.clientHeight
@@ -674,7 +885,6 @@ function endSelection() {
     isSelecting = false;
 
     if (selectPoints.length > 2) {
-        // Автоматически замыкаем полигон
         const closedPoints = [...selectPoints, selectPoints[0]];
         selectPoints = closedPoints;
         updateSelectionCanvas();
@@ -699,10 +909,22 @@ async function applySelectionCut() {
             y: imagePosition.y,
             scale: zoomLevel
         };
+
         const containerSize = {
             width: container.clientWidth,
             height: container.clientHeight
         };
+
+        // Преобразуем точки для сервера
+        const transformedPoints = selectPoints.map(point => ({
+            x: point.x,
+            y: point.y
+        }));
+
+        console.log('✂️ Отправка выделения:', {
+            points: transformedPoints,
+            count: transformedPoints.length
+        });
 
         const response = await fetch(`${API_BASE}/tracks/${currentPhotoEditorTrackId}/process-image`, {
             method: 'POST',
@@ -712,7 +934,7 @@ async function applySelectionCut() {
                     {
                         type: 'selection',
                         data: {
-                            points: selectPoints
+                            points: transformedPoints
                         }
                     }
                 ],
@@ -727,21 +949,26 @@ async function applySelectionCut() {
                 const imageElement = document.getElementById('backgroundRemoverImage');
                 imageElement.src = result.image;
                 currentImageData = result.image;
-
                 selectPoints = [];
                 updateSelectionCanvas();
                 saveToHistory();
-
                 showPhotoNotification('✅ Выделенная область вырезана', 'success');
+                return true;
+            } else {
+                showPhotoNotification(`❌ Ошибка сервера: ${result.error}`, 'error');
             }
+        } else {
+            showPhotoNotification('❌ Ошибка сети при вырезке', 'error');
         }
     } catch (error) {
         console.error('Ошибка вырезки по выделению:', error);
         showPhotoNotification('❌ Ошибка вырезки', 'error');
     }
+
+    return false;
 }
 
-// === Функции обрезки ===
+// === ИСПРАВЛЕННЫЕ ФУНКЦИИ ОБРЕЗКИ ===
 function handleCropDrag(x, y) {
     if (!isDraggingCrop) return;
 
@@ -752,10 +979,8 @@ function handleCropDrag(x, y) {
     cropRect.y = dragStart.cropY + dy;
 
     const container = document.getElementById('backgroundRemoverContainer');
-    if (container) {
-        cropRect.x = Math.max(0, Math.min(cropRect.x, container.clientWidth - cropRect.width));
-        cropRect.y = Math.max(0, Math.min(cropRect.y, container.clientHeight - cropRect.height));
-    }
+    cropRect.x = Math.max(0, Math.min(cropRect.x, container.clientWidth - cropRect.width));
+    cropRect.y = Math.max(0, Math.min(cropRect.y, container.clientHeight - cropRect.height));
 
     updateCropRect();
 }
@@ -775,48 +1000,46 @@ function handleCropResize(x, y) {
 
     switch (resizeEdge) {
         case 'top':
-            newCrop.height = Math.max(20, dragStart.cropHeight - dy);
+            newCrop.height = Math.max(10, dragStart.cropHeight - dy);
             newCrop.y = dragStart.cropY + dy;
             break;
         case 'bottom':
-            newCrop.height = Math.max(20, dragStart.cropHeight + dy);
+            newCrop.height = Math.max(10, dragStart.cropHeight + dy);
             break;
         case 'left':
-            newCrop.width = Math.max(20, dragStart.cropWidth - dx);
+            newCrop.width = Math.max(10, dragStart.cropWidth - dx);
             newCrop.x = dragStart.cropX + dx;
             break;
         case 'right':
-            newCrop.width = Math.max(20, dragStart.cropWidth + dx);
+            newCrop.width = Math.max(10, dragStart.cropWidth + dx);
             break;
         case 'top-left':
-            newCrop.width = Math.max(20, dragStart.cropWidth - dx);
-            newCrop.height = Math.max(20, dragStart.cropHeight - dy);
+            newCrop.width = Math.max(10, dragStart.cropWidth - dx);
+            newCrop.height = Math.max(10, dragStart.cropHeight - dy);
             newCrop.x = dragStart.cropX + dx;
             newCrop.y = dragStart.cropY + dy;
             break;
         case 'top-right':
-            newCrop.width = Math.max(20, dragStart.cropWidth + dx);
-            newCrop.height = Math.max(20, dragStart.cropHeight - dy);
+            newCrop.width = Math.max(10, dragStart.cropWidth + dx);
+            newCrop.height = Math.max(10, dragStart.cropHeight - dy);
             newCrop.y = dragStart.cropY + dy;
             break;
         case 'bottom-left':
-            newCrop.width = Math.max(20, dragStart.cropWidth - dx);
-            newCrop.height = Math.max(20, dragStart.cropHeight + dy);
+            newCrop.width = Math.max(10, dragStart.cropWidth - dx);
+            newCrop.height = Math.max(10, dragStart.cropHeight + dy);
             newCrop.x = dragStart.cropX + dx;
             break;
         case 'bottom-right':
-            newCrop.width = Math.max(20, dragStart.cropWidth + dx);
-            newCrop.height = Math.max(20, dragStart.cropHeight + dy);
+            newCrop.width = Math.max(10, dragStart.cropWidth + dx);
+            newCrop.height = Math.max(10, dragStart.cropHeight + dy);
             break;
     }
 
     const container = document.getElementById('backgroundRemoverContainer');
-    if (container) {
-        newCrop.x = Math.max(0, Math.min(newCrop.x, container.clientWidth - newCrop.width));
-        newCrop.y = Math.max(0, Math.min(newCrop.y, container.clientHeight - newCrop.height));
-        newCrop.width = Math.min(newCrop.width, container.clientWidth - newCrop.x);
-        newCrop.height = Math.min(newCrop.height, container.clientHeight - newCrop.y);
-    }
+    newCrop.x = Math.max(0, Math.min(newCrop.x, container.clientWidth - newCrop.width));
+    newCrop.y = Math.max(0, Math.min(newCrop.y, container.clientHeight - newCrop.height));
+    newCrop.width = Math.min(newCrop.width, container.clientWidth - newCrop.x);
+    newCrop.height = Math.min(newCrop.height, container.clientHeight - newCrop.y);
 
     cropRect = newCrop;
     updateCropRect();
@@ -825,10 +1048,22 @@ function handleCropResize(x, y) {
 async function applyCrop() {
     try {
         const container = document.getElementById('backgroundRemoverContainer');
-        const originalSize = {
+        const imageTransform = {
+            x: imagePosition.x,
+            y: imagePosition.y,
+            scale: zoomLevel
+        };
+
+        const containerSize = {
             width: container.clientWidth,
             height: container.clientHeight
         };
+
+        console.log('🔲 Отправка обрезки:', {
+            width: cropRect.width,
+            height: cropRect.height,
+            position: { x: cropRect.x, y: cropRect.y }
+        });
 
         const response = await fetch(`${API_BASE}/tracks/${currentPhotoEditorTrackId}/process-image`, {
             method: 'POST',
@@ -838,12 +1073,12 @@ async function applyCrop() {
                     {
                         type: 'crop',
                         data: {
-                            rect: cropRect,
-                            original_size: originalSize
+                            rect: cropRect
                         }
                     }
                 ],
-                container_size: container
+                container_size: containerSize,
+                image_transform: imageTransform
             })
         });
 
@@ -854,9 +1089,30 @@ async function applyCrop() {
                 imageElement.src = result.image;
                 currentImageData = result.image;
 
+                // Сбрасываем zoom и позицию после обрезки
+                zoomLevel = 1;
+                imagePosition = { x: 0, y: 0 };
+                updateImageTransform();
+                updateZoomInfo();
+
+                // Обновляем область обрезки
+                setTimeout(() => {
+                    const container = document.getElementById('backgroundRemoverContainer');
+                    cropRect.width = Math.min(container.clientWidth * 0.6, 300);
+                    cropRect.height = Math.min(container.clientHeight * 0.6, 200);
+                    cropRect.x = (container.clientWidth - cropRect.width) / 2;
+                    cropRect.y = (container.clientHeight - cropRect.height) / 2;
+                    updateCropRect();
+                    updateCropSizeInfo();
+                }, 100);
+
                 saveToHistory();
-                showPhotoNotification('✅ Изображение обрезано', 'success');
+                showPhotoNotification(`✅ Изображение обрезано до ${Math.round(cropRect.width)}x${Math.round(cropRect.height)}`, 'success');
+            } else {
+                showPhotoNotification(`❌ Ошибка обрезки: ${result.error}`, 'error');
             }
+        } else {
+            showPhotoNotification('❌ Ошибка сервера при обрезке', 'error');
         }
     } catch (error) {
         console.error('Ошибка обрезки:', error);
@@ -864,10 +1120,55 @@ async function applyCrop() {
     }
 }
 
+// ИСПРАВЛЕННАЯ ФУНКЦИЯ - обработка перемещения области обрезки
+function handleCropRectMouseDown(e) {
+    if (currentTool === 'crop') {
+        isDraggingCrop = true;
+        const container = document.getElementById('backgroundRemoverContainer');
+        const rect = container.getBoundingClientRect();
+
+        dragStart = {
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top,
+            cropX: cropRect.x,
+            cropY: cropRect.y
+        };
+
+        e.preventDefault();
+        e.stopPropagation();
+    }
+}
+
+function handleCropHandleMouseDown(e) {
+    if (currentTool !== 'crop') return;
+
+    e.stopPropagation();
+    e.preventDefault();
+
+    const handle = e.target;
+    const edge = Array.from(handle.classList).find(cls => cls !== 'crop-handle');
+
+    isResizingCrop = true;
+    resizeEdge = edge;
+
+    const container = document.getElementById('backgroundRemoverContainer');
+    const rect = container.getBoundingClientRect();
+
+    dragStart = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        cropX: cropRect.x,
+        cropY: cropRect.y,
+        cropWidth: cropRect.width,
+        cropHeight: cropRect.height
+    };
+}
+
 // === Функции перемещения ===
 function startPanning(x, y) {
     isPanning = true;
     panStart = { x, y };
+
     const container = document.getElementById('backgroundRemoverContainer');
     if (container) {
         container.style.cursor = 'grabbing';
@@ -882,8 +1183,8 @@ function continuePanning(x, y) {
 
     imagePosition.x += dx;
     imagePosition.y += dy;
-
     panStart = { x, y };
+
     updateImageTransform();
 }
 
@@ -918,6 +1219,13 @@ function updateCropRect() {
     cropRectElement.style.top = `${cropRect.y}px`;
     cropRectElement.style.width = `${cropRect.width}px`;
     cropRectElement.style.height = `${cropRect.height}px`;
+}
+
+function updateCropSizeInfo() {
+    const infoElement = document.getElementById('cropSizeInfo');
+    if (infoElement) {
+        infoElement.textContent = `${Math.round(cropRect.width)} x ${Math.round(cropRect.height)}`;
+    }
 }
 
 function updateSelectionCanvas() {
@@ -965,7 +1273,6 @@ function updateEraserCanvas() {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Показываем текущую операцию ластика в реальном времени
     if (currentEraserOperation) {
         for (const point of currentEraserOperation.points) {
             ctx.beginPath();
@@ -987,6 +1294,78 @@ function saveCurrentImageState() {
     return Promise.resolve();
 }
 
+// === Функции отмены и сброса ===
+async function revertToOriginal() {
+    if (!originalImageState) {
+        showPhotoNotification('❌ Оригинальное изображение не найдено', 'error');
+        return;
+    }
+
+    if (!confirm('Вернуть оригинальное изображение? Все изменения будут потеряны.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/tracks/${currentPhotoEditorTrackId}/original-image?t=${Date.now()}`);
+        if (response.ok) {
+            const result = await response.json();
+            if (result.success) {
+                const imageElement = document.getElementById('backgroundRemoverImage');
+                imageElement.src = result.image;
+                currentImageData = result.image;
+                eraserOperations = [];
+                selectPoints = [];
+                editHistory = [];
+                currentHistoryIndex = -1;
+
+                setTimeout(() => {
+                    initializeBackgroundRemover();
+                }, 100);
+
+                showPhotoNotification('✅ Возвращено оригинальное изображение', 'success');
+            }
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки оригинала:', error);
+        // Fallback на локальное состояние
+        const imageElement = document.getElementById('backgroundRemoverImage');
+        imageElement.src = originalImageState;
+        currentImageData = originalImageState;
+        eraserOperations = [];
+        selectPoints = [];
+        editHistory = [];
+        currentHistoryIndex = -1;
+
+        setTimeout(() => {
+            initializeBackgroundRemover();
+        }, 100);
+
+        showPhotoNotification('✅ Возвращено оригинальное изображение', 'success');
+    }
+}
+
+function resetAllChanges() {
+    if (confirm('Вы уверены? Все несохраненные изменения будут потеряны.')) {
+        const imageElement = document.getElementById('backgroundRemoverImage');
+        if (imageElement && editHistory.length > 0) {
+            const initialState = editHistory[0];
+            imageElement.src = initialState.imageSrc;
+            currentImageData = initialState.imageSrc;
+            eraserOperations = JSON.parse(JSON.stringify(initialState.eraserOperations));
+            selectPoints = JSON.parse(JSON.stringify(initialState.selectPoints || []));
+            editHistory = [initialState];
+            currentHistoryIndex = 0;
+
+            updateOperationsCount();
+            updateUndoRedoButtons();
+            updateSelectionCanvas();
+            updateEraserCanvas();
+        }
+
+        showPhotoNotification('🔄 Все изменения сброшены', 'info');
+    }
+}
+
 async function applyAllChanges() {
     if (eraserOperations.length === 0 && selectPoints.length < 3) {
         showPhotoNotification('ℹ️ Нет изменений для применения', 'info');
@@ -1000,6 +1379,7 @@ async function applyAllChanges() {
             y: imagePosition.y,
             scale: zoomLevel
         };
+
         const containerSize = {
             width: container.clientWidth,
             height: container.clientHeight
@@ -1007,7 +1387,6 @@ async function applyAllChanges() {
 
         const operations = [];
 
-        // Добавляем операции ластика
         if (eraserOperations.length > 0) {
             operations.push({
                 type: 'erase',
@@ -1017,7 +1396,6 @@ async function applyAllChanges() {
             });
         }
 
-        // Добавляем операцию выделения если есть
         if (selectPoints.length > 2) {
             operations.push({
                 type: 'selection',
@@ -1050,30 +1428,6 @@ async function applyAllChanges() {
     }
 }
 
-function resetAllChanges() {
-    if (confirm('Вы уверены? Все несохраненные изменения будут потеряны.')) {
-        const imageElement = document.getElementById('backgroundRemoverImage');
-        if (imageElement && editHistory.length > 0) {
-            // Восстанавливаем первоначальное состояние
-            const initialState = editHistory[0];
-            imageElement.src = initialState.imageSrc;
-            currentImageData = initialState.imageSrc;
-            eraserOperations = JSON.parse(JSON.stringify(initialState.eraserOperations));
-            selectPoints = JSON.parse(JSON.stringify(initialState.selectPoints || []));
-
-            // Оставляем только начальное состояние в истории
-            editHistory = [initialState];
-            currentHistoryIndex = 0;
-
-            updateOperationsCount();
-            updateUndoRedoButtons();
-            updateSelectionCanvas();
-            updateEraserCanvas();
-        }
-        showPhotoNotification('🔄 Все изменения сброшены', 'info');
-    }
-}
-
 function cancelEditing() {
     if (editHistory.length > 1 && !confirm('У вас есть несохраненные изменения. Выйти без сохранения?')) {
         return;
@@ -1100,45 +1454,6 @@ function handleEraserSizeChange(e) {
     if (eraserSizeValue) {
         eraserSizeValue.textContent = eraserSize;
     }
-}
-
-function handleCropRectMouseDown(e) {
-    if (currentTool === 'crop' && e.target === this) {
-        isDraggingCrop = true;
-        const rect = this.getBoundingClientRect();
-        dragStart = {
-            x: e.clientX,
-            y: e.clientY,
-            cropX: cropRect.x,
-            cropY: cropRect.y
-        };
-        e.preventDefault();
-        e.stopPropagation();
-    }
-}
-
-function handleCropHandleMouseDown(e) {
-    if (currentTool !== 'crop') return;
-
-    e.stopPropagation();
-    e.preventDefault();
-
-    const handle = e.target;
-    const edge = handle.classList[1];
-
-    isResizingCrop = true;
-    resizeEdge = edge;
-
-    const container = document.getElementById('backgroundRemoverContainer');
-    const rect = container.getBoundingClientRect();
-    dragStart = {
-        x: e.clientX,
-        y: e.clientY,
-        cropX: cropRect.x,
-        cropY: cropRect.y,
-        cropWidth: cropRect.width,
-        cropHeight: cropRect.height
-    };
 }
 
 function showPhotoNotification(message, type = 'info') {
@@ -1168,7 +1483,6 @@ function showPhotoNotification(message, type = 'info') {
                     type === 'warning' ? '#f37329' : '#1a5fb4'};
         `;
         notification.textContent = message;
-
         document.body.appendChild(notification);
 
         setTimeout(() => {
@@ -1176,7 +1490,6 @@ function showPhotoNotification(message, type = 'info') {
                 notification.parentNode.removeChild(notification);
             }
         }, 3000);
-
     } catch (e) {
         console.log('Notification:', message, type);
     }

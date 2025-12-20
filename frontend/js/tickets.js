@@ -1,7 +1,7 @@
-﻿// static/js/tickets.js - Полная версия с прогрессом и WebSocket
-
+﻿// static/js/tickets.js - Полная версия с прогрессом, WebSocket и кастомным списком треков
 const API_BASE_URL = '/api';
 let allTracks = [];
+let ticketsTrackList = []; // ← Новый список треков для билетов
 let autoRefreshInterval = null;
 let progressWebSocket = null;
 
@@ -25,7 +25,6 @@ function connectProgressWebSocket() {
                     updateProgressBar(data.current, data.total, data.message);
                     console.log(`📊 Прогресс: ${data.current}/${data.total} - ${data.message}`);
 
-                    // Обновляем дополнительные элементы прогресса
                     const progressPercent = document.getElementById('progressPercent');
                     if (progressPercent) {
                         progressPercent.textContent = `${data.percent}%`;
@@ -36,7 +35,6 @@ function connectProgressWebSocket() {
                         totalTickets.textContent = data.total;
                     }
 
-                    // Добавляем детали в прогресс
                     const progressDetails = document.getElementById('progressDetails');
                     if (progressDetails) {
                         progressDetails.textContent = data.message;
@@ -99,9 +97,6 @@ function getProgressStage(message) {
 function parseTracksResponse(data) {
     if (!data) return [];
 
-    console.log('🔍 Парсинг данных треков:', data);
-
-    // Пробуем разные форматы ответа
     if (Array.isArray(data)) {
         return data.map(track => ({
             id: track.id || track.track_id || Math.random().toString(36),
@@ -111,7 +106,6 @@ function parseTracksResponse(data) {
     }
 
     if (typeof data === 'object') {
-        // Формат {tracks: [...]}
         if (Array.isArray(data.tracks)) {
             return data.tracks.map(track => ({
                 id: track.id || track.track_id || Math.random().toString(36),
@@ -120,7 +114,6 @@ function parseTracksResponse(data) {
             }));
         }
 
-        // Формат {data: [...]}
         if (Array.isArray(data.data)) {
             return data.data.map(track => ({
                 id: track.id || track.track_id || Math.random().toString(36),
@@ -129,7 +122,6 @@ function parseTracksResponse(data) {
             }));
         }
 
-        // Формат с другими ключами
         for (const key in data) {
             if (Array.isArray(data[key]) && data[key].length > 0) {
                 const firstItem = data[key][0];
@@ -151,56 +143,22 @@ function parseTracksResponse(data) {
 /** Загрузка треков для билетов */
 async function loadTracksForTickets(forceRefresh = false) {
     try {
-        console.log('🔄 Загрузка треков для билетов...');
-
-        // Сначала получаем статус
-        const statusResp = await fetch('/api/tickets/status', {
-            cache: 'no-store',
-            headers: {
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
-            }
-        });
-
-        if (!statusResp.ok) {
-            throw new Error(`HTTP ${statusResp.status} при получении статуса`);
-        }
-
-        const statusData = await statusResp.json();
-        console.log('📊 Статус билетов:', statusData);
-
-        // Затем загружаем треки
         const timestamp = Date.now();
         const tracksResp = await fetch(`/api/tracks?t=${timestamp}&force=${forceRefresh}`, {
             cache: 'no-store',
-            headers: {
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
-            }
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
         });
 
-        if (!tracksResp.ok) {
-            throw new Error(`HTTP ${tracksResp.status} при получении треков`);
-        }
-
+        if (!tracksResp.ok) throw new Error(`HTTP ${tracksResp.status}`);
         const tracksData = await tracksResp.json();
-        console.log('🎵 Получены данные треков:', tracksData);
-
-        // Парсим треки
         allTracks = parseTracksResponse(tracksData);
         console.log(`✅ Загружено треков: ${allTracks.length}`);
 
-        // Если через API треков не получилось, пробуем альтернативные методы
-        if (allTracks.length === 0) {
-            console.log('🔄 Попытка альтернативного получения треков...');
-            await tryAlternativeTrackLoading();
-        }
-
+        if (allTracks.length === 0) await tryAlternativeTrackLoading();
         updateProgressStats();
 
     } catch (err) {
         console.error('❌ Ошибка загрузки треков:', err);
-        // Пробуем альтернативные методы при ошибке
         await tryAlternativeTrackLoading();
         updateProgressStats();
         showNotification(`❌ Ошибка загрузки треков: ${err.message}`, 'error');
@@ -209,77 +167,68 @@ async function loadTracksForTickets(forceRefresh = false) {
 
 /** Альтернативные методы загрузки треков */
 async function tryAlternativeTrackLoading() {
-    try {
-        // Пробуем разные эндпоинты
-        const endpoints = [
-            '/api/tracks/list',
-            '/api/tracks/all',
-            '/api/media/tracks',
-            '/api/library/tracks'
-        ];
+    const endpoints = [
+        '/api/tracks/list',
+        '/api/tracks/all',
+        '/api/media/tracks',
+        '/api/library/tracks'
+    ];
 
-        for (const endpoint of endpoints) {
-            try {
-                const resp = await fetch(endpoint);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    const tracks = parseTracksResponse(data);
-                    if (tracks.length > 0) {
-                        console.log(`✅ Треки найдены через ${endpoint}: ${tracks.length}`);
-                        allTracks = tracks;
-                        return;
-                    }
+    for (const endpoint of endpoints) {
+        try {
+            const resp = await fetch(endpoint);
+            if (resp.ok) {
+                const data = await resp.json();
+                const tracks = parseTracksResponse(data);
+                if (tracks.length > 0) {
+                    allTracks = tracks;
+                    return;
                 }
-            } catch (e) {
-                console.log(`❌ Эндпоинт ${endpoint} не доступен:`, e.message);
             }
+        } catch (e) {
+            console.log(`❌ Эндпоинт ${endpoint} не доступен:`, e.message);
         }
+    }
 
-        // Если все эндпоинты не сработали, используем заглушку из статуса
-        const statusResp = await fetch('/api/tickets/status');
-        if (statusResp.ok) {
-            const status = await statusResp.json();
-            if (status.tracks_count > 0) {
-                console.log(`⚠️ Используем данные из статуса: ${status.tracks_count} треков`);
-                // Создаем макетные треки на основе количества
-                allTracks = Array.from({ length: status.tracks_count }, (_, i) => ({
-                    id: `track-${i + 1}`,
-                    title: `Трек ${i + 1}`,
-                    artist: 'Исполнитель'
-                }));
-            }
+    const statusResp = await fetch('/api/tickets/status');
+    if (statusResp.ok) {
+        const status = await statusResp.json();
+        if (status.tracks_count > 0) {
+            allTracks = Array.from({ length: status.tracks_count }, (_, i) => ({
+                id: `track-${i + 1}`,
+                title: `Трек ${i + 1}`,
+                artist: 'Исполнитель'
+            }));
         }
-    } catch (err) {
-        console.error('❌ Ошибка альтернативной загрузки:', err);
     }
 }
 
 /** Обновление статистики */
 function updateProgressStats() {
+    const actualTracks = ticketsTrackList.length > 0 ? ticketsTrackList : allTracks;
+    const actualCount = actualTracks ? actualTracks.length : 0;
+
     const countEl = document.getElementById('tracksCount');
     const statusEl = document.getElementById('generationStatus');
 
-    if (countEl) {
-        countEl.textContent = allTracks ? allTracks.length : 0;
-    }
+    if (countEl) countEl.textContent = actualCount;
 
     if (statusEl) {
-        if (!allTracks || allTracks.length === 0) {
+        if (actualCount === 0) {
             statusEl.textContent = '❌ Нет треков';
             statusEl.style.color = '#ef4444';
-        } else if (allTracks.length < 36) {
-            statusEl.textContent = `⚠️ Недостаточно треков (${allTracks.length}/36)`;
+        } else if (actualCount < 36) {
+            statusEl.textContent = `⚠️ Недостаточно треков (${actualCount}/36)`;
             statusEl.style.color = '#f59e0b';
         } else {
-            statusEl.textContent = `✅ Готов к генерации (${allTracks.length} треков)`;
+            statusEl.textContent = `✅ Готов к генерации (${actualCount} треков)`;
             statusEl.style.color = '#10b981';
         }
     }
 
-    // Обновляем кнопку генерации
     const generateBtn = document.getElementById('generateTicketsBtn');
     if (generateBtn) {
-        generateBtn.disabled = !allTracks || allTracks.length < 36;
+        generateBtn.disabled = actualCount < 36;
     }
 }
 
@@ -338,7 +287,6 @@ function updateProgressBar(current, total, message = '') {
         progressBar.style.width = `${percent}%`;
         progressBar.textContent = `${percent}%`;
 
-        // Меняем цвет в зависимости от прогресса
         if (percent < 30) {
             progressBar.style.background = 'linear-gradient(135deg, #ef4444, #dc2626)';
         } else if (percent < 70) {
@@ -348,24 +296,14 @@ function updateProgressBar(current, total, message = '') {
         }
     }
 
-    if (progressText) {
-        progressText.textContent = message || `Генерация: ${current}/${total}`;
-    }
-
-    if (currentTicketEl) {
-        currentTicketEl.textContent = current > 0 ? current : '-';
-    }
-
-    if (totalTicketsEl) {
-        totalTicketsEl.textContent = total > 0 ? total : '-';
-    }
-
+    if (progressText) progressText.textContent = message || `Генерация: ${current}/${total}`;
+    if (currentTicketEl) currentTicketEl.textContent = current > 0 ? current : '-';
+    if (totalTicketsEl) totalTicketsEl.textContent = total > 0 ? total : '-';
     if (progressPercentEl) {
         const percent = total > 0 ? Math.round((current / total) * 100) : 0;
         progressPercentEl.textContent = `${percent}%`;
     }
 
-    // Показываем/скрываем секцию прогресса
     const progressSection = document.getElementById('progressSection');
     if (progressSection) {
         if (current === 0 && total === 0) {
@@ -376,6 +314,140 @@ function updateProgressBar(current, total, message = '') {
     }
 }
 
+// === НОВЫЕ ФУНКЦИИ ДЛЯ КАСТОМНОГО СПИСКА ТРЕКОВ ===
+
+function normalizeTrackString(str) {
+    return str.toLowerCase().replace(/[^\wа-яё]/g, '');
+}
+
+function parseTicketsTrackList(trackListText) {
+    const lines = trackListText.trim().split('\n').map(l => l.trim()).filter(l => l);
+    const tracks = [];
+    for (let line of lines) {
+        line = line
+            .replace(/^\d+\.\s*/, '')
+            .replace(/^\d+\)\s*/, '')
+            .replace(/^[-•*]\s*/, '')
+            .trim();
+        let artist = '', title = '';
+        const separators = [' - ', ' – ', ' — '];
+        for (let sep of separators) {
+            if (line.includes(sep)) {
+                const parts = line.split(sep, 2);
+                artist = parts[0].trim();
+                title = parts[1].trim();
+                return { artist, title };
+            }
+        }
+        artist = 'Неизвестный исполнитель';
+        title = line;
+        tracks.push({ artist, title });
+    }
+    return tracks;
+}
+
+async function validateTicketsTrackList() {
+    const text = document.getElementById('ticketsTrackList')?.value || '';
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+    const el = document.getElementById('ticketsTrackValidation');
+
+    if (!lines.length) {
+        if (el) el.style.display = 'none';
+        ticketsTrackList = [];
+        updateProgressStats();
+        return;
+    }
+
+    const results = [];
+    const valid = [];
+
+    for (const line of lines) {
+        // Парсим строку (очищаем от нумерации и лишних символов)
+        let cleanLine = line
+            .replace(/^\d+\.\s*/, '')
+            .replace(/^\d+\)\s*/, '')
+            .replace(/^[-•*]\s*/, '')
+            .trim();
+
+        let artist = '', title = '';
+        const separators = [' - ', ' – ', ' — '];
+        let foundSep = false;
+        for (let sep of separators) {
+            if (cleanLine.includes(sep)) {
+                const parts = cleanLine.split(sep, 2);
+                artist = parts[0].trim();
+                title = parts[1].trim();
+                foundSep = true;
+                break;
+            }
+        }
+        if (!foundSep) {
+            artist = 'Неизвестный исполнитель';
+            title = cleanLine;
+        }
+
+        // Сравниваем с медиатекой
+        const found = allTracks.find(t =>
+            normalizeTrackString(t.artist) === normalizeTrackString(artist) &&
+            normalizeTrackString(t.title) === normalizeTrackString(title)
+        );
+
+        results.push({ original: line, artist, title, found: !!found });
+        if (found) valid.push(found);
+    }
+
+    // Формируем HTML с подсветкой
+    let html = '<div class="validation-items">';
+    results.forEach(r => {
+        const cls = r.found ? 'valid-item' : 'invalid-item';
+        const icon = r.found ? '✅' : '❌';
+        html += `<div class="validation-item ${cls}">${icon} ${r.original}</div>`;
+    });
+    html += '</div>';
+
+    if (el) {
+        el.innerHTML = html;
+        el.style.display = 'block';
+    }
+
+    ticketsTrackList = valid;
+    updateProgressStats();
+}
+
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+function clearTicketsTrackList() {
+    const el = document.getElementById('ticketsTrackList');
+    if (el) el.value = '';
+    const val = document.getElementById('ticketsTrackValidation');
+    if (val) val.style.display = 'none';
+    ticketsTrackList = [];
+    updateProgressStats();
+}
+
+function loadAllTracksToTicketsList() {
+    if (!allTracks || allTracks.length === 0) {
+        showNotification('Медиатека пуста', 'warning');
+        return;
+    }
+    const list = allTracks.map(t => `${t.artist} - ${t.title}`).join('\n');
+    const el = document.getElementById('ticketsTrackList');
+    if (el) el.value = list;
+    setTimeout(validateTicketsTrackList, 100);
+}
+
+// === КОНЕЦ НОВЫХ ФУНКЦИЙ ===
+
 /** Генерация билетов с прогресс-баром */
 async function generateTickets() {
     const count = parseInt(document.getElementById('ticketsCount')?.value || '10', 10);
@@ -383,8 +455,22 @@ async function generateTickets() {
         showNotification('Количество билетов должно быть от 1 до 100', 'error');
         return;
     }
-    if (!allTracks || allTracks.length < 36) {
-        showNotification(`Недостаточно треков (${allTracks ? allTracks.length : 0}/36)`, 'error');
+
+    const actualTracks = ticketsTrackList.length > 0 ? ticketsTrackList : allTracks;
+
+    // 🔴 КРИТИЧЕСКАЯ ПРОВЕРКА: если используется кастомный список
+    if (ticketsTrackList.length > 0) {
+        const inputText = document.getElementById('ticketsTrackList')?.value || '';
+        const inputLines = inputText.split('\n').map(l => l.trim()).filter(l => l);
+        if (inputLines.length !== ticketsTrackList.length) {
+            const missingCount = inputLines.length - ticketsTrackList.length;
+            showNotification(`❌ В списке ${missingCount} трек(ов) отсутствует в медиатеке! Исправьте список.`, 'error');
+            return;
+        }
+    }
+
+    if (!actualTracks || actualTracks.length < 36) {
+        showNotification(`Недостаточно треков (${actualTracks ? actualTracks.length : 0}/36)`, 'error');
         return;
     }
 
@@ -396,19 +482,16 @@ async function generateTickets() {
         btn.textContent = '⏳ Запуск...';
     }
 
-    // Скрываем секцию скачивания предыдущих результатов
     const downloadSection = document.getElementById('downloadSection');
-    if (downloadSection) {
-        downloadSection.style.display = 'none';
-    }
+    if (downloadSection) downloadSection.style.display = 'none';
 
     try {
-        // Сбрасываем прогресс
         updateProgressBar(0, count, 'Подготовка к генерации...');
         showNotification('🚀 Запуск генерации билетов...', 'info');
 
         const payload = {
             count,
+            tracks: actualTracks, // ← именно валидированный список!
             design: {
                 font_family: 'Arial',
                 title_size: 20,
@@ -420,8 +503,6 @@ async function generateTickets() {
             }
         };
 
-        console.log('🎫 Отправка запроса на генерацию...', payload);
-
         const resp = await fetch('/api/tickets/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -429,16 +510,14 @@ async function generateTickets() {
         });
 
         const result = await resp.json();
-        console.log('🎫 Ответ сервера:', result);
 
         if (resp.ok && result.success) {
             showNotification(`✅ ${result.message}`, 'success');
 
-            // Показываем секцию скачивания
             if (downloadSection) {
                 document.getElementById('downloadFileName').textContent = result.zip_file || '-';
                 document.getElementById('downloadTicketsCount').textContent = result.tickets_count || count;
-                document.getElementById('downloadTracksUsed').textContent = result.tracks_used || allTracks.length;
+                document.getElementById('downloadTracksUsed').textContent = result.tracks_used || actualTracks.length;
                 downloadSection.style.display = 'block';
             }
 
@@ -469,7 +548,6 @@ function downloadGeneratedTickets() {
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-
         showNotification(`📥 Начинается скачивание: ${fileName}`, 'success');
     } else {
         showNotification('❌ Файл для скачивания не найден', 'error');
@@ -478,34 +556,23 @@ function downloadGeneratedTickets() {
 
 /** Автоматическое обновление треков */
 function startAutoRefresh() {
-    if (autoRefreshInterval) {
-        clearInterval(autoRefreshInterval);
-    }
-
+    if (autoRefreshInterval) clearInterval(autoRefreshInterval);
     autoRefreshInterval = setInterval(() => {
-        if (!document.hidden) {
-            console.log('🔄 Авто-обновление треков...');
-            loadTracksForTickets(false).catch(console.error);
-        }
-    }, 15000); // Каждые 15 секунд
+        if (!document.hidden) loadTracksForTickets(false).catch(console.error);
+    }, 15000);
 }
 
 /** Обновление при возвращении на вкладку */
 function setupVisibilityHandler() {
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
-            console.log('📱 Возврат на вкладку - обновляем треки');
-            loadTracksForTickets(true).catch(console.error);
-        }
+        if (!document.hidden) loadTracksForTickets(true).catch(console.error);
     });
 }
 
 /** Привязка событий */
 function attachTicketEvents() {
     const genBtn = document.getElementById('generateTicketsBtn');
-    if (genBtn) {
-        genBtn.addEventListener('click', generateTickets);
-    }
+    if (genBtn) genBtn.addEventListener('click', generateTickets);
 
     const refreshBtn = document.getElementById('refreshTracksBtn');
     if (refreshBtn) {
@@ -515,10 +582,8 @@ function attachTicketEvents() {
         });
     }
 
-    // Обновление счетчика билетов
     const ticketsCountInput = document.getElementById('ticketsCount');
     const ticketsCountDisplay = document.getElementById('ticketsCountDisplay');
-
     if (ticketsCountInput && ticketsCountDisplay) {
         ticketsCountInput.addEventListener('input', () => {
             const value = parseInt(ticketsCountInput.value) || 1;
@@ -529,10 +594,13 @@ function attachTicketEvents() {
         ticketsCountDisplay.textContent = ticketsCountInput.value || 10;
     }
 
-    // Кнопка скачивания билетов
     const downloadBtn = document.getElementById('downloadTicketsBtn');
-    if (downloadBtn) {
-        downloadBtn.addEventListener('click', downloadGeneratedTickets);
+    if (downloadBtn) downloadBtn.addEventListener('click', downloadGeneratedTickets);
+
+    // Поддержка кастомного списка
+    const ticketsTrackListInput = document.getElementById('ticketsTrackList');
+    if (ticketsTrackListInput) {
+        ticketsTrackListInput.addEventListener('input', debounce(validateTicketsTrackList, 500));
     }
 
     console.log('✅ События билетов привязаны');
@@ -541,36 +609,22 @@ function attachTicketEvents() {
 /** Инициализация модуля билетов */
 function initializeTicketsModule() {
     console.log('🎫 Инициализация модуля билетов...');
-
-    // Подключаем WebSocket для прогресса
     connectProgressWebSocket();
 
-    // Проверяем, находимся ли мы на вкладке билетов
     const isTicketsTabActive = () => {
-        const ticketsTab = document.querySelector('[data-tab="tickets"]');
         const ticketsContent = document.getElementById('tickets');
-        return ticketsTab && ticketsTab.classList.contains('active') ||
-            ticketsContent && ticketsContent.classList.contains('active');
+        return ticketsContent && ticketsContent.classList.contains('active');
     };
 
-    // Загружаем треки сразу если вкладка активна
     if (isTicketsTabActive()) {
-        console.log('🎫 Вкладка билетов активна - загружаем треки...');
-        setTimeout(() => {
-            loadTracksForTickets().catch(console.error);
-        }, 500);
+        setTimeout(() => loadTracksForTickets().catch(console.error), 500);
     }
 
-    // Слушатель переключения вкладок
     const tabs = document.querySelectorAll('[data-tab]');
     tabs.forEach(tab => {
         tab.addEventListener('click', (e) => {
-            const tabName = e.target.getAttribute('data-tab');
-            if (tabName === 'tickets') {
-                console.log('🎫 Переключение на вкладку билетов');
-                setTimeout(() => {
-                    loadTracksForTickets().catch(console.error);
-                }, 100);
+            if (e.target.getAttribute('data-tab') === 'tickets') {
+                setTimeout(() => loadTracksForTickets().catch(console.error), 100);
             }
         });
     });
@@ -578,16 +632,11 @@ function initializeTicketsModule() {
     attachTicketEvents();
     startAutoRefresh();
     setupVisibilityHandler();
-
     console.log('🎫 Модуль билетов инициализирован');
 }
 
-/** Загрузка когда DOM готов */
 document.addEventListener('DOMContentLoaded', () => {
-    // Ждем немного чтобы убедиться что все элементы загружены
-    setTimeout(() => {
-        initializeTicketsModule();
-    }, 100);
+    setTimeout(() => initializeTicketsModule(), 100);
 });
 
 // Глобальные функции для отладки
@@ -596,43 +645,6 @@ window.ticketsDebug = {
         console.log('🔄 Принудительная перезагрузка треков...');
         loadTracksForTickets(true).catch(console.error);
     },
-    showTrackCount: () => {
-        console.log('📊 Треков в системе:', allTracks ? allTracks.length : 0);
-        console.log('📊 Данные треков:', allTracks);
-        return allTracks ? allTracks.length : 0;
-    },
     getTracks: () => allTracks,
-    testAPI: async () => {
-        console.log('🧪 Тестирование API...');
-        try {
-            const resp = await fetch('/api/tickets/status');
-            const data = await resp.json();
-            console.log('📊 Статус API:', data);
-            return data;
-        } catch (err) {
-            console.error('❌ Ошибка теста API:', err);
-            return null;
-        }
-    },
-    testWebSocket: () => {
-        console.log('🔌 Тестирование WebSocket...');
-        if (progressWebSocket) {
-            console.log('WebSocket состояние:', progressWebSocket.readyState);
-            console.log('WebSocket URL:', progressWebSocket.url);
-        } else {
-            console.log('WebSocket не подключен');
-        }
-    },
-    simulateProgress: (current, total, message) => {
-        console.log('🎭 Имитация прогресса:', { current, total, message });
-        updateProgressBar(current, total, message);
-    },
-    clearProgress: () => {
-        console.log('🧹 Очистка прогресса');
-        updateProgressBar(0, 0, '');
-        const downloadSection = document.getElementById('downloadSection');
-        if (downloadSection) {
-            downloadSection.style.display = 'none';
-        }
-    }
+    getCustomTracks: () => ticketsTrackList
 };

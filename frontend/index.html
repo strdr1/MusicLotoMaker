@@ -9,11 +9,11 @@
 <body>
     <div class="version-changelog">
         <div>Что нового:</div>
-        <div>1.Исправлен баг, который мешал</div>
-        <div>нормально вставлять фото при drag and drop</div>
-        <div>2.Добавлен яндекс Токен в поисковик фото!</div>
-        <div>3.Теперь при клике на фото открывается новое меню<</div>
-        <div>ПОКА ЧТО ПРОТОТИП!</div>
+        <div>1. Добавлен поиск, сортировка и фильтрация в медиатеке</div>
+        <div>2. Реалтайм-статистика треков</div>
+        <div>3. Глобальный аудиоплеер</div>
+        <div>4. Визуальная индикация воспроизведения</div>
+        <div>5. Статистика и фильтрация для мини-медиатеки в презентации</div>
     </div>
     <div class="container">
         <header>
@@ -21,8 +21,8 @@
             <p class="subtitle">Создавайте музыкальные презентации и билеты лото</p>
 
             <nav class="tabs">
-                <button class="tab-btn active" data-tab="media">📁 Медиатека</button>
                 <button class="tab-btn" data-tab="presentation">🎬 Презентация</button>
+                <button class="tab-btn active" data-tab="media">📁 Медиатека</button>
                 <button class="tab-btn" data-tab="tickets">🎫 Билеты</button>
                 <button class="tab-btn" data-tab="local">💾 Файлы</button>
                 <button class="tab-btn" data-tab="status">📊 Статус</button>
@@ -39,6 +39,71 @@
                 <button class="btn btn-danger" onclick="clearTracks()">
                     🗑️ Очистить все
                 </button>
+                <div class="view-toggle">
+                    <button id="toggleDetailedView" class="btn btn-secondary" onclick="toggleViewMode()">
+                        <span id="viewToggleText">Подробный вид</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Панель управления медиатекой -->
+            <div id="mediaControlsPanel" class="media-controls-panel">
+                <div class="controls-header">
+                    <h3 class="controls-title">Управление медиатекой</h3>
+                    <div id="nowPlayingInfo" class="now-playing-info" style="display: none;"></div>
+                </div>
+
+                <!-- Статистика -->
+                <div id="mediaStats"></div>
+
+                <!-- Поиск -->
+                <div class="search-container">
+                    <div class="search-input-group">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="trackSearchInput" placeholder="Поиск по исполнителю или названию...">
+                        <button id="trackSearchBtn" class="btn btn-primary">Найти</button>
+                        <button id="clearSearchBtn" class="btn btn-secondary">Очистить</button>
+                    </div>
+                    <div id="searchStats" class="search-stats"></div>
+                </div>
+
+                <!-- Фильтры и сортировка -->
+                <div class="filter-sort-container">
+                    <div class="filter-group">
+                        <button class="status-filter-btn active" data-filter="all">
+                            <span>📊</span> Все
+                        </button>
+                        <button class="status-filter-btn" data-filter="processed">
+                            <span>✅</span> Обработанные
+                        </button>
+                        <button class="status-filter-btn" data-filter="unprocessed">
+                            <span>⏳</span> Необработанные
+                        </button>
+                    </div>
+
+                    <div class="sort-group">
+                        <span class="sort-label">Сортировка:</span>
+                        <select id="trackSortSelect" class="sort-select">
+                            <option value="id">По ID</option>
+                            <option value="artist">По исполнителю</option>
+                            <option value="title">По названию</option>
+                            <option value="processed">По статусу</option>
+                        </select>
+                        <button id="sortDirectionBtn" class="sort-direction-btn" title="По возрастанию">↑</button>
+                    </div>
+
+                    <div id="filterStats" class="search-stats"></div>
+                </div>
+
+                <!-- Блок действий -->
+                <div class="actions-container">
+                    <button id="processAllBtn" class="batch-action-btn">
+                        <span>✅</span> Обработать все
+                    </button>
+                    <button class="batch-action-btn" onclick="compactTrackIds()">
+                        <span>📦</span> Уплотнить ID
+                    </button>
+                </div>
             </div>
 
             <!-- Блок скачивания треков из интернета -->
@@ -198,49 +263,196 @@ Michael Jackson - Billie Jean"></textarea>
                 <h2>🎬 Генератор презентации</h2>
                 <p>Создайте презентацию для музыкального лото с вашими треками</p>
 
+                <!-- Статистика презентации -->
+                <div id="presentationStats">
+                    <div class="presentation-mini-stats">
+                        <div class="stats-grid compact">
+                            <div class="stat-card">
+                                <div class="stat-icon">📋</div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Всего в списке</span>
+                                    <span class="stat-value">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">🔍</div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Найдено</span>
+                                    <span class="stat-value">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon">⚙️</div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Обработано</span>
+                                    <span class="stat-value">0%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Детальная статистика -->
+                <div id="presentationStatsDetails" class="stats-details" style="margin-bottom: 20px;">
+                    <div class="detailed-stats">
+                        <h4>📊 Статистика мини-медиатеки:</h4>
+                        <div class="stats-grid-detailed">
+                            <div class="stat-detailed">
+                                <span class="stat-label-detailed">Всего треков в списке:</span>
+                                <span class="stat-value-detailed">0</span>
+                            </div>
+                            <div class="stat-detailed">
+                                <span class="stat-label-detailed">✅ Найдено в медиатеке:</span>
+                                <span class="stat-value-detailed">0</span>
+                            </div>
+                            <div class="stat-detailed">
+                                <span class="stat-label-detailed">❌ Не найдено:</span>
+                                <span class="stat-value-detailed">0</span>
+                            </div>
+                            <div class="stat-detailed">
+                                <span class="stat-label-detailed">⚙️ Обработано:</span>
+                                <span class="stat-value-detailed">0 из 0 (0%)</span>
+                            </div>
+                            <div class="stat-detailed">
+                                <span class="stat-label-detailed">⏳ Не обработано:</span>
+                                <span class="stat-value-detailed">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Статус готовности -->
                 <div class="info-box" style="background: var(--info-bg); padding: 12px; border-radius: 8px; margin-bottom: 20px;">
                     <strong>📊 Статус:</strong>
                     <span id="tracksCount">0</span> треков в медиатеке |
-                    <span id="presentationReadyStatus">❌ Недостаточно треков</span>
+                    <span id="presentationReadyStatus">❌ Недостаточно треков (0 из 40 минимум)</span>
+                </div>
+
+                <!-- Фильтр для треков презентации -->
+                <div id="presentationFilterContainer" class="filter-section" style="margin-bottom: 20px;">
+                    <div class="filter-group">
+                        <span class="filter-label">Фильтр по статусу:</span>
+                        <div class="filter-buttons">
+                            <button class="btn btn-small pres-status-filter-btn active" data-filter="all" title="Все треки">
+                                Все
+                            </button>
+                            <button class="btn btn-small pres-status-filter-btn" data-filter="processed" title="Только обработанные">
+                                ✅ Обработанные
+                            </button>
+                            <button class="btn btn-small pres-status-filter-btn" data-filter="unprocessed" title="Только необработанные">
+                                ⏳ Необработанные
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Статистика фильтрации -->
+                <div id="presentationFilterStats" class="filter-stats" style="display: none; margin-bottom: 10px;">
+                    <span class="filter-stats-text">
+                        Показано: <strong>0</strong> треков (из 0 в списке)
+                    </span>
+                </div>
+
+                <!-- Поле для названия презентации -->
+                <div class="form-group">
+                    <label for="presentation-title">Название презентации:</label>
+                    <input type="text" id="presentation-title" class="form-input" placeholder="Введите название презентации">
                 </div>
 
                 <div class="form-group">
-                    <label for="presentation-title">Название презентации:</label>
-                    <input type="text" id="presentation-title" class="form-input" placeholder="Например: Дискотека 80-х, Хиты 90-х, Современные хиты..." value="Музыкальное Лото">
+                    <label for="presentationTrackList">Список треков для презентации:</label>
+                    <textarea id="presentationTrackList" class="form-input" rows="8" placeholder="Анна Асти - По барам
+Кино - Группа крови
+Моргенштерн - Повод"></textarea>
+                    <small class="text-muted">Формат: <code>Исполнитель - Название</code>. Используются только треки из медиатеки.</small>
+
+                    <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                        <button class="btn btn-secondary btn-small" onclick="clearPresentationTrackList()">
+                            🗑️ Очистить список
+                        </button>
+                        <button class="btn btn-secondary btn-small" onclick="loadProcessedTracksToList()">
+                            🎲 Случайные (обработанные)
+                        </button>
+                        <button class="btn btn-secondary btn-small" onclick="loadAllTracksToPresentationList()">
+                            📥 Все из медиатеки
+                        </button>
+                    </div>
                 </div>
 
-                <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
-                    <input type="checkbox" id="make-bw" />
-                    <span>Преобразовать фото в чёрно-белые</span>
-                </label>
+                <!-- Блок недостающих треков -->
+                <div id="missingTracksList" style="margin: 10px 0; display: none; font-family: monospace; white-space: pre-line; padding: 10px; background: #1e1e1e; color: #ff6b6b; border-radius: 6px;"></div>
 
-                <button class="btn btn-large btn-primary" onclick="generatePresentation()" id="generatePresentationBtn">
-                    🎬 Сгенерировать презентацию
-                </button>
+                <!-- Кнопка скачать недостающие треки -->
+                <div style="margin: 10px 0;">
+                    <button class="btn btn-primary" onclick="downloadMissingTracksFromPresentationList()">
+                        📥 Скачать недостающие треки
+                    </button>
+                </div>
 
-                <!-- Простой прогресс-бар генерации -->
-                <div id="presentationProgress" class="progress-section" style="display: none; margin-top: 20px;">
+                <!-- Прогресс бар скачивания -->
+                <div id="presentationDownloadProgress" class="download-progress-container" style="display: none; margin: 10px 0;">
+                    <div class="progress-info">
+                        <span id="presentationProgressStatus" class="progress-status">Подготовка...</span>
+                        <span id="presentationProgressCount" class="progress-count">0/0</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="presentationProgressFill"></div>
+                    </div>
+                    <div id="presentationProgressDetails" class="progress-details"></div>
+                </div>
+
+                <!-- Медиатека презентации -->
+                <div class="tracks-container" style="margin-top: 24px;">
+                    <div class="tracks-header-with-filter">
+                        <h3>Мини-медиатека (показано <span id="presentationTracksCount">0</span> треков):</h3>
+                        <div class="presentation-actions">
+                            <button class="btn btn-small btn-secondary" onclick="window.trackViewManager && window.trackViewManager.applyPresentationFilters()">
+                                🔄 Применить фильтр
+                            </button>
+                        </div>
+                    </div>
+                    <div class="tracks-header">
+                        <div class="col-id">#</div>
+                        <div class="col-artist">Исполнитель</div>
+                        <div class="col-title">Трек</div>
+                        <div class="col-segment">Отрезок</div>
+                        <div class="col-actions">Действия</div>
+                    </div>
+                    <div id="presentationTracksList" class="tracks-list">
+                        <div class="empty-state">
+                            <div class="icon">🎵</div>
+                            <h3>Нет треков в списке</h3>
+                            <p>Добавьте треки в список презентации</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Настройки и генерация -->
+                <div style="margin-top: 20px;">
+                    <label style="display:flex;align-items:center;gap:8px;">
+                        <input type="checkbox" id="make-bw" />
+                        <span>Преобразовать фото в чёрно-белые</span>
+                    </label>
+                </div>
+
+                <!-- Прогресс бар генерации -->
+                <div id="presentationProgress" class="progress-section" style="display: none; margin: 16px 0;">
                     <div class="progress-header">
-                        <span>Генерация:</span>
-                        <span id="presentationProgressText">Подготовка...</span>
+                        <span id="presentationProgressText">Генерация презентации...</span>
+                        <span id="presentationProgressPercent">0%</span>
                     </div>
                     <div class="progress-container">
-                        <div class="progress-bar" id="presentationProgressBar" style="width: 0%">0%</div>
+                        <div class="progress-bar" id="presentationProgressBar" style="width: 0%"></div>
                     </div>
                 </div>
 
-                <div id="presentation-status" class="status" style="margin-top: 15px;"></div>
+                <!-- Статус генерации -->
+                <div id="presentation-status" class="status" style="margin: 10px 0;"></div>
 
-                <div class="presentation-info" style="margin-top: 20px; padding: 15px; background: var(--bg-dark); border-radius: 8px;">
-                    <h4>ℹ️ Информация о генерации:</h4>
-                    <ul style="margin: 10px 0; padding-left: 20px;">
-                        <li>Презентация создается в формате PowerPoint (.pptx)</li>
-                        <li>Автоматически добавляются фото артистов</li>
-                        <li>Создаются нарезанные аудио-отрезки для каждого трека</li>
-                        <li>Для корректной работы необходимо минимум 1 трек в медиатеке</li>
-                        <li>Рекомендуется 120 треков для полной презентации</li>
-                    </ul>
-                </div>
+                <!-- Кнопка генерации -->
+                <button class="btn btn-large btn-primary" onclick="generatePresentation()" id="generatePresentationBtn" disabled>
+                    🎬 Сгенерировать презентацию
+                </button>
             </div>
         </div>
 
@@ -251,6 +463,25 @@ Michael Jackson - Billie Jean"></textarea>
                 <p>Создавайте билеты лото из треков медиатеки</p>
 
                 <div class="stats-card">
+                    <!-- Список треков для билетов -->
+                    <div class="form-group" style="margin-top: 20px;">
+                        <label for="ticketsTrackList">Список треков для билетов (только из медиатеки):</label>
+                        <textarea id="ticketsTrackList" class="form-input" rows="6" placeholder="Анна Асти - По барам
+Кино - Группа крови
+Моргенштерн - Повод"></textarea>
+                        <small class="text-muted">Формат: <code>Исполнитель - Название</code>. Только треки из медиатеки будут использованы.</small>
+                        <div style="margin-top: 8px;">
+                            <button class="btn btn-secondary btn-small" onclick="clearTicketsTrackList()">
+                                🗑️ Очистить список
+                            </button>
+                            <button class="btn btn-secondary btn-small" onclick="loadAllTracksToTicketsList()">
+                                📥 Загрузить все из медиатеки
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Результат проверки треков -->
+                    <div id="ticketsTrackValidation" class="validation-result" style="margin: 10px 0; display: none;"></div>
                     <div class="stats-grid">
                         <div class="stat-item">
                             <span class="stat-label">Статус:</span>
@@ -268,8 +499,7 @@ Michael Jackson - Billie Jean"></textarea>
                     <div class="input-group">
                         <label for="ticketsCount">Количество билетов:</label>
                         <div style="display: flex; align-items: center; gap: 10px;">
-                            <input type="number" id="ticketsCount" min="1" max="100" value="10" class="number-input">
-                            <span id="ticketsCountDisplay">10</span>
+                            <input type="number" id="ticketsCount" min="1" max="140" value="10" class="number-input">
                         </div>
                     </div>
 
@@ -401,86 +631,184 @@ Michael Jackson - Billie Jean"></textarea>
         </div>
     </div>
 
-    <div id="audioEditorModal" class="modal">
-        <div class="modal-content">
+    <!-- Аудио редактор (с ползунком воспроизведения) -->
+    <div id="audioEditorModal" class="modal audio-modal-fullscreen">
+        <div class="modal-content audio-modal-content">
             <div class="modal-header">
                 <h3>🎚️ Аудио редактор</h3>
-                <span class="close" onclick="closeAudioEditor()">&times;</span>
+                <button class="close-btn" onclick="closeAudioEditor()">&times;</button>
             </div>
-            <div class="audio-editor">
-                <div class="audio-editor-content">
-                    <div class="track-info" id="editorTrackInfo">
+
+            <div class="audio-editor-compact">
+                <!-- Основная информация в одной строке -->
+                <div class="track-header">
+                    <div class="track-info-compact" id="editorTrackInfo">
                         <h4>Загрузка информации о треке...</h4>
                     </div>
-                    <div class="waveform-section">
-                        <h4>Выбор 30-секундного отрезка</h4>
-                        <p class="text-muted">🔍 Умный анализ найдет самый насыщенный отрезок по энергии, вариативности и пиковым моментам</p>
-                        <div class="waveform-container" id="waveformContainer">
-                            <div class="waveform-loading">Генерация waveform...</div>
+                    <div class="track-stats">
+                        <div class="stat">
+                            <span class="stat-label">Длительность:</span>
+                            <span id="totalDurationDisplay" class="stat-value">00:00</span>
                         </div>
-                        <div class="timeline-display">
-                            <div class="time-info">
-                                <span id="segmentStartTime">00:00</span>
-                                <span id="segmentEndTime">00:30</span>
-                            </div>
-                            <input type="range" class="time-slider" id="timeSlider" min="0" max="100" value="0">
-                        </div>
-                        <div class="editor-controls">
-                            <button class="editor-btn" onclick="moveSegment(-5)" title="Переместить на 5 секунд назад">⏪ -5с</button>
-                            <button class="editor-btn" onclick="moveSegment(5)" title="Переместить на 5 секунд вперед">⏩ +5с</button>
-                            <button class="editor-btn" onclick="setSegmentToStart()" title="Начать с самого начала трека">⏮️ Начало</button>
-                            <button class="editor-btn" onclick="setSegmentToMiddle()" title="Поставить отрезок в середину трека">⏸️ Середина</button>
-                            <button class="editor-btn" onclick="setSegmentToEnd()" title="Поставить отрезок в конец трека">⏭️ Конец</button>
-                            <button class="editor-btn editor-btn-primary" onclick="suggestBestSegment()" title="Анализ энергии, вариативности и пиков для поиска лучшего отрезка">🎯 Умный выбор</button>
-                        </div>
-                        <div class="analysis-info" id="analysisInfo" style="display: none;">
-                            <h4>📊 Результаты анализа</h4>
-                            <div id="analysisResult"></div>
-                        </div>
-                    </div>
-                    <div class="segment-info">
-                        <div class="info-card">
-                            <h4>Начало отрезка</h4>
-                            <p id="segmentStartTimeDisplay">00:00</p>
-                        </div>
-                        <div class="info-card">
-                            <h4>Конец отрезка</h4>
-                            <p id="segmentEndTimeDisplay">00:30</p>
-                        </div>
-                        <div class="info-card">
-                            <h4>Длительность</h4>
-                            <p id="segmentDurationDisplay">30 сек</p>
-                        </div>
-                        <div class="info-card">
-                            <h4>Общая длительность</h4>
-                            <p id="totalDurationDisplay">00:00</p>
-                        </div>
-                    </div>
-                    <div class="preview-controls">
-                        <div class="preview-info">
-                            <h4>🎵 Превью отрезка</h4>
-                            <p id="previewInfo">Начните с 00:00, длительность 30 секунд</p>
-                        </div>
-                        <div class="playback-controls">
-                            <button class="playback-btn play-btn" onclick="togglePlayback()" id="playBtn">
-                                <span id="playIcon">▶️</span>
-                                <span id="playText">Воспроизвести</span>
-                            </button>
-                            <button class="playback-btn stop-btn" onclick="stopPlayback()" id="stopBtn" style="display: none;">
-                                ⏹️ Остановить
-                            </button>
-                            <span class="playback-time" id="playbackTime">--:--</span>
-                            <div class="volume-control">
-                                <span class="volume-icon" onclick="toggleMute()" id="volumeIcon">🔊</span>
-                                <input type="range" min="0" max="100" value="50" class="volume-slider" id="volumeSlider" oninput="changeVolume(this.value)">
-                                <span class="volume-value" id="volumeValue">50%</span>
-                            </div>
+                        <div class="stat">
+                            <span class="stat-label">Текущий отрезок:</span>
+                            <span id="segmentDisplay" class="stat-value">00:00-00:30</span>
                         </div>
                     </div>
                 </div>
-                <div class="editor-actions">
-                    <button class="btn btn-primary" onclick="saveSegment()">💾 Сохранить отрезок</button>
-                    <button class="btn btn-secondary" onclick="closeAudioEditor()">❌ Закрыть</button>
+
+                <!-- Визуализация + управление компактно -->
+                <div class="waveform-block">
+                    <div class="waveform-header">
+                        <h4>Waveform</h4>
+                        <div class="duration-control">
+                            <label>Длительность:</label>
+                            <div class="time-input-split">
+                                <input type="number" id="segmentDurationMinutes" class="time-input-minutes" value="0" min="0" max="2">
+                                <span class="time-separator">:</span>
+                                <input type="number" id="segmentDurationSeconds" class="time-input-seconds" value="30" min="0" max="59">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Обертка для waveform с меткой времени -->
+                    <div class="waveform-wrapper">
+                        <!-- Сам waveform контейнер -->
+                        <div class="waveform-container" id="waveformContainer">
+                            <div class="waveform-loading">Генерация waveform...</div>
+                        </div>
+
+                        <!-- Метка текущего времени ОТДЕЛЬНО НАД waveform -->
+                        <div class="time-label" id="currentTimeLabel">00:00</div>
+                    </div>
+
+                    <div class="timeline-compact">
+                        <div class="time-range">
+                            <span id="segmentStartTime">00:00</span>
+                            <input type="range" class="time-slider" id="timeSlider" min="0" max="100" value="0">
+                            <span id="segmentEndTime">00:30</span>
+                        </div>
+                        <div class="time-position">
+                            <span>Позиция:</span>
+                            <span id="timeSliderValue" class="current-time">00:00</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Быстрое управление отрезком -->
+                <div class="quick-controls">
+                    <div class="control-buttons">
+                        <button class="control-btn" onclick="setSegmentToStart()" title="В начало">
+                            ⏮️ Начало
+                        </button>
+                        <button class="control-btn" onclick="moveSegment(-5)" title="Назад 5с">
+                            ⏪ -5с
+                        </button>
+                        <button class="control-btn" onclick="moveSegment(-1)" title="Назад 1с">
+                            ⏪ -1с
+                        </button>
+                        <button class="control-btn" onclick="moveSegment(1)" title="Вперед 1с">
+                            ⏩ +1с
+                        </button>
+                        <button class="control-btn" onclick="moveSegment(5)" title="Вперед 5с">
+                            ⏩ +5с
+                        </button>
+                        <button class="control-btn" onclick="setSegmentToMiddle()" title="В середину">
+                            ⏸️ Середина
+                        </button>
+                        <button class="control-btn" onclick="setSegmentToEnd()" title="В конец">
+                            ⏭️ Конец
+                        </button>
+                        <button class="control-btn btn-smart" onclick="suggestBestSegment()" title="Умный выбор">
+                            🎯 Умный
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Точная настройка в одной строке (динамическая) -->
+                <div class="precision-controls">
+                    <div class="precision-inputs">
+                        <div class="input-group-compact">
+                            <label>Начало:</label>
+                            <div class="time-input-split">
+                                <input type="number" id="startTimeMinutes" class="time-input-minutes" value="0" min="0">
+                                <span class="time-separator">:</span>
+                                <input type="number" id="startTimeSeconds" class="time-input-seconds" value="0" min="0" max="59">
+                            </div>
+                        </div>
+                        <div class="input-group-compact">
+                            <label>Длительность:</label>
+                            <div class="time-input-split">
+                                <input type="number" id="durationTimeMinutes" class="time-input-minutes" value="0" min="0" max="2">
+                                <span class="time-separator">:</span>
+                                <input type="number" id="durationTimeSeconds" class="time-input-seconds" value="30" min="0" max="59">
+                            </div>
+                        </div>
+                        <div class="input-group-compact">
+                            <label>Конец:</label>
+                            <div class="time-display-split">
+                                <span id="endTimeMinutesDisplay" class="time-display-minutes">00</span>
+                                <span class="time-separator">:</span>
+                                <span id="endTimeSecondsDisplay" class="time-display-seconds">30</span>
+                            </div>
+                        </div>
+                        <div class="input-group-compact">
+                            <label>Сейчас играет:</label>
+                            <div id="currentAbsoluteTime" class="time-display-compact">00:00</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Плеер и громкость -->
+                <div class="player-block">
+                    <div class="player-controls">
+                        <div class="player-buttons">
+                            <button class="play-btn-compact" onclick="togglePlayback()" id="playBtn">
+                                <span id="playIcon">▶️</span>
+                                <span id="playText">Воспроизвести</span>
+                            </button>
+                            <button class="stop-btn-compact" onclick="stopPlayback()" id="stopBtn" style="display: none;">
+                                ⏹️ Остановить
+                            </button>
+                        </div>
+
+                        <div class="player-time-controls">
+                            <div class="time-display">
+                                <span id="playbackTime">00:00</span>
+                                <span class="separator">/</span>
+                                <span id="playbackTotal">00:30</span>
+                            </div>
+                            <input type="range" class="playback-slider" id="playbackSlider" min="0" max="100" value="0"
+                                   oninput="seekAudio(this.value)"
+                                   onchange="seekAudio(this.value, true)">
+                        </div>
+
+                        <div class="volume-compact">
+                            <span class="volume-icon" onclick="toggleMute()" id="volumeIcon">🔊</span>
+                            <input type="range" min="0" max="100" value="50" class="volume-slider-compact"
+                                   id="volumeSlider" oninput="changeVolume(this.value)">
+                            <span class="volume-value" id="volumeValue">50%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Кнопки действий внизу -->
+                <div class="action-buttons">
+                    <button class="btn-save-compact" onclick="saveSegment()">
+                        💾 Сохранить отрезок
+                    </button>
+                    <button class="btn-close-compact" onclick="closeAudioEditor()">
+                        ❌ Закрыть
+                    </button>
+                </div>
+
+                <!-- Анализ (скрыт по умолчанию) -->
+                <div class="analysis-collapsed" id="analysisInfo" style="display: none;">
+                    <div class="analysis-toggle" onclick="toggleAnalysis()">
+                        <span>📊 Результаты анализа</span>
+                        <span class="toggle-icon">▼</span>
+                    </div>
+                    <div id="analysisResult" class="analysis-content"></div>
                 </div>
             </div>
         </div>
@@ -508,8 +836,25 @@ Michael Jackson - Billie Jean"></textarea>
         </div>
     </div>
 
+    <!-- Глобальный аудиоплеер -->
+    <div id="globalAudioPlayer" style="position: fixed; bottom: 20px; right: 20px; width: 300px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 1000; display: none;">
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+            <div id="playingTrackInfo" style="flex: 1; font-size: 12px; color: var(--text-muted);">
+                Не воспроизводится
+            </div>
+            <button onclick="stopGlobalPlayback()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: var(--text-muted);">✕</button>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <button id="globalPlayPauseBtn" class="btn btn-small btn-secondary" style="padding: 4px 8px;">▶️</button>
+            <button id="globalStopBtn" class="btn btn-small btn-secondary" style="padding: 4px 8px;">⏹️</button>
+            <input type="range" id="globalVolumeSlider" min="0" max="100" value="50" style="flex: 1;">
+        </div>
+    </div>
+
     <script src="static/js/app.js"></script>
+    <script src="static/js/track_view_manager.js"></script>
     <script src="static/js/tickets.js"></script>
     <script src="static/js/photo_editor.js"></script>
+    <script src="static/js/photo_checker.js"></script>
 </body>
 </html>
