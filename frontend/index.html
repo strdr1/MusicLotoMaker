@@ -186,7 +186,71 @@ Michael Jackson - Billie Jean"></textarea>
                 <h2>💾 Управление файлами</h2>
                 <p class="subtitle">Работа с базовыми файлами системы</p>
             </div>
+            <!-- Блок автообновления -->
+            <div class="local-section">
+                <h3>🔄 Автообновление с GitHub</h3>
+                <p class="text-muted">Обновление приложения с репозитория strdr1/MusicLotoMaker</p>
 
+                <!-- Статус версии -->
+                <div id="versionStatus" class="version-status-card" style="margin-bottom: 20px; padding: 15px; background: var(--bg-secondary); border-radius: 8px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="font-weight: bold; margin-bottom: 5px;">Текущая версия:</div>
+                            <div id="currentVersion" style="font-family: monospace; font-size: 16px;">Загрузка...</div>
+                        </div>
+                        <div id="updateBadge" class="update-badge" style="display: none;">
+                            <span class="badge" id="updateStatusText">✓ Актуальна</span>
+                        </div>
+                    </div>
+                    <div id="versionDetails" style="margin-top: 10px; font-size: 12px; color: var(--text-muted);">
+                        <!-- Детали версии будут здесь -->
+                    </div>
+                </div>
+
+                <!-- Управление обновлениями -->
+                <div class="update-controls" style="display: flex; flex-direction: column; gap: 15px;">
+                    <!-- Проверка обновлений -->
+                    <div class="update-action">
+                        <button id="checkUpdateBtn" class="btn btn-secondary" onclick="checkForUpdates()">
+                            <span class="icon">🔄</span>
+                            Проверить обновления
+                        </button>
+                        <small class="text-muted">Проверит наличие новых версий на GitHub</small>
+                    </div>
+
+                    <!-- Установка обновления -->
+                    <div class="update-action">
+                        <button id="installUpdateBtn" class="btn btn-primary" onclick="installUpdate()" style="display: none;">
+                            <span class="icon">🚀</span>
+                            Установить обновление
+                        </button>
+                        <div id="updateInfo" style="margin-top: 5px; font-size: 12px;"></div>
+                    </div>
+
+                    <!-- Прогресс обновления -->
+                    <div id="updateProgress" style="display: none;">
+                        <div class="progress-info">
+                            <span id="updateProgressText">Выполнение обновления...</span>
+                            <span id="updateProgressPercent">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="updateProgressFill"></div>
+                        </div>
+                        <div id="updateDetails" class="progress-details" style="margin-top: 10px;"></div>
+                    </div>
+
+                    <!-- Информация о репозитории -->
+                    <div class="repo-info" style="margin-top: 20px; padding: 12px; background: var(--bg-tertiary); border-radius: 6px;">
+                        <div style="font-size: 12px; color: var(--text-muted);">
+                            <strong>Репозиторий:</strong> <span id="repoInfo">strdr1/MusicLotoMaker</span>
+                            <br>
+                            <strong>Ветка:</strong> <span id="branchInfo">master</span>
+                            <br>
+                            <small>При обновлении будут загружены все изменения с GitHub</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <!-- Скачивание из Dropbox -->
             <div class="local-section">
                 <h3>📥 Быстрое скачивание</h3>
@@ -856,5 +920,6 @@ Michael Jackson - Billie Jean"></textarea>
     <script src="static/js/tickets.js"></script>
     <script src="static/js/photo_editor.js"></script>
     <script src="static/js/photo_checker.js"></script>
+    <script src="static/js/updater.js"></script>
 </body>
 </html>

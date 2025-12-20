@@ -31,6 +31,7 @@
     <Compile Include="backend\server.py" />
     <Compile Include="backend\server_tickets_router.py" />
     <Compile Include="backend\tickets.py" />
+    <Compile Include="backend\updater.py" />
     <Compile Include="backend\__init__.py" />
     <Compile Include="dmg_settings.py" />
     <Compile Include="main.py" />
@@ -60,6 +61,7 @@
     <Content Include="frontend\index.html" />
     <Content Include="frontend\js\app.js" />
     <Content Include="frontend\js\tickets.js" />
+    <Content Include="frontend\js\updater.js" />
     <Content Include="requirements.txt" />
     <Content Include="start.bat" />
     <Content Include="templates\presentation_default.json" />

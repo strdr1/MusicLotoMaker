@@ -411,7 +411,13 @@ if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 else:
     logger.warning(f"⚠️ Папка фронтенда не найдена: {FRONTEND_DIR}")
-
+# Добавьте этот импорт после других импортов
+try:
+    from updater import updater
+    logger.info("✅ GitHub Updater импортирован успешно")
+except ImportError as e:
+    logger.error(f"❌ Ошибка импорта GitHub Updater: {e}")
+    updater = None
 # =========================
 # INITIALIZATION
 # =========================
@@ -527,6 +533,243 @@ except ImportError as e:
 except Exception as e:
     logger.error(f"❌ Другая ошибка при подключении tickets router: {e}")
 
+# =========================
+# GITHUB AUTO-UPDATE API
+# =========================
+
+@app.get("/api/updater/status")
+async def get_updater_status():
+    """Получить статус автообновителя"""
+    try:
+        if not updater:
+            return JSONResponse({
+                "success": False,
+                "error": "Автообновитель не инициализирован",
+                "current_version": "unknown",
+                "update_available": False
+            })
+        
+        status = updater.check_for_updates()
+        return status
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения статуса обновления: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "current_version": "unknown",
+            "update_available": False
+        })
+
+@app.post("/api/updater/check")
+async def check_for_updates():
+    """Проверить наличие обновлений"""
+    try:
+        if not updater:
+            return JSONResponse({
+                "success": False,
+                "error": "Автообновитель не инициализирован",
+                "message": "Проверьте настройки репозитория"
+            })
+        
+        result = updater.check_for_updates()
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки обновлений: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        })
+
+@app.post("/api/updater/install")
+async def install_update():
+    """Установить обновление"""
+    try:
+        if not updater:
+            return JSONResponse({
+                "success": False,
+                "error": "Автообновитель не инициализирован"
+            })
+        
+        logger.info("🎯 Запуск установки обновления...")
+        
+        # Проверяем наличие обновлений перед установкой
+        check_result = updater.check_for_updates()
+        if not check_result.get("success"):
+            return check_result
+        
+        if not check_result.get("update_available"):
+            return {
+                "success": False,
+                "message": "Обновлений нет",
+                "current_version": check_result["current_version"],
+                "update_available": False
+            }
+        
+        # Запускаем процесс обновления
+        update_result = updater.run_update()
+        
+        if update_result.get("success"):
+            # Получаем инструкции для перезапуска
+            restart_info = updater.restart_application()
+            
+            return {
+                "success": True,
+                "message": "Обновление успешно установлено!",
+                "new_version": update_result.get("new_version"),
+                "restart_required": True,
+                "restart_info": restart_info,
+                "backup_created": update_result.get("backup_created", False),
+                "updated_items": update_result.get("updated_items", [])
+            }
+        else:
+            return update_result
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка установки обновления: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        })
+
+@app.get("/api/updater/version")
+async def get_version_info():
+    """Получить информацию о версии"""
+    try:
+        if not updater:
+            return {
+                "current_version": "unknown",
+                "updater_available": False
+            }
+        
+        current_version = updater.current_version
+        latest_info = updater.get_latest_version()
+        
+        return {
+            "current_version": current_version,
+            "latest_version": latest_info.get("version") if latest_info else "unknown",
+            "update_available": latest_info.get("update_available") if latest_info else False,
+            "commit_info": latest_info.get("commit_info") if latest_info else {},
+            "updater_available": True,
+            "repo": f"{updater.repo_owner}/{updater.repo_name}",
+            "branch": updater.branch,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения информации о версии: {e}")
+        return {
+            "current_version": "error",
+            "updater_available": False,
+            "error": str(e)
+        }
+
+@app.get("/api/updater/backups")
+async def list_backups():
+    """Получить список резервных копий"""
+    try:
+        backup_dir = os.path.join(BASE_DIR, "backup")
+        
+        if not os.path.exists(backup_dir):
+            return {
+                "success": True,
+                "backups": [],
+                "total_backups": 0
+            }
+        
+        backups = []
+        
+        for backup_name in sorted(os.listdir(backup_dir), reverse=True):
+            backup_path = os.path.join(backup_dir, backup_name)
+            if os.path.isdir(backup_path):
+                created_time = datetime.fromtimestamp(os.path.getctime(backup_path))
+                size = sum(os.path.getsize(os.path.join(dirpath, filename)) 
+                          for dirpath, dirnames, filenames in os.walk(backup_path) 
+                          for filename in filenames)
+                
+                backups.append({
+                    "name": backup_name,
+                    "path": backup_path,
+                    "created": created_time.isoformat(),
+                    "created_formatted": created_time.strftime("%d.%m.%Y %H:%M:%S"),
+                    "size_bytes": size,
+                    "size_mb": round(size / 1024 / 1024, 2),
+                    "items_count": len([f for f in os.listdir(backup_path) if os.path.isfile(os.path.join(backup_path, f))])
+                })
+        
+        return {
+            "success": True,
+            "backups": backups,
+            "total_backups": len(backups),
+            "backup_dir": backup_dir
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения списка резервных копий: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        })
+
+@app.post("/api/updater/restore-backup")
+async def restore_from_backup(request_data: dict):
+    """Восстановить из резервной копии"""
+    try:
+        backup_name = request_data.get("backup_name")
+        if not backup_name:
+            return JSONResponse({
+                "success": False,
+                "error": "Не указано имя резервной копии"
+            })
+        
+        backup_dir = os.path.join(BASE_DIR, "backup")
+        backup_path = os.path.join(backup_dir, backup_name)
+        
+        if not os.path.exists(backup_path):
+            return JSONResponse({
+                "success": False,
+                "error": f"Резервная копия '{backup_name}' не найдена"
+            })
+        
+        logger.info(f"🔄 Восстановление из резервной копии: {backup_name}")
+        
+        # Восстанавливаем файлы
+        restored_items = []
+        
+        for item in os.listdir(backup_path):
+            source_path = os.path.join(backup_path, item)
+            dest_path = os.path.join(BASE_DIR, item)
+            
+            if os.path.exists(dest_path):
+                if os.path.isfile(dest_path):
+                    os.remove(dest_path)
+                else:
+                    shutil.rmtree(dest_path)
+            
+            if os.path.isfile(source_path):
+                shutil.copy2(source_path, dest_path)
+            else:
+                shutil.copytree(source_path, dest_path)
+            
+            restored_items.append(item)
+        
+        logger.info(f"✅ Восстановлено {len(restored_items)} элементов из резервной копии")
+        
+        return {
+            "success": True,
+            "message": f"Восстановлено из резервной копии '{backup_name}'",
+            "restored_items": restored_items,
+            "backup_name": backup_name,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка восстановления из резервной копии: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": str(e)
+        })
 # =========================
 # YANDEX TOKEN MANAGEMENT API
 # =========================
