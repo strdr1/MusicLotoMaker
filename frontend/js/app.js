@@ -5819,7 +5819,445 @@ async function updateAllStats() {
         console.error('Ошибка обновления статистики:', error);
     }
 }
+// =========================
+// ROUNDS CONFIGURATION (НОВЫЙ БЛОК)
+// =========================
 
+let roundsConfig = {
+    count: 1,
+    tracksPerRound: [40] // По умолчанию: 1 раунд, 40 треков
+};
+
+// Инициализация управления раундами
+function initRoundsControls() {
+    const roundsCountSlider = document.getElementById('roundsCountSlider');
+    const roundsCountInput = document.getElementById('roundsCount');
+    const roundsCountText = document.getElementById('roundsCountText');
+
+    if (!roundsCountSlider || !roundsCountInput) return;
+
+    // Обработчик слайдера
+    roundsCountSlider.addEventListener('input', function () {
+        const value = parseInt(this.value);
+        roundsCountInput.value = value;
+        updateRoundsCount(value);
+    });
+
+    // Обработчик числового поля
+    roundsCountInput.addEventListener('change', function () {
+        let value = parseInt(this.value);
+        if (value < 1) value = 1;
+        if (value > 3) value = 3;
+        this.value = value;
+        roundsCountSlider.value = value;
+        updateRoundsCount(value);
+    });
+
+    // Инициализация конфигурации треков для каждого раунда
+    updateRoundsUI();
+    updateRoundsSummary();
+}
+
+// Обновление количества раундов
+function updateRoundsCount(count) {
+    roundsConfig.count = count;
+
+    // Обновляем текстовое отображение
+    const roundsCountText = document.getElementById('roundsCountText');
+    if (roundsCountText) {
+        roundsCountText.textContent = count === 1 ? '1 раунд' : `${count} раунда`;
+    }
+
+    // Обновляем интерфейс настройки треков для раундов
+    updateRoundsUI();
+    updateRoundsSummary();
+    updateGenerateButtonState();
+}
+
+// Обновление UI для настройки треков по раундам
+function updateRoundsUI() {
+    const container = document.getElementById('roundsTracksContainer');
+    if (!container) return;
+
+    let html = '';
+
+    for (let i = 1; i <= roundsConfig.count; i++) {
+        // Получаем текущее значение треков для этого раунда
+        const currentTracks = roundsConfig.tracksPerRound[i - 1] || (i === 1 ? 40 : 0);
+
+        // Определяем диапазон слайдов
+        let slideRange = '';
+        if (i === 1) slideRange = '5-44';
+        else if (i === 2) slideRange = '48-87';
+        else if (i === 3) slideRange = '91-130';
+
+        html += `
+            <div style="background: var(--bg-card); padding: 10px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 10px;">
+                <h4 style="margin-top: 0; margin-bottom: 10px;">Раунд ${i}:</h4>
+                <div>
+                    <label style="display: block; margin-bottom: 5px;">Количество треков:</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="range" class="roundTracksSlider" data-round="${i}" min="1" max="40" value="${currentTracks}" style="flex: 1; height: 6px;">
+                        <input type="number" class="roundTracksInput" data-round="${i}" min="1" max="40" value="${currentTracks}" style="width: 80px; padding: 5px;">
+                        <span class="roundTracksBadge" data-round="${i}" style="background: ${currentTracks > 0 ? 'var(--success)' : 'var(--warning)'}; color: white; padding: 2px 10px; border-radius: 12px; font-size: 14px;">${currentTracks}</span>
+                    </div>
+                    <small style="color: var(--text-muted); font-size: 12px;">Слайды: ${slideRange}</small>
+                </div>
+            </div>
+        `;
+    }
+
+    container.innerHTML = html;
+
+    // Добавляем обработчики для новых элементов
+    document.querySelectorAll('.roundTracksSlider').forEach(slider => {
+        slider.addEventListener('input', function () {
+            const roundNum = parseInt(this.dataset.round);
+            const value = parseInt(this.value);
+            updateRoundTracks(roundNum, value);
+        });
+    });
+
+    document.querySelectorAll('.roundTracksInput').forEach(input => {
+        input.addEventListener('change', function () {
+            const roundNum = parseInt(this.dataset.round);
+            let value = parseInt(this.value);
+            if (value < 1) value = 1;
+            if (value > 40) value = 40;
+            this.value = value;
+            updateRoundTracks(roundNum, value);
+        });
+    });
+}
+
+// Обновление количества треков в раунде
+function updateRoundTracks(roundNum, tracks) {
+    // Обновляем массив конфигурации
+    if (!roundsConfig.tracksPerRound[roundNum - 1]) {
+        roundsConfig.tracksPerRound[roundNum - 1] = tracks;
+    } else {
+        roundsConfig.tracksPerRound[roundNum - 1] = tracks;
+    }
+
+    // Обновляем связанные элементы
+    const slider = document.querySelector(`.roundTracksSlider[data-round="${roundNum}"]`);
+    const input = document.querySelector(`.roundTracksInput[data-round="${roundNum}"]`);
+    const badge = document.querySelector(`.roundTracksBadge[data-round="${roundNum}"]`);
+
+    if (slider) slider.value = tracks;
+    if (input) input.value = tracks;
+    if (badge) {
+        badge.textContent = tracks;
+        badge.style.background = tracks > 0 ? 'var(--success)' : 'var(--warning)';
+    }
+
+    updateRoundsSummary();
+    updateGenerateButtonState();
+}
+
+// Обновление сводки по раундам
+function updateRoundsSummary() {
+    const summaryElement = document.getElementById('roundsSummaryContent');
+    const totalTracksNeededElement = document.getElementById('totalTracksNeeded');
+    const availableTracksElement = document.getElementById('availableTracksInList');
+
+    if (!summaryElement) return;
+
+    // Вычисляем общее количество нужных треков
+    let totalTracksNeeded = 0;
+    let summaryHTML = '';
+
+    for (let i = 1; i <= 3; i++) {
+        const tracksInRound = roundsConfig.tracksPerRound[i - 1] || 0;
+        let slideRange = '';
+
+        if (i === 1) slideRange = '5-44';
+        else if (i === 2) slideRange = '48-87';
+        else if (i === 3) slideRange = '91-130';
+
+        const isActive = i <= roundsConfig.count;
+        const tracksText = isActive ? `<strong>${tracksInRound} треков</strong>` : '<em>отключен</em>';
+
+        summaryHTML += `<div>Раунд ${i}: ${tracksText} (слайды ${slideRange})</div>`;
+
+        if (isActive) {
+            totalTracksNeeded += tracksInRound;
+        }
+    }
+
+    // Обновляем элементы
+    summaryElement.innerHTML = summaryHTML;
+
+    if (totalTracksNeededElement) {
+        totalTracksNeededElement.textContent = totalTracksNeeded;
+    }
+
+    if (availableTracksElement) {
+        const trackListText = document.getElementById('presentationTrackList').value.trim();
+        const tracksInList = trackListText ? trackListText.split('\n').filter(l => l.trim()).length : 0;
+        availableTracksElement.textContent = tracksInList;
+
+        // Подсвечиваем цветом
+        if (availableTracksElement.parentElement) {
+            if (tracksInList >= totalTracksNeeded) {
+                availableTracksElement.parentElement.style.color = 'var(--success)';
+            } else {
+                availableTracksElement.parentElement.style.color = 'var(--error)';
+            }
+        }
+    }
+
+    // Обновляем кнопку генерации
+    updateGenerateButtonState();
+}
+
+// Обновление состояния кнопки генерации (модифицированная)
+function updateGenerateButtonState() {
+    const generateBtn = document.getElementById('generatePresentationBtn');
+    if (!generateBtn) return;
+
+    // Вычисляем общее количество нужных треков
+    const totalTracksNeeded = roundsConfig.tracksPerRound.slice(0, roundsConfig.count).reduce((a, b) => a + b, 0);
+
+    const trackListText = document.getElementById('presentationTrackList').value.trim();
+    const tracksInList = trackListText ? trackListText.split('\n').filter(l => l.trim()).length : 0;
+
+    const hasEnoughTracks = tracksInList >= totalTracksNeeded;
+    const hasTitle = document.getElementById('presentation-title')?.value.trim().length > 0;
+
+    generateBtn.disabled = !hasEnoughTracks || !hasTitle;
+
+    if (!hasEnoughTracks) {
+        const missing = totalTracksNeeded - tracksInList;
+        generateBtn.title = `Нужно еще ${missing} треков (в списке: ${tracksInList})`;
+    } else if (!hasTitle) {
+        generateBtn.title = 'Введите название презентации';
+    } else {
+        generateBtn.title = `Сгенерировать презентацию с ${roundsConfig.count} раундами`;
+    }
+}
+
+// Модифицированная функция генерации презентации (полностью совместимая)
+async function generatePresentation() {
+    const status = document.getElementById("presentation-status");
+    const titleInput = document.getElementById("presentation-title");
+    const title = titleInput ? titleInput.value.trim() : "";
+    const makeBWCheckbox = document.getElementById("make-bw");
+    const makeBW = !!(makeBWCheckbox && makeBWCheckbox.checked);
+
+    if (!title) {
+        if (status) {
+            status.textContent = "⚠️ Пожалуйста, введите название презентации.";
+            status.style.color = "#f87171";
+        } else {
+            showNotification("⚠️ Пожалуйста, введите название презентации.", "warning");
+        }
+        return;
+    }
+
+    // Проверяем что в списке достаточно треков
+    const totalTracksNeeded = roundsConfig.tracksPerRound.slice(0, roundsConfig.count).reduce((a, b) => a + b, 0);
+    const trackListText = document.getElementById('presentationTrackList').value.trim();
+    const tracksInList = trackListText ? trackListText.split('\n').filter(l => l.trim()).length : 0;
+
+    if (tracksInList < totalTracksNeeded) {
+        const missing = totalTracksNeeded - tracksInList;
+        showNotification(`Недостаточно треков в списке: нужно еще ${missing}`, 'error');
+        return;
+    }
+
+    const generateBtn = document.getElementById('generatePresentationBtn');
+    const originalText = generateBtn.innerHTML;
+
+    try {
+        updatePresentationProgress(0, 1, 'Подготовка...');
+
+        if (status) {
+            status.textContent = "⏳ Генерация презентации...";
+            status.style.color = "#9ca3af";
+        }
+
+        generateBtn.disabled = true;
+        generateBtn.innerHTML = "⏳ Генерация...";
+
+        // Используем существующий presentationTrackList
+        if (presentationTrackList.length === 0) {
+            if (status) {
+                status.textContent = "⚠️ Нет валидных треков для генерации";
+                status.style.color = "#f87171";
+            } else {
+                showNotification("⚠️ Нет валидных треков для генерации", "warning");
+            }
+            return;
+        }
+
+        // Берем только нужное количество треков
+        const tracksForPresentation = presentationTrackList.slice(0, totalTracksNeeded);
+
+        // Подготавливаем конфигурацию раундов
+        const roundsConfigForApi = [];
+        for (let i = 0; i < roundsConfig.count; i++) {
+            roundsConfigForApi.push(roundsConfig.tracksPerRound[i] || 0);
+        }
+
+        const payload = {
+            title,
+            design: { make_bw: makeBW },
+            tracks: tracksForPresentation,
+            rounds_config: roundsConfigForApi,
+            rounds_count: roundsConfig.count
+        };
+
+        console.log("📤 Отправляем запрос на генерацию:", payload);
+
+        const response = await fetch(`${API_BASE}/generate/presentation`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+
+        const data = await response.json();
+        console.log("📥 Ответ от сервера:", data);
+
+        if (response.ok && data.success) {
+            updatePresentationProgress(1, 1, '✅ Завершено');
+
+            if (status) {
+                status.innerHTML = `✅ Презентация успешно создана!<br>
+                <a href="${data.download_url}" class="download-link" download>
+                    📥 Скачать презентацию
+                </a>`;
+                status.style.color = "#34d399";
+            }
+
+            showNotification(`✅ Презентация с ${roundsConfig.count} раундами успешно создана!`, 'success');
+
+            // Автоматическое скачивание
+            if (data.download_url) {
+                setTimeout(() => {
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = data.download_url;
+                    downloadLink.download = data.filename || 'presentation.pptx';
+                    document.body.appendChild(downloadLink);
+                    downloadLink.click();
+                    document.body.removeChild(downloadLink);
+                }, 1000);
+            }
+
+        } else {
+            updatePresentationProgress(0, 1, '❌ Ошибка');
+            const errorMsg = data.detail || data.message || "Не удалось создать презентацию";
+
+            if (status) {
+                status.textContent = "❌ Ошибка: " + errorMsg;
+                status.style.color = "#f87171";
+            } else {
+                showNotification('❌ ' + errorMsg, 'error');
+            }
+        }
+    } catch (error) {
+        console.error("❌ Ошибка при генерации презентации:", error);
+        updatePresentationProgress(0, 1, '❌ Ошибка соединения');
+
+        if (status) {
+            status.textContent = "❌ Ошибка соединения с сервером.";
+            status.style.color = "#f87171";
+        } else {
+            showNotification('❌ Ошибка соединения с сервером', 'error');
+        }
+    } finally {
+        if (generateBtn) {
+            generateBtn.disabled = false;
+            generateBtn.innerHTML = originalText;
+        }
+    }
+}
+
+// Добавляем вызов инициализации в существующий код
+document.addEventListener('DOMContentLoaded', function () {
+    console.log('🎵 Music Loto Maker инициализирован');
+    initTabs();
+    loadTracks();
+    updateTracksCount();
+    loadSystemStatus();
+    setupEventListeners();
+
+    // Инициализируем управление раундами (НОВОЕ)
+    initRoundsControls();
+
+    // Инициализация менеджера представления с задержкой
+    setTimeout(function () {
+        if (typeof initTrackViewManager === 'function') {
+            initTrackViewManager();
+        } else if (window.trackViewManager && typeof window.trackViewManager.initTrackViewManager === 'function') {
+            window.trackViewManager.initTrackViewManager();
+        }
+    }, 1000);
+
+    setInterval(updateTracksCount, 10000);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) updateTracksCount();
+    });
+});
+
+// Обновляем функцию валидации списка треков для учета раундов
+async function validatePresentationTrackList() {
+    const trackListText = document.getElementById('presentationTrackList').value;
+    const tracks = parsePresentationTrackList(trackListText);
+    const missingListEl = document.getElementById('missingTracksList');
+
+    if (tracks.length === 0) {
+        missingListEl.style.display = 'none';
+        presentationTrackList = [];
+        renderPresentationTracksCompact([]);
+        updateRoundsSummary(); // Обновляем сводку по раундам
+        return;
+    }
+
+    const missing = [];
+    const valid = [];
+
+    for (const t of tracks) {
+        const found = currentTracks.find(tr =>
+            normalizeTrackString(tr.artist) === normalizeTrackString(t.artist) &&
+            normalizeTrackString(tr.title) === normalizeTrackString(t.title)
+        );
+        if (found) {
+            valid.push({
+                ...found,
+                original_line: t.original_line
+            });
+        } else {
+            missing.push(`${t.artist} - ${t.title}`);
+        }
+    }
+
+    presentationTrackList = valid;
+    window.presentationTrackList = valid;
+
+    if (missing.length > 0) {
+        missingListEl.textContent = missing.join('\n');
+        missingListEl.style.display = 'block';
+    } else {
+        missingListEl.style.display = 'none';
+    }
+
+    renderPresentationTracksCompact(valid);
+    updateRoundsSummary(); // Обновляем сводку по раундам
+
+    // Обновляем статистику отдельно с небольшой задержкой
+    setTimeout(() => {
+        if (typeof updatePresentationMiniLibraryStats === 'function') {
+            updatePresentationMiniLibraryStats();
+        }
+    }, 100);
+}
+
+// Добавляем обработчик для поля названия
+const titleInput = document.getElementById('presentation-title');
+if (titleInput) {
+    titleInput.addEventListener('input', updateGenerateButtonState);
+}
 // Инициализация при загрузке страницы
 document.addEventListener('DOMContentLoaded', function () {
     console.log('🎵 Music Loto Maker инициализирован');

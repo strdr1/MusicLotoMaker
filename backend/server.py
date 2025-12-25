@@ -3041,7 +3041,7 @@ async def check_artist_photo(artist: str):
 
 @app.post("/api/generate/presentation")
 async def generate_presentation(request_data: dict):
-    """Генерация презентации с поддержкой кастомной длительности отрезка"""
+    """Генерация презентации с поддержкой раундов"""
     try:
         logger.info("🎬 Запуск генерации презентации...")
         
@@ -3051,6 +3051,12 @@ async def generate_presentation(request_data: dict):
             logger.info("📦 base.pptx не найден, скачиваем из Dropbox...")
             if not dropbox_storage.download_base_pptx(base_path):
                 raise HTTPException(status_code=500, detail="Не удалось скачать base.pptx из облака")
+        
+        # Получаем конфигурацию раундов
+        rounds_config = request_data.get("rounds_config", [])
+        rounds_count = request_data.get("rounds_count", 1)
+        
+        logger.info(f"📊 Конфигурация раундов: {rounds_config}, кол-во: {rounds_count}")
         
         # Проверяем наличие треков
         tracks_from_request = request_data.get("tracks")
@@ -3082,13 +3088,15 @@ async def generate_presentation(request_data: dict):
         
         generator = ModernPresentationGenerator(base_path)
         
-        # Передаем кастомную длительность в генератор
+        # Передаем конфигурацию раундов в генератор
         result_path = generator.generate(
             game_title=title,
             tracks=tracks,
             make_bw=make_bw,
             use_parallel=True,
-            segment_duration=segment_duration  # передаем кастомную длительность
+            segment_duration=segment_duration,
+            rounds_config=rounds_config,
+            rounds_count=rounds_count
         )
         
         # Получаем имя файла для скачивания
@@ -3105,7 +3113,8 @@ async def generate_presentation(request_data: dict):
                 "message": "Презентация успешно создана",
                 "download_url": download_url,
                 "filename": download_filename,
-                "path": str(result_path)
+                "path": str(result_path),
+                "rounds_config": rounds_config
             }
         else:
             raise HTTPException(status_code=500, detail="Презентация не была создана")
