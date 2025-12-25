@@ -598,6 +598,29 @@ Michael Jackson - Billie Jean"></textarea>
                 <div class="generation-card">
                     <h3>🚀 Генерация билетов</h3>
 
+                    <!-- ВЫБОР КОЛИЧЕСТВА РАУНДОВ -->
+                    <div class="form-group" style="margin-bottom: 20px; background: var(--bg-secondary); padding: 15px; border-radius: 8px;">
+                        <label style="display: block; margin-bottom: 10px; font-weight: bold;">🎯 Количество раундов:</label>
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <div class="radio-group" style="display: flex; gap: 10px;">
+                                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                                    <input type="radio" name="roundsCount" value="3" checked id="rounds3">
+                                    <span>3 раунда (полная игра)</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                                    <input type="radio" name="roundsCount" value="2" id="rounds2">
+                                    <span>2 раунда (укороченная игра)</span>
+                                </label>
+                            </div>
+                            <div id="roundsInfo" style="font-size: 12px; color: var(--text-muted);">
+                                <span>Используется файл: <strong id="currentRulesFile">tickerts_rule.png</strong></span>
+                            </div>
+                        </div>
+                        <small class="text-muted" style="display: block; margin-top: 8px;">
+                            Выберите, сколько раундов будет играться в этой игре. Это влияет только на правила в правой части билета.
+                        </small>
+                    </div>
+
                     <div class="input-group">
                         <label for="ticketsCount">Количество билетов:</label>
                         <div style="display: flex; align-items: center; gap: 10px;">
@@ -655,6 +678,10 @@ Michael Jackson - Billie Jean"></textarea>
                             <span>Треков использовано:</span>
                             <strong id="downloadTracksUsed">-</strong>
                         </div>
+                        <div class="info-item">
+                            <span>Раундов:</span>
+                            <strong id="downloadRoundsCount">3</strong>
+                        </div>
                     </div>
                     <button id="downloadTicketsBtn" class="btn btn-success" onclick="downloadGeneratedTickets()">
                         💾 Скачать ZIP архив
@@ -666,6 +693,7 @@ Michael Jackson - Billie Jean"></textarea>
                     <ul class="info-list">
                         <li>Для генерации требуется минимум <strong>36 треков</strong></li>
                         <li>Каждый билет содержит <strong>6×6 ячеек</strong> с треками</li>
+                        <li>Выберите количество раундов: <strong>2 или 3</strong></li>
                         <li>Треки автоматически обновляются каждые 15 секунд</li>
                         <li>Результат скачивается в ZIP архиве с PDF файлами</li>
                         <li>Прогресс отображается в реальном времени</li>

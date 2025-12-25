@@ -5802,16 +5802,30 @@ async function updateAllStats() {
             window.trackViewManager.updateGlobalStats();
         }
 
-        // Обновляем статистику презентации
-        if (window.trackViewManager && typeof window.trackViewManager.updatePresentationStats === 'function') {
-            window.trackViewManager.updatePresentationStats();
+        // Обновляем статистику презентации - ТОЛЬКО ЕСЛИ ЕСТЬ ТРЕКИ В СПИСКЕ
+        if (window.trackViewManager && typeof window.trackViewManager.updatePresentationFilterStats === 'function') {
+            // Проверяем, есть ли треки в списке презентаций
+            const hasPresentationTracks = window.trackViewManager.getPresentationList &&
+                window.trackViewManager.getPresentationList() &&
+                window.trackViewManager.getPresentationList().length > 0;
+
+            if (hasPresentationTracks) {
+                window.trackViewManager.updatePresentationFilterStats();
+            }
         }
 
-        // Если активна вкладка презентации, обновляем фильтры
+        // Если активна вкладка презентации, обновляем фильтры - ТОЛЬКО ЕСЛИ ЕСТЬ ТРЕКИ
         const presentationTab = document.getElementById('presentation');
         if (presentationTab && presentationTab.classList.contains('active')) {
             if (window.trackViewManager && typeof window.trackViewManager.applyPresentationFilters === 'function') {
-                window.trackViewManager.applyPresentationFilters();
+                // Проверяем, есть ли треки в списке
+                const hasPresentationTracks = window.trackViewManager.getPresentationList &&
+                    window.trackViewManager.getPresentationList() &&
+                    window.trackViewManager.getPresentationList().length > 0;
+
+                if (hasPresentationTracks) {
+                    window.trackViewManager.applyPresentationFilters();
+                }
             }
         }
 

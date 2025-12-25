@@ -1,17 +1,17 @@
-﻿// track_view_manager.js - ФИНАЛЬНАЯ ВЕРСИЯ БЕЗ ТАЙМЕРА
-// Полный код без таймера обновления хэшей
+﻿// track_view_manager.js - ФИНАЛЬНАЯ ВЕРСИЯ С ПРАВИЛЬНЫМ КЕШИРОВАНИЕМ
 
 // Проверяем, не загружен ли уже этот файл
 if (typeof window.trackViewManager !== 'undefined') {
     console.warn('⚠️ Track View Manager уже загружен, пропускаем повторную загрузку');
 } else {
-    console.log('🎵 Загрузка Track View Manager (без таймера)...');
+    console.log('🎵 Загрузка Track View Manager...');
 
     // ==================== КОНФИГУРАЦИЯ ====================
     const TRACK_VIEW_CONFIG = {
         // Система хэшей для фото
         PHOTO_HASH_ENABLED: true,
         PHOTO_HASH_KEY: 'track_photo_hash_',
+        PHOTO_HASH_TIMESTAMP_KEY: 'track_photo_timestamp_',
 
         // Настройки отображения
         DEFAULT_VIEW_MODE: 'compact',
@@ -40,12 +40,13 @@ if (typeof window.trackViewManager !== 'undefined') {
     let trackViewGlobalAudioPlayer = null;
     let trackViewPhotoHashMap = new Map();
     let isInitialized = false;
+    let photoHashVersion = 1; // Версия хэшей для инвалидации кеша
 
     // Презентации
     let trackViewPresentationTrackList = [];
     let trackViewPresentationFilterByStatus = 'all';
 
-    // ==================== СИСТЕМА ХЭШЕЙ ДЛЯ ФОТО ====================
+    // ==================== ОПТИМИЗИРОВАННАЯ СИСТЕМА ХЭШЕЙ ДЛЯ ФОТО ====================
 
     // Инициализация системы хэшей
     async function initPhotoHashSystem() {
@@ -53,11 +54,7 @@ if (typeof window.trackViewManager !== 'undefined') {
 
         await loadPhotoHashes();
 
-        setTimeout(() => {
-            applyPhotoHashesToExistingImages();
-        }, 1000);
-
-        console.log('✅ Система хэшей инициализирована (без таймера)');
+        console.log('✅ Система хэшей инициализирована');
     }
 
     // Загрузка хэшей из localStorage
@@ -69,33 +66,74 @@ if (typeof window.trackViewManager !== 'undefined') {
             if (key && key.startsWith(TRACK_VIEW_CONFIG.PHOTO_HASH_KEY)) {
                 const trackId = key.replace(TRACK_VIEW_CONFIG.PHOTO_HASH_KEY, '');
                 const hash = localStorage.getItem(key);
-                trackViewPhotoHashMap.set(parseInt(trackId), hash);
+
+                const timestampKey = TRACK_VIEW_CONFIG.PHOTO_HASH_TIMESTAMP_KEY + trackId;
+                const timestamp = localStorage.getItem(timestampKey) || Date.now();
+
+                trackViewPhotoHashMap.set(parseInt(trackId), {
+                    hash: hash,
+                    timestamp: parseInt(timestamp)
+                });
             }
         }
 
         console.log(`📊 Загружено ${trackViewPhotoHashMap.size} хэшей фото из localStorage`);
-
-        // Загружаем хэши с сервера
-        if (window.currentTracks && window.currentTracks.length > 0) {
-            await updatePhotoHashesForTracks(window.currentTracks.map(t => t.id));
-        }
     }
 
     // Сохранение хэша для трека
-    function savePhotoHash(trackId, hash) {
+    function savePhotoHash(trackId, hash, isNew = false) {
+        const existingData = trackViewPhotoHashMap.get(trackId);
+
+        // Если хэш не изменился, просто обновляем timestamp
+        if (!isNew && existingData && existingData.hash === hash) {
+            existingData.timestamp = Date.now();
+            trackViewPhotoHashMap.set(trackId, existingData);
+
+            const timestampKey = TRACK_VIEW_CONFIG.PHOTO_HASH_TIMESTAMP_KEY + trackId;
+            localStorage.setItem(timestampKey, Date.now().toString());
+
+            return false; // Хэш не изменился
+        }
+
+        // Хэш изменился или новый - увеличиваем версию
+        if (existingData && existingData.hash !== hash) {
+            photoHashVersion++;
+            console.log(`🔄 Хэш изменился для трека ${trackId}, новая версия: ${photoHashVersion}`);
+        }
+
         const key = TRACK_VIEW_CONFIG.PHOTO_HASH_KEY + trackId;
         localStorage.setItem(key, hash);
-        trackViewPhotoHashMap.set(trackId, hash);
+
+        const timestampKey = TRACK_VIEW_CONFIG.PHOTO_HASH_TIMESTAMP_KEY + trackId;
+        localStorage.setItem(timestampKey, Date.now().toString());
+
+        trackViewPhotoHashMap.set(trackId, {
+            hash: hash,
+            timestamp: Date.now()
+        });
+
+        return true; // Хэш изменился или новый
     }
 
     // Получение хэша для трека
     function getPhotoHash(trackId) {
-        return trackViewPhotoHashMap.get(trackId) || null;
+        const hashData = trackViewPhotoHashMap.get(trackId);
+        return hashData ? hashData.hash : null;
     }
 
     // Обновление хэшей для списка треков
     async function updatePhotoHashesForTracks(trackIds) {
         if (!trackIds || trackIds.length === 0) return;
+
+        // Фильтруем треки, у которых еще нет хэша
+        const tracksWithoutHash = trackIds.filter(trackId => !getPhotoHash(trackId));
+
+        if (tracksWithoutHash.length === 0) {
+            console.log('✅ Все хэши уже загружены');
+            return;
+        }
+
+        console.log(`🔍 Запрашиваем хэши для ${tracksWithoutHash.length} треков...`);
 
         try {
             const response = await fetch(TRACK_VIEW_CONFIG.PHOTO_HASH_ENDPOINT, {
@@ -104,7 +142,9 @@ if (typeof window.trackViewManager !== 'undefined') {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 },
-                body: JSON.stringify({ track_ids: trackIds })
+                body: JSON.stringify({
+                    track_ids: tracksWithoutHash
+                })
             });
 
             if (!response.ok) {
@@ -115,23 +155,29 @@ if (typeof window.trackViewManager !== 'undefined') {
             const data = await response.json();
 
             if (data.success && data.hashes) {
-                let updatedCount = 0;
+                let addedCount = 0;
 
                 for (const [trackIdStr, hashInfo] of Object.entries(data.hashes)) {
                     const trackId = parseInt(trackIdStr);
                     const hash = hashInfo.hash;
 
                     if (hash && hash !== 'no_photo' && hash !== 'missing' && hash !== 'error') {
-                        savePhotoHash(trackId, hash);
-                        updatedCount++;
+                        const existingHash = getPhotoHash(trackId);
 
-                        updateImageUrl(trackId);
+                        if (!existingHash) {
+                            savePhotoHash(trackId, hash, true);
+                            addedCount++;
+
+                            // Обновляем изображения на странице
+                            updateImageUrls(trackId);
+                        }
                     }
                 }
 
-                console.log(`📸 Обновлено ${updatedCount} хэшей с сервера`);
+                console.log(`📸 Получено ${addedCount} новых хэшей`);
+
             } else {
-                console.warn('⚠️ Некорректный ответ от сервера хэшей:', data);
+                console.warn('⚠️ Некорректный ответ от сервера хэшей');
             }
 
         } catch (error) {
@@ -139,8 +185,8 @@ if (typeof window.trackViewManager !== 'undefined') {
         }
     }
 
-    // Обновление URL изображения с хэшем
-    function updateImageUrl(trackId) {
+    // Обновление URL изображений для трека
+    function updateImageUrls(trackId) {
         const hash = getPhotoHash(trackId);
         if (!hash) return;
 
@@ -148,43 +194,35 @@ if (typeof window.trackViewManager !== 'undefined') {
 
         images.forEach(img => {
             const currentSrc = img.src;
+            const newUrl = generatePhotoUrl(trackId, hash);
 
-            try {
-                const url = new URL(currentSrc);
-                url.searchParams.set('h', hash);
-                url.searchParams.set('t', Date.now());
-
-                if (url.toString() !== currentSrc) {
-                    img.src = url.toString();
-                }
-            } catch (e) {
-                const baseUrl = `/api/tracks/${trackId}/artist-photo`;
-                img.src = `${baseUrl}?h=${hash}&t=${Date.now()}`;
+            // Обновляем только если URL изменился
+            if (currentSrc !== newUrl) {
+                img.src = newUrl;
             }
         });
     }
 
-    // Применение хэшей к существующим изображениям
-    function applyPhotoHashesToExistingImages() {
-        const images = document.querySelectorAll('img[data-track-id]');
+    // Генерация URL фото (БЕЗ timestamp для кеширования!)
+    function generatePhotoUrl(trackId, hash = null) {
+        if (!trackId) return null;
 
-        images.forEach(img => {
-            const trackId = parseInt(img.getAttribute('data-track-id'));
-            const hash = getPhotoHash(trackId);
+        const actualHash = hash || getPhotoHash(trackId);
+        const baseUrl = `/api/tracks/${trackId}/artist-photo`;
 
-            if (hash) {
-                try {
-                    const url = new URL(img.src);
-                    if (!url.searchParams.has('h')) {
-                        url.searchParams.set('h', hash);
-                        img.src = url.toString();
-                    }
-                } catch (e) {
-                    const baseUrl = `/api/tracks/${trackId}/artist-photo`;
-                    img.src = `${baseUrl}?h=${hash}&t=${Date.now()}`;
-                }
-            }
-        });
+        if (actualHash) {
+            // Используем версию хэшей вместо timestamp
+            return `${baseUrl}?h=${actualHash}&v=${photoHashVersion}`;
+        } else {
+            // Без хэша - используем timestamp чтобы избежать кеширования
+            return `${baseUrl}?t=${Date.now()}`;
+        }
+    }
+
+    // Генерация URL фото с хэшем для рендеринга
+    function generatePhotoUrlWithHash(trackId, imagePath) {
+        if (!imagePath) return null;
+        return generatePhotoUrl(trackId);
     }
 
     // ==================== ОСНОВНОЙ TRACK VIEW MANAGER ====================
@@ -624,6 +662,12 @@ if (typeof window.trackViewManager !== 'undefined') {
     function renderFilteredTracks() {
         const filteredTracks = getFilteredTracks();
 
+        // Запрашиваем хэши для отображенных треков (один раз)
+        const trackIds = filteredTracks.map(track => track.id);
+        if (trackIds.length > 0) {
+            updatePhotoHashesForTracks(trackIds);
+        }
+
         if (trackViewCurrentViewMode === 'detailed') {
             renderTracksDetailed(filteredTracks);
         } else {
@@ -633,10 +677,6 @@ if (typeof window.trackViewManager !== 'undefined') {
         updateSearchStats();
         updateFilterStats();
         updateGlobalStats();
-
-        setTimeout(() => {
-            applyPhotoHashesToExistingImages();
-        }, 100);
     }
 
     // Рендер треков в компактном виде
@@ -729,8 +769,8 @@ if (typeof window.trackViewManager !== 'undefined') {
                          data-track-id="${track.id}" 
                          alt="${escapeHtml(track.artist)}"
                          onclick="window.openPhotoEditor && window.openPhotoEditor(${track.id})"
-                         onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48dGV4dCB4PSI1MCIgeT0iNTAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPs6PzqPOlc6dzp/Oo86ZPC90ZXh0Pjwvc3ZnPg==';"
-                         onload="this.style.opacity='1'; this.style.display='block';"
+                         onerror="handleImageError(this)"
+                         onload="handleImageLoad(this)"
                          style="opacity: 1; transition: opacity 0.3s ease; display: block;">` :
                     `<div class="track-cover-placeholder" onclick="window.openPhotoEditor && window.openPhotoEditor(${track.id})" title="Добавить фото">🎵</div>`
                 }
@@ -763,6 +803,7 @@ if (typeof window.trackViewManager !== 'undefined') {
                                 onclick="playTrackSegmentFromManager(${track.id})" title="${isPlaying ? 'Остановить воспроизведение' : 'Воспроизвести отрывок'}">
                             ${isPlaying ? '⏹️' : '▶️'}
                         </button>
+                        <button class="btn btn-secondary btn-small" onclick="window.openAudioEditor && window.openPhotoEditor(${track.id})" title="Редактировать фото">🖼️</button>
                         <button class="btn btn-secondary btn-small" onclick="window.openAudioEditor && window.openAudioEditor(${track.id})" title="Аудио редактор">🎚️</button>
                         <button class="btn btn-secondary btn-small" onclick="window.editTrack && window.editTrack(${track.id})" title="Редактировать метаданные">✏️</button>
                         <button class="btn btn-success btn-small" onclick="toggleProcessedFromManager(${track.id})" 
@@ -770,7 +811,7 @@ if (typeof window.trackViewManager !== 'undefined') {
                             ${track.processed ? '❌' : '✅'}
                         </button>
                         <button class="btn btn-danger btn-small" onclick="window.deleteTrack && window.deleteTrack(${track.id})" title="Удалить">🗑️</button>
-                        <button class="btn btn-small" onclick="window.openChangeIdModal && window.openChangeIdModal(${track.id})" title="Изменить ID">#️⃣</button>
+                        <button class="btn btn-small" onclick="window.openChangeIdModal && window.openChangeIdModal(${trackId})" title="Изменить ID">#️⃣</button>
                     </div>
                 </div>
             </div>
@@ -782,7 +823,7 @@ if (typeof window.trackViewManager !== 'undefined') {
         const container = document.getElementById('presentationTracksList');
         if (!container) return;
 
-        if (tracks.length === 0) {
+        if (!tracks || tracks.length === 0) {
             const noResultsMessage = trackViewPresentationFilterByStatus !== 'all'
                 ? `<div class="empty-state">
                     <div class="icon">🔍</div>
@@ -807,8 +848,9 @@ if (typeof window.trackViewManager !== 'undefined') {
                     `<img src="${photoUrl}" 
                           alt="${escapeHtml(track.artist)}"
                           class="track-cover"
-                          onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgdmlld0JveD0iMCAwIDEwMCAxMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIGZpbGw9IiNmMWYxZjEiLz48dGV4dCB4PSI1MCIgeT0iNTAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPs6PzqPOlc6dzp/Oo86ZPC90ZXh0Pjwvc3ZnPg==';"
-                          onload="this.style.opacity='1';">` :
+                          onerror="handleImageError(this)"
+                          onload="handleImageLoad(this)"
+                          style="opacity: 1;">` :
                     `<div class="track-cover empty">🎵</div>`
                 }
                     <span>${escapeHtml(track.artist)}</span>
@@ -828,20 +870,6 @@ if (typeof window.trackViewManager !== 'undefined') {
             </div>
             `;
         }).join('');
-    }
-
-    // Генерация URL фото с хэшем
-    function generatePhotoUrlWithHash(trackId, imagePath) {
-        if (!imagePath) return null;
-
-        const hash = getPhotoHash(trackId);
-        const baseUrl = `/api/tracks/${trackId}/artist-photo`;
-
-        if (hash) {
-            return `${baseUrl}?h=${hash}&t=${Date.now()}`;
-        } else {
-            return `${baseUrl}?t=${Date.now()}`;
-        }
     }
 
     // Обработчики для изображений
@@ -1272,6 +1300,11 @@ if (typeof window.trackViewManager !== 'undefined') {
         applyPresentationFilters();
     }
 
+    // Функция для получения списка презентаций
+    function getPresentationList() {
+        return trackViewPresentationTrackList;
+    }
+
     // Экспорт функций в глобальную область видимости
     window.trackViewManager = {
         // Основные функции
@@ -1293,16 +1326,18 @@ if (typeof window.trackViewManager !== 'undefined') {
         formatTime: formatTime,
         applyPresentationFilters: applyPresentationFilters,
         refreshPresentationTrackDisplay: refreshPresentationTrackDisplay,
+        updatePresentationFilterStats: updatePresentationFilterStats,
 
         // Система хэшей
         initPhotoHashSystem: initPhotoHashSystem,
-        updateAllPhotoHashes: updateAllPhotoHashes,
-        applyPhotoHashesToExistingImages: applyPhotoHashesToExistingImages,
         getPhotoHash: getPhotoHash,
         savePhotoHash: savePhotoHash,
+        updatePhotoHashesForTracks: updatePhotoHashesForTracks,
+        generatePhotoUrl: generatePhotoUrl,
 
         // Функция для презентации
         setPresentationTrackList: setPresentationTrackList,
+        getPresentationList: getPresentationList
     };
 
     // Глобальные функции для совместимости
@@ -1313,19 +1348,16 @@ if (typeof window.trackViewManager !== 'undefined') {
     window.updateGlobalStats = updateGlobalStats;
     window.initTrackViewManager = initTrackViewManager;
     window.setPresentationTrackList = setPresentationTrackList;
+    window.getPresentationList = getPresentationList;
 
     // Инициализация при загрузке
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () {
-            setTimeout(() => {
-                initTrackViewManager();
-            }, 1500);
+            initTrackViewManager();
         });
     } else {
-        setTimeout(() => {
-            initTrackViewManager();
-        }, 1500);
+        initTrackViewManager();
     }
 
-    console.log('✅ Track View Manager загружен (без таймера)');
+    console.log('✅ Track View Manager загружен с правильным кешированием');
 }

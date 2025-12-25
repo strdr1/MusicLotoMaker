@@ -1,5 +1,4 @@
-﻿# tickets_router.py
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+﻿from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 import os
 import logging
@@ -57,9 +56,14 @@ async def generate_tickets_endpoint(payload: dict):
     logger.info("🎫 === Генерация билетов ===")
     try:
         count = int(payload.get("count", 10))
+        rounds = int(payload.get("rounds", 3))  # ← Получаем количество раундов
         design = payload.get("design", {})
+        
         if count < 1 or count > 100:
             raise HTTPException(status_code=400, detail="Количество билетов должно быть от 1 до 100")
+        
+        if rounds not in [2, 3]:
+            raise HTTPException(status_code=400, detail="Количество раундов должно быть 2 или 3")
 
         if media_library is None or ticket_gen is None:
             raise HTTPException(status_code=500, detail="Генератор не инициализирован")
@@ -119,7 +123,7 @@ async def generate_tickets_endpoint(payload: dict):
                 loop
             )
 
-        await send_progress_update(0, count, "Подготовка к генерации...")
+        await send_progress_update(0, count, f"Подготовка к генерации ({rounds} раунда)...")
 
         with ThreadPoolExecutor() as executor:
             generation_result = await loop.run_in_executor(
@@ -128,7 +132,8 @@ async def generate_tickets_endpoint(payload: dict):
                 tracks,
                 count,
                 design,
-                sync_progress_callback
+                sync_progress_callback,
+                rounds  # ← передаем количество раундов
             )
 
         if not generation_result.get("success"):
@@ -143,11 +148,12 @@ async def generate_tickets_endpoint(payload: dict):
 
         return {
             "success": True,
-            "message": f"Сгенерировано {count} билетов",
+            "message": f"Сгенерировано {count} билетов ({rounds} раунда)",
             "zip_file": generation_result.get("zip_file"),
             "download_url": generation_result.get("download_url"),
             "tickets_count": count,
-            "tracks_used": len(tracks)
+            "tracks_used": len(tracks),
+            "rounds": rounds
         }
 
     except HTTPException:

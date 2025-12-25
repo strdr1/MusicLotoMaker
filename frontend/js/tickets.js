@@ -1,9 +1,10 @@
-﻿// static/js/tickets.js - Полная версия с прогрессом, WebSocket и кастомным списком треков
+﻿// static/js/tickets.js - Полная версия с прогрессом, WebSocket, кастомным списком треков и выбором раундов
 const API_BASE_URL = '/api';
 let allTracks = [];
 let ticketsTrackList = []; // ← Новый список треков для билетов
 let autoRefreshInterval = null;
 let progressWebSocket = null;
+let selectedRounds = 3; // По умолчанию 3 раунда
 
 /** Подключение к WebSocket для прогресса */
 function connectProgressWebSocket() {
@@ -314,7 +315,7 @@ function updateProgressBar(current, total, message = '') {
     }
 }
 
-// === НОВЫЕ ФУНКЦИИ ДЛЯ КАСТОМНОГО СПИСКА ТРЕКОВ ===
+// === ФУНКЦИИ ДЛЯ КАСТОМНОГО СПИСКА ТРЕКОВ ===
 
 function normalizeTrackString(str) {
     return str.toLowerCase().replace(/[^\wа-яё]/g, '');
@@ -362,7 +363,6 @@ async function validateTicketsTrackList() {
     const valid = [];
 
     for (const line of lines) {
-        // Парсим строку (очищаем от нумерации и лишних символов)
         let cleanLine = line
             .replace(/^\d+\.\s*/, '')
             .replace(/^\d+\)\s*/, '')
@@ -386,7 +386,6 @@ async function validateTicketsTrackList() {
             title = cleanLine;
         }
 
-        // Сравниваем с медиатекой
         const found = allTracks.find(t =>
             normalizeTrackString(t.artist) === normalizeTrackString(artist) &&
             normalizeTrackString(t.title) === normalizeTrackString(title)
@@ -396,7 +395,6 @@ async function validateTicketsTrackList() {
         if (found) valid.push(found);
     }
 
-    // Формируем HTML с подсветкой
     let html = '<div class="validation-items">';
     results.forEach(r => {
         const cls = r.found ? 'valid-item' : 'invalid-item';
@@ -446,7 +444,28 @@ function loadAllTracksToTicketsList() {
     setTimeout(validateTicketsTrackList, 100);
 }
 
-// === КОНЕЦ НОВЫХ ФУНКЦИЙ ===
+// === ФУНКЦИИ ВЫБОРА РАУНДОВ ===
+
+function updateRoundsSelection() {
+    const rounds3 = document.getElementById('rounds3');
+    const rounds2 = document.getElementById('rounds2');
+    const currentRulesFile = document.getElementById('currentRulesFile');
+    const downloadRoundsCount = document.getElementById('downloadRoundsCount');
+
+    if (rounds3 && rounds3.checked) {
+        selectedRounds = 3;
+        if (currentRulesFile) currentRulesFile.textContent = 'tickerts_rule.png';
+        if (downloadRoundsCount) downloadRoundsCount.textContent = '3';
+    } else if (rounds2 && rounds2.checked) {
+        selectedRounds = 2;
+        if (currentRulesFile) currentRulesFile.textContent = 'tickerts_rule_2.png';
+        if (downloadRoundsCount) downloadRoundsCount.textContent = '2';
+    }
+
+    console.log(`✅ Выбрано раундов: ${selectedRounds}`);
+}
+
+// === ОСНОВНАЯ ФУНКЦИЯ ГЕНЕРАЦИИ ===
 
 /** Генерация билетов с прогресс-баром */
 async function generateTickets() {
@@ -458,7 +477,6 @@ async function generateTickets() {
 
     const actualTracks = ticketsTrackList.length > 0 ? ticketsTrackList : allTracks;
 
-    // 🔴 КРИТИЧЕСКАЯ ПРОВЕРКА: если используется кастомный список
     if (ticketsTrackList.length > 0) {
         const inputText = document.getElementById('ticketsTrackList')?.value || '';
         const inputLines = inputText.split('\n').map(l => l.trim()).filter(l => l);
@@ -491,7 +509,8 @@ async function generateTickets() {
 
         const payload = {
             count,
-            tracks: actualTracks, // ← именно валидированный список!
+            rounds: selectedRounds, // ← добавляем количество раундов
+            tracks: actualTracks,
             design: {
                 font_family: 'Arial',
                 title_size: 20,
@@ -502,6 +521,8 @@ async function generateTickets() {
                 uppercase: true
             }
         };
+
+        console.log(`🎯 Генерация билетов: ${count} шт, ${selectedRounds} раунда(ов)`);
 
         const resp = await fetch('/api/tickets/generate', {
             method: 'POST',
@@ -518,6 +539,7 @@ async function generateTickets() {
                 document.getElementById('downloadFileName').textContent = result.zip_file || '-';
                 document.getElementById('downloadTicketsCount').textContent = result.tickets_count || count;
                 document.getElementById('downloadTracksUsed').textContent = result.tracks_used || actualTracks.length;
+                document.getElementById('downloadRoundsCount').textContent = selectedRounds || result.rounds || '3';
                 downloadSection.style.display = 'block';
             }
 
@@ -603,6 +625,12 @@ function attachTicketEvents() {
         ticketsTrackListInput.addEventListener('input', debounce(validateTicketsTrackList, 500));
     }
 
+    // Обработчики выбора раундов
+    const rounds3 = document.getElementById('rounds3');
+    const rounds2 = document.getElementById('rounds2');
+    if (rounds3) rounds3.addEventListener('change', updateRoundsSelection);
+    if (rounds2) rounds2.addEventListener('change', updateRoundsSelection);
+
     console.log('✅ События билетов привязаны');
 }
 
@@ -610,6 +638,9 @@ function attachTicketEvents() {
 function initializeTicketsModule() {
     console.log('🎫 Инициализация модуля билетов...');
     connectProgressWebSocket();
+
+    // Установка выбора раундов по умолчанию
+    updateRoundsSelection();
 
     const isTicketsTabActive = () => {
         const ticketsContent = document.getElementById('tickets');
@@ -646,5 +677,6 @@ window.ticketsDebug = {
         loadTracksForTickets(true).catch(console.error);
     },
     getTracks: () => allTracks,
-    getCustomTracks: () => ticketsTrackList
+    getCustomTracks: () => ticketsTrackList,
+    getSelectedRounds: () => selectedRounds
 };

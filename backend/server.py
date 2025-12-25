@@ -568,8 +568,7 @@ async def check_for_updates():
         if not updater:
             return JSONResponse({
                 "success": False,
-                "error": "Автообновитель не инициализирован",
-                "message": "Проверьте настройки репозитория"
+                "error": "Автообновитель не инициализирован"
             })
         
         result = updater.check_for_updates()
@@ -582,6 +581,7 @@ async def check_for_updates():
             "error": str(e)
         })
 
+
 @app.post("/api/updater/install")
 async def install_update():
     """Установить обновление"""
@@ -592,35 +592,19 @@ async def install_update():
                 "error": "Автообновитель не инициализирован"
             })
         
-        logger.info("🎯 Запуск установки обновления...")
+        logger.info("🎯 Установка обновления...")
         
-        # Проверяем наличие обновлений
-        check_result = updater.check_for_updates()
-        if not check_result.get("success"):
-            return check_result
+        result = updater.run_update()
         
-        if not check_result.get("update_available"):
-            return {
-                "success": False,
-                "message": "Обновлений нет",
-                "current_version": check_result["current_version"],
-                "update_available": False
-            }
-        
-        # Запускаем обновление
-        update_result = updater.run_update()
-        
-        if update_result.get("success"):
+        if result.get("success"):
             return {
                 "success": True,
-                "message": "Обновление успешно установлено!",
-                "new_version": update_result.get("new_version"),
-                "restart_required": True,
-                "backup_created": update_result.get("backup_created", False),
-                "updated_items": update_result.get("updated_items", [])
+                "message": result.get("message", "Обновление установлено"),
+                "new_version": result.get("new_version"),
+                "updated_count": result.get("updated_count", 0)
             }
         else:
-            return update_result
+            return result
         
     except Exception as e:
         logger.error(f"❌ Ошибка установки обновления: {e}")
@@ -628,6 +612,49 @@ async def install_update():
             "success": False,
             "error": str(e)
         })
+
+@app.get("/api/updater/debug")
+async def debug_updater():
+    """Отладочная информация об обновителе"""
+    try:
+        if not updater:
+            return {
+                "updater_available": False,
+                "error": "Обновитель не инициализирован"
+            }
+        
+        # Тестовые запросы
+        debug_info = {
+            "updater_available": True,
+            "current_version": updater.current_version,
+            "repo": f"{updater.repo_owner}/{updater.repo_name}",
+            "base_dir": updater.base_dir,
+            "version_file": updater.version_file,
+            "version_file_exists": os.path.exists(updater.version_file),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Пробуем сделать тестовый запрос к GitHub
+        try:
+            test_url = f"https://api.github.com/repos/{updater.repo_owner}/{updater.repo_name}"
+            response = requests.get(test_url, timeout=5)
+            debug_info["github_api_test"] = {
+                "status_code": response.status_code,
+                "success": response.status_code == 200
+            }
+        except Exception as e:
+            debug_info["github_api_test"] = {
+                "error": str(e)
+            }
+        
+        return debug_info
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка отладки: {e}")
+        return {
+            "error": str(e),
+            "updater_available": False
+        }
 
 @app.get("/api/updater/version")
 async def get_version_info():
@@ -639,14 +666,41 @@ async def get_version_info():
                 "updater_available": False
             }
         
+        # Получаем текущую версию
         current_version = updater.current_version
-        latest_info = updater.get_latest_version()
+        
+        # Пытаемся получить информацию о последней версии
+        try:
+            latest_release = updater.get_latest_release()
+            if latest_release:
+                latest_version = latest_release["version"]
+                is_release = True
+                commit_info = {}
+            else:
+                latest_commit = updater.get_latest_commit()
+                if latest_commit:
+                    latest_version = latest_commit["version"]
+                    is_release = False
+                    commit_info = latest_commit.get("commit_info", {})
+                else:
+                    latest_version = current_version
+                    is_release = False
+                    commit_info = {}
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения информации о версии: {e}")
+            latest_version = current_version
+            is_release = False
+            commit_info = {}
+        
+        # Проверяем наличие обновления
+        update_available = current_version != latest_version
         
         return {
             "current_version": current_version,
-            "latest_version": latest_info.get("version") if latest_info else "unknown",
-            "update_available": latest_info and updater.compare_versions(current_version, latest_info["version"]) < 0,
-            "commit_info": latest_info.get("commit_info") if latest_info else {},
+            "latest_version": latest_version,
+            "update_available": update_available,
+            "is_release": is_release,
+            "commit_info": commit_info,
             "updater_available": True,
             "repo": f"{updater.repo_owner}/{updater.repo_name}",
             "timestamp": datetime.now().isoformat()
@@ -659,6 +713,7 @@ async def get_version_info():
             "updater_available": False,
             "error": str(e)
         }
+
 
 @app.get("/api/updater/backups")
 async def list_backups():

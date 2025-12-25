@@ -1,401 +1,244 @@
 ﻿/**
- * GitHub Auto-Updater для фронтенда
+ * Простой автообновитель
  */
 
-class GitHubUpdaterUI {
-    constructor() {
-        this.currentVersion = 'unknown';
-        this.latestVersion = 'unknown';
-        this.updateAvailable = false;
-        this.updateInProgress = false;
+let currentVersion = 'unknown';
+let latestVersion = 'unknown';
+let updateAvailable = false;
 
-        // Элементы UI
-        this.elements = {
-            currentVersion: document.getElementById('currentVersion'),
-            versionDetails: document.getElementById('versionDetails'),
-            updateBadge: document.getElementById('updateBadge'),
-            updateStatusText: document.getElementById('updateStatusText'),
-            checkUpdateBtn: document.getElementById('checkUpdateBtn'),
-            installUpdateBtn: document.getElementById('installUpdateBtn'),
-            updateInfo: document.getElementById('updateInfo'),
-            updateProgress: document.getElementById('updateProgress'),
-            updateProgressText: document.getElementById('updateProgressText'),
-            updateProgressPercent: document.getElementById('updateProgressPercent'),
-            updateProgressFill: document.getElementById('updateProgressFill'),
-            updateDetails: document.getElementById('updateDetails'),
-            repoInfo: document.getElementById('repoInfo'),
-            branchInfo: document.getElementById('branchInfo')
-        };
+// Элементы
+function getElement(id) {
+    return document.getElementById(id);
+}
 
-        this.initialize();
+// Загрузить информацию о версии
+async function loadVersionInfo() {
+    try {
+        const response = await fetch('/api/updater/version');
+        const data = await response.json();
+
+        currentVersion = data.current_version || 'unknown';
+        latestVersion = data.latest_version || currentVersion;
+        updateAvailable = data.update_available || false;
+
+        // Обновляем UI
+        updateUI(data);
+
+        return data;
+    } catch (error) {
+        console.error('Ошибка загрузки версии:', error);
+        showError('Не удалось загрузить информацию о версии');
+        return null;
     }
+}
 
-    async initialize() {
-        try {
-            await this.loadVersionInfo();
-            await this.loadRepoInfo();
+// Обновить UI
+function updateUI(data) {
+    const currentVersionEl = getElement('currentVersion');
+    const versionDetailsEl = getElement('versionDetails');
+    const updateBadgeEl = getElement('updateBadge');
+    const updateStatusTextEl = getElement('updateStatusText');
+    const installUpdateBtn = getElement('installUpdateBtn');
 
-            // Автопроверка через 3 секунды
-            setTimeout(() => this.checkForUpdates(false), 3000);
+    if (!currentVersionEl) return;
 
-        } catch (error) {
-            console.error('Ошибка инициализации:', error);
-            this.showError('Ошибка инициализации автообновителя');
-        }
-    }
+    // Текущая версия
+    currentVersionEl.textContent = currentVersion;
 
-    async loadVersionInfo() {
-        try {
-            const response = await fetch('/api/updater/version');
-            const data = await response.json();
+    // Бейдж статуса
+    if (updateBadgeEl) {
+        updateBadgeEl.style.display = 'block';
 
-            this.currentVersion = data.current_version;
-            this.latestVersion = data.latest_version || this.currentVersion;
-            this.updateAvailable = data.update_available || false;
-
-            this.updateVersionDisplay(data);
-
-            return data;
-
-        } catch (error) {
-            console.error('Ошибка загрузки версии:', error);
-            this.elements.currentVersion.textContent = 'Ошибка загрузки';
-            this.showError('Не удалось загрузить информацию о версии');
-            return null;
-        }
-    }
-
-    async loadRepoInfo() {
-        try {
-            const response = await fetch('/api/updater/version');
-            const data = await response.json();
-
-            if (data.repo) {
-                this.elements.repoInfo.textContent = data.repo;
-                this.elements.branchInfo.textContent = 'master';
-            }
-
-            return data;
-
-        } catch (error) {
-            console.error('Ошибка загрузки репозитория:', error);
-            return null;
-        }
-    }
-
-    updateVersionDisplay(data) {
-        // Отображаем текущую версию
-        this.elements.currentVersion.textContent = this.currentVersion;
-
-        // Обновляем бейдж
         if (data.update_available) {
-            this.elements.updateBadge.style.display = 'block';
-            this.elements.updateStatusText.textContent = 'Доступно обновление';
-            this.elements.updateStatusText.className = 'badge badge-warning';
+            updateStatusTextEl.textContent = 'Доступно обновление';
+            updateStatusTextEl.className = 'badge badge-warning';
 
-            // Информация об обновлении
-            let details = `Доступна новая версия: <strong>${this.latestVersion}</strong><br>`;
+            // Информация
+            let details = `Доступна новая версия: <strong>${latestVersion}</strong>`;
             if (data.commit_info && data.commit_info.message) {
-                details += `Коммит: ${data.commit_info.message}<br>`;
-            }
-            if (data.commit_info && data.commit_info.date) {
-                const date = new Date(data.commit_info.date);
-                details += `Дата: ${date.toLocaleDateString()}`;
+                details += `<br>${data.commit_info.message}`;
             }
 
-            this.elements.versionDetails.innerHTML = details;
+            if (versionDetailsEl) {
+                versionDetailsEl.innerHTML = details;
+            }
 
             // Показываем кнопку установки
-            this.elements.installUpdateBtn.style.display = 'inline-block';
-            this.elements.updateInfo.innerHTML = `<span style="color: #ff922b;">Доступно обновление ${this.latestVersion}</span>`;
-
+            if (installUpdateBtn) {
+                installUpdateBtn.style.display = 'inline-block';
+            }
         } else {
-            this.elements.updateBadge.style.display = 'block';
-            this.elements.updateStatusText.textContent = 'Актуальна';
-            this.elements.updateStatusText.className = 'badge badge-success';
+            updateStatusTextEl.textContent = 'Актуальна';
+            updateStatusTextEl.className = 'badge badge-success';
 
-            let details = 'У вас установлена последняя версия<br>';
-            if (data.commit_info && data.commit_info.date) {
-                const date = new Date(data.commit_info.date);
-                details += `Последнее обновление: ${date.toLocaleDateString()}`;
+            if (versionDetailsEl) {
+                versionDetailsEl.innerHTML = 'У вас установлена последняя версия';
             }
 
-            this.elements.versionDetails.innerHTML = details;
-            this.elements.installUpdateBtn.style.display = 'none';
-            this.elements.updateInfo.innerHTML = '';
+            if (installUpdateBtn) {
+                installUpdateBtn.style.display = 'none';
+            }
         }
     }
+}
 
-    async checkForUpdates(showNotification = true) {
-        try {
-            if (this.updateInProgress) {
-                this.showWarning('Обновление уже выполняется');
-                return;
-            }
+// Проверить обновления
+async function checkForUpdates() {
+    try {
+        const checkBtn = getElement('checkUpdateBtn');
+        if (checkBtn) {
+            checkBtn.disabled = true;
+            checkBtn.innerHTML = '⏳ Проверка...';
+        }
 
-            if (showNotification) {
-                this.showInfo('Проверка обновлений...');
-            }
+        showNotification('Проверка обновлений...', 'info');
 
-            this.elements.checkUpdateBtn.disabled = true;
-            this.elements.checkUpdateBtn.innerHTML = '<span class="icon">⏳</span> Проверка...';
+        const response = await fetch('/api/updater/check', {
+            method: 'POST'
+        });
 
-            const response = await fetch('/api/updater/check', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
+        const result = await response.json();
 
-            const result = await response.json();
-
-            this.updateAvailable = result.update_available || false;
-
-            if (result.success) {
-                if (result.update_available) {
-                    this.latestVersion = result.latest_version;
-                    this.updateVersionDisplay(result);
-
-                    if (showNotification) {
-                        this.showSuccess(`Доступно обновление ${result.latest_version}`);
-                    }
-                } else {
-                    if (showNotification) {
-                        this.showSuccess('У вас установлена последняя версия');
-                    }
-                }
+        if (result.success) {
+            if (result.update_available) {
+                showNotification(`Доступно обновление ${result.latest_version}`, 'success');
+                updateUI(result);
             } else {
-                this.showError(result.error || 'Ошибка проверки обновлений');
+                showNotification('Установлена последняя версия', 'info');
             }
-
-        } catch (error) {
-            console.error('Ошибка проверки обновлений:', error);
-            this.showError('Ошибка соединения с сервером');
-        } finally {
-            this.elements.checkUpdateBtn.disabled = false;
-            this.elements.checkUpdateBtn.innerHTML = '<span class="icon">🔄</span> Проверить обновления';
-        }
-    }
-
-    async installUpdate() {
-        try {
-            if (this.updateInProgress) {
-                this.showWarning('Обновление уже выполняется');
-                return;
-            }
-
-            if (!this.updateAvailable) {
-                this.showWarning('Обновлений нет');
-                return;
-            }
-
-            if (!confirm(`Установить обновление ${this.latestVersion}?\n\nПриложение будет перезапущено после установки.`)) {
-                return;
-            }
-
-            this.updateInProgress = true;
-
-            this.showProgress('Начало установки обновления...', 0);
-
-            const response = await fetch('/api/updater/install', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                }
-            });
-
-            const result = await response.json();
-
-            if (result.success) {
-                this.showProgress('Обновление успешно установлено!', 100);
-
-                setTimeout(() => {
-                    let message = `🎉 Обновление успешно установлено!\n\n`;
-                    message += `Новая версия: ${result.new_version}\n`;
-                    message += `Обновлено файлов: ${result.updated_items?.length || 0}\n\n`;
-                    message += 'Приложение будет перезапущено через 5 секунд.';
-
-                    alert(message);
-
-                    setTimeout(() => {
-                        location.reload();
-                    }, 5000);
-                }, 1000);
-
-            } else {
-                this.showError(result.error || 'Ошибка установки обновления');
-                this.updateInProgress = false;
-            }
-
-        } catch (error) {
-            console.error('Ошибка установки обновления:', error);
-            this.showError('Ошибка установки обновления');
-            this.updateInProgress = false;
-        }
-    }
-
-    showProgress(message, percent) {
-        this.elements.updateProgress.style.display = 'block';
-        this.elements.updateProgressText.textContent = message;
-        this.elements.updateProgressPercent.textContent = `${percent}%`;
-        this.elements.updateProgressFill.style.width = `${percent}%`;
-
-        if (percent < 100) {
-            this.elements.updateDetails.innerHTML = `
-                <div>⏳ Выполняется обновление...</div>
-                <div style="font-size: 11px; margin-top: 5px;">Не закрывайте вкладку</div>
-            `;
         } else {
-            this.elements.updateDetails.innerHTML = `
-                <div>✅ Обновление завершено!</div>
-                <div style="font-size: 11px; margin-top: 5px;">Приложение скоро перезагрузится</div>
-            `;
+            showNotification(result.error || 'Ошибка проверки', 'error');
+        }
+    } catch (error) {
+        console.error('Ошибка проверки:', error);
+        showNotification('Ошибка соединения', 'error');
+    } finally {
+        const checkBtn = getElement('checkUpdateBtn');
+        if (checkBtn) {
+            checkBtn.disabled = false;
+            checkBtn.innerHTML = '🔄 Проверить обновления';
         }
     }
+}
 
-    showInfo(message) {
-        this.showNotification(message, '#339af0');
+// Установить обновление
+async function installUpdate() {
+    if (!updateAvailable) {
+        showNotification('Обновлений нет', 'warning');
+        return;
     }
 
-    showSuccess(message) {
-        this.showNotification(message, '#51cf66');
+    if (!confirm(`Установить обновление ${latestVersion}?`)) {
+        return;
     }
 
-    showWarning(message) {
-        this.showNotification(message, '#ff922b');
-    }
+    try {
+        showProgress('Начало установки...', 0);
 
-    showError(message) {
-        this.showNotification(message, '#ff6b6b');
-    }
+        const response = await fetch('/api/updater/install', {
+            method: 'POST'
+        });
 
-    showNotification(message, color) {
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 12px 20px;
-            background: ${color};
-            color: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-            z-index: 9999;
-            max-width: 400px;
-            animation: slideIn 0.3s ease;
-        `;
+        const result = await response.json();
 
-        notification.textContent = message;
-        document.body.appendChild(notification);
+        if (result.success) {
+            showProgress('Обновление установлено!', 100);
 
-        setTimeout(() => {
-            notification.style.animation = 'slideOut 0.3s ease';
             setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.parentNode.removeChild(notification);
-                }
-            }, 300);
-        }, 5000);
+                alert(`✅ Обновление ${result.new_version} установлено!\n\nПриложение будет перезапущено.`);
+                setTimeout(() => location.reload(), 2000);
+            }, 1000);
+        } else {
+            showNotification(result.error || 'Ошибка установки', 'error');
+        }
+    } catch (error) {
+        console.error('Ошибка установки:', error);
+        showNotification('Ошибка установки', 'error');
     }
+}
+
+// Показать прогресс
+function showProgress(message, percent) {
+    const progressEl = getElement('updateProgress');
+    const progressTextEl = getElement('updateProgressText');
+    const progressPercentEl = getElement('updateProgressPercent');
+    const progressFillEl = getElement('updateProgressFill');
+
+    if (progressEl) progressEl.style.display = 'block';
+    if (progressTextEl) progressTextEl.textContent = message;
+    if (progressPercentEl) progressPercentEl.textContent = `${percent}%`;
+    if (progressFillEl) progressFillEl.style.width = `${percent}%`;
+}
+
+// Показать уведомление
+function showNotification(message, type = 'info') {
+    const colors = {
+        info: '#339af0',
+        success: '#51cf66',
+        warning: '#ff922b',
+        error: '#ff6b6b'
+    };
+
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 12px 20px;
+        background: ${colors[type] || colors.info};
+        color: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        z-index: 9999;
+        animation: slideIn 0.3s ease;
+    `;
+
+    notification.textContent = message;
+    document.body.appendChild(notification);
+
+    setTimeout(() => {
+        notification.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
+}
+
+// Показать ошибку
+function showError(message) {
+    showNotification(message, 'error');
 }
 
 // Инициализация
-document.addEventListener('DOMContentLoaded', () => {
-    const localTab = document.getElementById('local');
-    if (localTab && localTab.classList.contains('active')) {
-        window.updaterUI = new GitHubUpdaterUI();
-    }
+document.addEventListener('DOMContentLoaded', function () {
+    // Загружаем информацию о версии
+    setTimeout(() => {
+        loadVersionInfo();
 
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const tab = btn.dataset.tab;
-            if (tab === 'local') {
-                setTimeout(() => {
-                    if (!window.updaterUI) {
-                        window.updaterUI = new GitHubUpdaterUI();
-                    }
-                }, 100);
-            }
-        });
-    });
+        // Автопроверка через 3 секунды
+        setTimeout(checkForUpdates, 3000);
+    }, 500);
+
+    // Добавляем стили для анимаций
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            color: white;
+        }
+        .badge-success { background: #51cf66; }
+        .badge-warning { background: #ff922b; }
+        .badge-error { background: #ff6b6b; }
+    `;
+    document.head.appendChild(style);
 });
-
-// Глобальные функции
-async function checkForUpdates() {
-    if (window.updaterUI) {
-        await window.updaterUI.checkForUpdates(true);
-    } else {
-        window.updaterUI = new GitHubUpdaterUI();
-        setTimeout(() => checkForUpdates(), 500);
-    }
-}
-
-async function installUpdate() {
-    if (window.updaterUI) {
-        await window.updaterUI.installUpdate();
-    } else {
-        window.updaterUI = new GitHubUpdaterUI();
-        setTimeout(() => installUpdate(), 500);
-    }
-}
-
-// Стили
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes slideIn {
-        from { transform: translateX(100%); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
-    }
-    
-    @keyframes slideOut {
-        from { transform: translateX(0); opacity: 1; }
-        to { transform: translateX(100%); opacity: 0; }
-    }
-    
-    .badge {
-        display: inline-block;
-        padding: 4px 8px;
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: bold;
-    }
-    
-    .badge-success {
-        background: #51cf66;
-        color: white;
-    }
-    
-    .badge-warning {
-        background: #ff922b;
-        color: white;
-    }
-    
-    .progress-bar {
-        height: 8px;
-        background: #1e1e1e;
-        border-radius: 4px;
-        overflow: hidden;
-        margin-top: 8px;
-    }
-    
-    .progress-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #339af0, #51cf66);
-        width: 0%;
-        transition: width 0.3s ease;
-    }
-    
-    .progress-info {
-        display: flex;
-        justify-content: space-between;
-        margin-bottom: 5px;
-        font-size: 14px;
-    }
-    
-    .progress-details {
-        font-size: 12px;
-        color: #666;
-        margin-top: 5px;
-    }
-`;
-document.head.appendChild(style);

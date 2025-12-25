@@ -107,7 +107,7 @@ class TicketGenerator:
                 lines.append(current_line)
             return lines[:4]
 
-    def generate_modern_tickets(self, tracks, count=10, design=None, progress_callback=None):
+    def generate_modern_tickets(self, tracks, count=10, design=None, progress_callback=None, rounds=3):
         if not tracks:
             raise ValueError("Нет треков для генерации билетов")
 
@@ -122,7 +122,7 @@ class TicketGenerator:
         font_name = self._get_safe_font(bold=bold)
 
         logger.info(f"🎫 === НАЧАЛО ГЕНЕРАЦИИ БИЛЕТОВ ===")
-        logger.info(f"🎫 Параметры: {count} билетов, {len(tracks)} треков")
+        logger.info(f"🎫 Параметры: {count} билетов, {len(tracks)} треков, {rounds} раунда(ов)")
         logger.info(f"🎫 Используемый шрифт: {font_name}, размер: {font_size}, верхний регистр: {upper}")
 
         if progress_callback:
@@ -134,11 +134,11 @@ class TicketGenerator:
         for i in range(count):
             filename = f"ticket_{i+1:03d}.pdf"
             path = os.path.join(folder, filename)
-            logger.info(f"🎫 🔄 Генерация билета {i+1}/{count}: {filename}")
+            logger.info(f"🎫 🔄 Генерация билета {i+1}/{count}: {filename} (раундов: {rounds})")
             if progress_callback:
                 progress_callback(i + 1, count, f"Генерация билета {i + 1} из {count}")
             self._generate_single_ticket(
-                path, ticket_sets[i], font_name, font_size, text_color, upper
+                path, ticket_sets[i], font_name, font_size, text_color, upper, rounds
             )
             generated_files.append(path)
             logger.info(f"🎫 ✅ Билет {i+1}/{count} создан: {filename}")
@@ -162,20 +162,22 @@ class TicketGenerator:
         logger.info(f"🎫 ✅ === ГЕНЕРАЦИЯ ЗАВЕРШЕНА ===")
         logger.info(f"🎫 ✅ Сгенерировано билетов: {count}")
         logger.info(f"🎫 ✅ Использовано треков: {len(tracks)}")
+        logger.info(f"🎫 ✅ Количество раундов: {rounds}")
         logger.info(f"🎫 ✅ ZIP архив: {zip_path}")
 
         return {
             "success": True,
-            "message": f"Сгенерировано {count} билетов",
+            "message": f"Сгенерировано {count} билетов ({rounds} раунда)",
             "zip_file": zip_filename,
             "folder": f"tickets_{timestamp}",
             "download_url": f"/api/tickets/download/{zip_filename}",
             "file_path": zip_path,
             "tickets_count": count,
-            "tracks_used": len(tracks)
+            "tracks_used": len(tracks),
+            "rounds": rounds
         }
 
-    def _generate_single_ticket(self, path, tracks, font_name, font_size, text_color, upper):
+    def _generate_single_ticket(self, path, tracks, font_name, font_size, text_color, upper, rounds=3):
         page_width = 67.742 * cm
         page_height = 38.1 * cm
         c = canvas.Canvas(path, pagesize=(page_width, page_height))
@@ -198,12 +200,20 @@ class TicketGenerator:
             tracks, font_name, font_size, text_color, upper
         )
 
-        rules_image_path = "tickerts_rule.png"
+        # ВЫБОР ФАЙЛА ПРАВИЛ В ЗАВИСИМОСТИ ОТ КОЛИЧЕСТВА РАУНДОВ
+        rules_image_path = f"tickerts_rule_{'2' if rounds == 2 else ''}.png"
+        if not os.path.exists(rules_image_path):
+            rules_image_path = "tickerts_rule.png"
+        
+        logger.info(f"🎫 Используем файл правил: {rules_image_path} (раундов: {rounds})")
+        
         if os.path.exists(rules_image_path):
             try:
                 c.drawImage(rules_image_path, rules_x, table_y, width=rules_width, preserveAspectRatio=True, anchor='sw', mask='auto')
             except Exception as e:
                 logger.exception(f"Ошибка при вставке изображения правил: {e}")
+        else:
+            logger.warning(f"⚠️ Файл правил не найден: {rules_image_path}")
 
         brand_image_path = "Brand.png"
         if os.path.exists(brand_image_path):
