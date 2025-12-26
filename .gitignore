@@ -370,3 +370,4 @@ FodyWeavers.xsd
 /temp
 *.zip
 /track_data.json
+/.env
