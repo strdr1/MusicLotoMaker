@@ -198,26 +198,25 @@ class TicketGenerator:
         table_width = 36.95 * cm  # Такая же ширина как для 6x6
         rules_width = 27.0 * cm
         
-        # Высота таблицы - увеличиваем для 2 раундов для больших ячеек
+        # ВЫСОТА ТАБЛИЦЫ: Для 2 раундов делаем выше, для 3 оставляем как было
         if rounds == 2:
             # Для 2 раундов: таблица 3x5 - делаем ячейки выше
             table_height = 22.0 * cm  # Хорошая высота для 3 строк
         else:
-            # Для 3 раундов: таблица 6x6
-            table_height = 37.4 * cm
+            # Для 3 раундов: таблица 6x6 - оставляем оригинальную высоту
+            table_height = 37.4 * cm  # ОРИГИНАЛЬНАЯ ВЫСОТА
 
         total_content_width = table_width + rules_width + 0.5 * cm
         table_x = (w - total_content_width) / 2
         
-        # ОБНОВЛЕНО: Для 2 раундов центрируем таблицу по вертикали
+        # ПОЗИЦИОНИРОВАНИЕ: Разная логика для 2 и 3 раундов
         if rounds == 2:
-            # Центрируем таблицу по вертикали
-            table_y = (h - table_height) / 2 + 0.5 * cm
-            # Правила прижимаем к низу
-            rules_y = 1.5 * cm  # Немного выше от края
+            # ДЛЯ 2 РАУНДОВ: таблица центрирована, правила прижаты к низу
+            table_y = (h - table_height) / 2 + 0.5 * cm  # Центрируем таблицу
+            rules_y = 1.5 * cm  # Правила прижаты к низу
         else:
-            # Для 3 раундов оставляем центрирование
-            table_y = (h - table_height) / 2 + 0.5 * cm
+            # ДЛЯ 3 РАУНДОВ: оригинальная логика (как было в самом начале)
+            table_y = (h - table_height) / 2
             rules_y = table_y  # Правила на той же высоте что и таблица
             
         rules_x = table_x + table_width + 0.5 * cm
@@ -239,7 +238,6 @@ class TicketGenerator:
         
         if os.path.exists(rules_image_path):
             try:
-                # Для 2 раундов прижимаем правила к низу, для 3 - на уровне таблицы
                 c.drawImage(rules_image_path, rules_x, rules_y, width=rules_width, preserveAspectRatio=True, anchor='sw', mask='auto')
             except Exception as e:
                 logger.exception(f"Ошибка при вставке изображения правил: {e}")
@@ -265,9 +263,10 @@ class TicketGenerator:
         padding_x = 8
         padding_y = 8  # Увеличили вертикальный паддинг
 
-        # Увеличиваем шрифт для 2 раундов (большие ячейки)
+        # Увеличиваем шрифт только для 2 раундов
         if rows == 3 and cols == 5:
-            font_size = 24  # Еще больше увеличили шрифт для 2 раундов
+            font_size = 24  # Увеличиваем шрифт для 2 раундов
+        # Для 3 раундов шрифт остается 20 (как задано в generate_modern_tickets)
 
         for r in range(rows):
             for col in range(cols):
