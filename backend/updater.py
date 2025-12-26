@@ -15,7 +15,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # 🔑 ВШИТЫЙ ТОКЕН — ИСПОЛЬЗУЙТЕ ТОЛЬКО ДЛЯ ЗАКРЫТЫХ/ВНУТРЕННИХ ПРОЕКТОВ!
-GITHUB_TOKEN = "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"  # ← СЮДА ВСТАВЬТЕ СВОЙ ТОКЕН
+GITHUB_TOKEN = "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"  # ← СЮДА ВСТАВЬТЕ СВОЙ ТОКЕН
 
 class GitHubUpdater:
     def __init__(self, repo_owner="strdr1", repo_name="MusicLotoMaker"):
