@@ -130,10 +130,10 @@ class TicketGenerator:
 
         # Определяем размер таблицы в зависимости от количества раундов
         if rounds == 2:
-            rows, cols = 5, 3  # 5 строк, 3 столбца (вертикальная таблица)
+            rows, cols = 3, 5  # 3 строки, 5 столбцов (3x5)
             slots_per_ticket = rows * cols  # 15 ячеек
         else:
-            rows, cols = 6, 6  # 6 строк, 6 столбцов (квадратная таблица)
+            rows, cols = 6, 6  # 6 строк, 6 столбцов (6x6)
             slots_per_ticket = rows * cols  # 36 ячеек
             
         ticket_sets = self._generate_random_ticket_sets(tracks, count, slots_per_ticket)
@@ -196,10 +196,10 @@ class TicketGenerator:
 
         # Размеры таблицы в зависимости от количества строк и столбцов
         if rounds == 2:
-            # Для 2 раундов: таблица 5x3 (вертикальная)
-            # Уменьшаем ширину таблицы, но оставляем хорошую высоту
-            table_width = 25.0 * cm  # Уже для 3 колонок
-            table_height = 32.0 * cm  # Для 5 строк
+            # Для 2 раундов: таблица 3x5 (горизонтальная)
+            # Увеличиваем ширину для 5 колонок, уменьшаем высоту для 3 строк
+            table_width = 36.95 * cm  # Такая же ширина как для 6x6
+            table_height = 18.7 * cm  # Половина высоты (для 3 строк)
         else:
             # Для 3 раундов: таблица 6x6
             table_width = 36.95 * cm
@@ -254,9 +254,9 @@ class TicketGenerator:
         padding_x = 8
         padding_y = 6
 
-        # Увеличиваем шрифт для 2 раундов (меньше ячеек - больше места)
-        if rows == 5 and cols == 3:
-            font_size = 24  # Больший шрифт для 2 раундов
+        # Увеличиваем шрифт для 2 раундов (меньше строк - больше места по высоте)
+        if rows == 3 and cols == 5:
+            font_size = 22  # Увеличиваем шрифт для 2 раундов
 
         for r in range(rows):
             for col in range(cols):
