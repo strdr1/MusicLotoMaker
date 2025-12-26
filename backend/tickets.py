@@ -128,17 +128,25 @@ class TicketGenerator:
         if progress_callback:
             progress_callback(0, count, "Подготовка к генерации...")
 
-        ticket_sets = self._generate_random_ticket_sets(tracks, count, 36)
+        # Определяем размер таблицы в зависимости от количества раундов
+        if rounds == 2:
+            rows, cols = 5, 3  # 5 строк, 3 столбца (вертикальная таблица)
+            slots_per_ticket = rows * cols  # 15 ячеек
+        else:
+            rows, cols = 6, 6  # 6 строк, 6 столбцов (квадратная таблица)
+            slots_per_ticket = rows * cols  # 36 ячеек
+            
+        ticket_sets = self._generate_random_ticket_sets(tracks, count, slots_per_ticket)
         generated_files = []
 
         for i in range(count):
             filename = f"ticket_{i+1:03d}.pdf"
             path = os.path.join(folder, filename)
-            logger.info(f"🎫 🔄 Генерация билета {i+1}/{count}: {filename} (раундов: {rounds})")
+            logger.info(f"🎫 🔄 Генерация билета {i+1}/{count}: {filename} (раундов: {rounds}, таблица: {rows}x{cols})")
             if progress_callback:
                 progress_callback(i + 1, count, f"Генерация билета {i + 1} из {count}")
             self._generate_single_ticket(
-                path, ticket_sets[i], font_name, font_size, text_color, upper, rounds
+                path, ticket_sets[i], font_name, font_size, text_color, upper, rounds, rows, cols
             )
             generated_files.append(path)
             logger.info(f"🎫 ✅ Билет {i+1}/{count} создан: {filename}")
@@ -163,6 +171,7 @@ class TicketGenerator:
         logger.info(f"🎫 ✅ Сгенерировано билетов: {count}")
         logger.info(f"🎫 ✅ Использовано треков: {len(tracks)}")
         logger.info(f"🎫 ✅ Количество раундов: {rounds}")
+        logger.info(f"🎫 ✅ Таблица: {rows}x{cols}")
         logger.info(f"🎫 ✅ ZIP архив: {zip_path}")
 
         return {
@@ -174,17 +183,28 @@ class TicketGenerator:
             "file_path": zip_path,
             "tickets_count": count,
             "tracks_used": len(tracks),
-            "rounds": rounds
+            "rounds": rounds,
+            "table_size": f"{rows}x{cols}"
         }
 
-    def _generate_single_ticket(self, path, tracks, font_name, font_size, text_color, upper, rounds=3):
+    def _generate_single_ticket(self, path, tracks, font_name, font_size, text_color, upper, rounds=3, rows=6, cols=6):
+        # Размер страницы для билета (горизонтальный A4)
         page_width = 67.742 * cm
         page_height = 38.1 * cm
         c = canvas.Canvas(path, pagesize=(page_width, page_height))
         w, h = page_width, page_height
 
-        table_width = 36.95 * cm
-        table_height = 37.4 * cm
+        # Размеры таблицы в зависимости от количества строк и столбцов
+        if rounds == 2:
+            # Для 2 раундов: таблица 5x3 (вертикальная)
+            # Уменьшаем ширину таблицы, но оставляем хорошую высоту
+            table_width = 25.0 * cm  # Уже для 3 колонок
+            table_height = 32.0 * cm  # Для 5 строк
+        else:
+            # Для 3 раундов: таблица 6x6
+            table_width = 36.95 * cm
+            table_height = 37.4 * cm
+            
         rules_width = 27.0 * cm
 
         total_content_width = table_width + rules_width + 0.5 * cm
@@ -197,7 +217,7 @@ class TicketGenerator:
 
         self._draw_centered_table(
             c, table_x, table_y, table_width, table_height,
-            tracks, font_name, font_size, text_color, upper
+            tracks, font_name, font_size, text_color, upper, rows, cols
         )
 
         # ВЫБОР ФАЙЛА ПРАВИЛ В ЗАВИСИМОСТИ ОТ КОЛИЧЕСТВА РАУНДОВ
@@ -228,12 +248,15 @@ class TicketGenerator:
 
         c.save()
 
-    def _draw_centered_table(self, c, x, y, w, h, tracks, font_name, font_size, text_color, upper):
-        rows, cols = 6, 6
+    def _draw_centered_table(self, c, x, y, w, h, tracks, font_name, font_size, text_color, upper, rows=6, cols=6):
         cell_width = w / cols
         cell_height = h / rows
         padding_x = 8
         padding_y = 6
+
+        # Увеличиваем шрифт для 2 раундов (меньше ячеек - больше места)
+        if rows == 5 and cols == 3:
+            font_size = 24  # Больший шрифт для 2 раундов
 
         for r in range(rows):
             for col in range(cols):
