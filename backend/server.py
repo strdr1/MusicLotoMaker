@@ -623,7 +623,6 @@ async def debug_updater():
                 "error": "Обновитель не инициализирован"
             }
         
-        # Тестовые запросы
         debug_info = {
             "updater_available": True,
             "current_version": updater.current_version,
@@ -634,8 +633,8 @@ async def debug_updater():
             "timestamp": datetime.now().isoformat()
         }
         
-        # Пробуем сделать тестовый запрос к GitHub
         try:
+            # ИСПРАВЛЕНО: убраны пробелы в URL!
             test_url = f"https://api.github.com/repos/{updater.repo_owner}/{updater.repo_name}"
             response = requests.get(test_url, timeout=5)
             debug_info["github_api_test"] = {
@@ -666,10 +665,8 @@ async def get_version_info():
                 "updater_available": False
             }
         
-        # Получаем текущую версию
         current_version = updater.current_version
         
-        # Пытаемся получить информацию о последней версии
         try:
             latest_release = updater.get_latest_release()
             if latest_release:
@@ -692,7 +689,6 @@ async def get_version_info():
             is_release = False
             commit_info = {}
         
-        # Проверяем наличие обновления
         update_available = current_version != latest_version
         
         return {

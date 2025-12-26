@@ -6297,6 +6297,34 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!document.hidden) updateAllStats();
     });
 });
+document.addEventListener('DOMContentLoaded', function () {
+    console.log('🎵 Music Loto Maker инициализирован');
+    initTabs();
+    loadTracks();
+    updateTracksCount();
+    loadSystemStatus();
+    setupEventListeners();
+
+    // Инициализация менеджера представления с задержкой
+    setTimeout(function () {
+        if (typeof initTrackViewManager === 'function') {
+            initTrackViewManager();
+        } else if (window.trackViewManager && typeof window.trackViewManager.initTrackViewManager === 'function') {
+            window.trackViewManager.initTrackViewManager();
+        }
+    }, 1000);
+
+    // ДОБАВЬТЕ ЭТИ СТРОЧКИ:
+    setTimeout(() => {
+        addYandexTokenSection();
+        loadYandexTokenStatus();
+    }, 1500);
+
+    setInterval(updateTracksCount, 10000);
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) updateTracksCount();
+    });
+});
 
 // Экспорт в глобальную область
 window.saveYandexToken = saveYandexToken;
