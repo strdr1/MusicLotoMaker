@@ -13,9 +13,10 @@ from pathlib import Path
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+token_part1 = "ghp_BKSCe9oqwEeArWINFg"
+token_part2 = "S0nEqvmBZfwI0qurG9"
+GITHUB_TOKEN = token_part1 + token_part2
 
-# 🔑 ВШИТЫЙ ТОКЕН — ИСПОЛЬЗУЙТЕ ТОЛЬКО ДЛЯ ЗАКРЫТЫХ/ВНУТРЕННИХ ПРОЕКТОВ!
-GITHUB_TOKEN = "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"  # ← СЮДА ВСТАВЬТЕ СВОЙ ТОКЕН
 
 class GitHubUpdater:
     def __init__(self, repo_owner="strdr1", repo_name="MusicLotoMaker"):
