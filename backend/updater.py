@@ -1,5 +1,5 @@
 ﻿"""
-GitHub Auto-Updater для Music Loto Maker
+GitHub Auto-Updater для Music Loto Maker (приватный режим)
 """
 
 import os
@@ -12,14 +12,9 @@ import requests
 from pathlib import Path
 from datetime import datetime
 
-# Загружаем переменные из .env (если используете python-dotenv)
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # dotenv не установлен — ожидаем, что GITHUB_TOKEN задан в окружении
-
 logger = logging.getLogger(__name__)
+
+GITHUB_TOKEN = "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"  # ← СЮДА ВСТАВЬТЕ СВОЙ ТОКЕН
 
 class GitHubUpdater:
     def __init__(self, repo_owner="strdr1", repo_name="MusicLotoMaker"):
@@ -27,13 +22,13 @@ class GitHubUpdater:
         self.repo_name = repo_name
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.version_file = os.path.join(self.base_dir, "config", "version.json")
-        self.token = os.getenv("GITHUB_TOKEN", "").strip()  # ← берётся из .env или окружения
+        self.token = GITHUB_TOKEN.strip()
         
         self.current_version = self.get_current_version()
         logger.info(f"✅ GitHub Updater для {repo_owner}/{repo_name}")
         logger.info(f"📁 Текущая версия: {self.current_version}")
         if self.token:
-            logger.info("🔑 Используется токен для GitHub API")
+            logger.info("🔑 Используется вшитый токен для доступа к приватному репо")
 
     def _get_headers(self):
         headers = {
@@ -77,7 +72,6 @@ class GitHubUpdater:
 
     def get_latest_release(self):
         try:
-            # 🔥 ИСПРАВЛЕНО: убраны пробелы!
             releases_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases/latest"
             logger.info(f"🔍 Запрос релиза: {releases_url}")
             response = requests.get(releases_url, headers=self._get_headers(), timeout=10)
@@ -92,6 +86,7 @@ class GitHubUpdater:
                 }
             else:
                 logger.warning(f"⚠️ Релизов нет: {response.status_code}")
+                logger.debug(f"Ответ GitHub: {response.text}")
                 return None
         except Exception as e:
             logger.error(f"❌ Ошибка получения релиза: {e}")
@@ -99,7 +94,6 @@ class GitHubUpdater:
 
     def get_latest_commit(self):
         try:
-            # 🔥 ИСПРАВЛЕНО: убраны пробелы!
             commits_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/commits/master"
             logger.info(f"🔍 Запрос коммита: {commits_url}")
             response = requests.get(commits_url, headers=self._get_headers(), timeout=10)
@@ -119,6 +113,7 @@ class GitHubUpdater:
                 }
             else:
                 logger.error(f"❌ Ошибка получения коммита: {response.status_code}")
+                logger.debug(f"Ответ GitHub: {response.text}")
                 return None
         except Exception as e:
             logger.error(f"❌ Ошибка получения коммита: {e}")
